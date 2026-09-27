@@ -1,0 +1,16 @@
+# Python虚拟环境
+.venv/
+venv/
+automotive-qa-venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 日志、缓存
+*.log
+tmp/
+
+# IDE配置
+.idea/
+.vscode/
