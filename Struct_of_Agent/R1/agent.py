@@ -1,0 +1,213 @@
+"""R1 转账 Agent 主入口（TransferAgent）。
+
+提供面向前端/后端的统一编程接口 :meth:`TransferAgent.chat`：
+    输入用户自然语言，返回结构化结果（回复、审核信息、任务回执、追踪信息）。
+
+内部流程：
+    1. 从持久化层加载会话历史；
+    2. 组装初始图状态并调用 LangGraph 图（内容审核 → LLM → 工具执行）；
+    3. 从图状态提取最终回复与任务回执；
+    4. 将本轮消息与任务回执持久化；
+    5. 返回结构化结果给调用方。
+
+[前后端接入点] 前端（Web）与后端（API）都只依赖本类，无需感知 LangGraph 内部细节。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from .config import DeepSeekConfig, load_config
+from .graph import build_graph
+from .llm import DEFAULT_ROUTING, ChatModel, DeepSeekChat, MockChat
+from .middleware.content_moderation import ContentModerationMiddleware
+from .persistence import BalanceStore, ConversationStore
+from .state import TransferState
+
+
+class TransferAgent:
+    """R1 智能转账 Agent。
+
+    Attributes:
+        config: DeepSeek 配置。
+        model: 实现 ChatModel 协议的模型实例。
+        moderator: 内容审核中间件。
+        store: 持久化仓储。
+        graph: 编译后的 LangGraph 图。
+    """
+
+    def __init__(
+        self,
+        config: DeepSeekConfig | None = None,
+        model: ChatModel | None = None,
+        moderator: ContentModerationMiddleware | None = None,
+        store: ConversationStore | None = None,
+        balance_store: BalanceStore | None = None,
+    ) -> None:
+        """初始化 Agent 与依赖。
+
+        Args:
+            config: DeepSeek 配置（缺省从环境变量加载）。
+            model: 模型实例；缺省时若已配置 API Key 使用 DeepSeek，否则使用 MockChat。
+            moderator: 内容审核中间件实例。
+            store: 持久化仓储实例。
+            balance_store: 余额仓储实例；缺省使用本地位模拟实现。
+        """
+        self.config = config or load_config()
+        self.model = model or self._default_model()
+        self.moderator = moderator or ContentModerationMiddleware()
+        self.store = store or ConversationStore()
+        self.balance_store = balance_store or BalanceStore()
+        self.graph = build_graph(self.model, self.moderator, self.balance_store)
+
+    def _default_model(self) -> ChatModel:
+        """构造缺省模型：已配置 API Key 用 DeepSeek，否则回退 MockChat。
+
+        Returns:
+            ChatModel 实例。
+        """
+        if self.config.is_configured:
+            return DeepSeekChat(self.config)
+        return MockChat(routing=DEFAULT_ROUTING)
+
+    def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
+        """处理一条用户消息并返回结构化结果。
+
+        Args:
+            user_input: 用户自然语言输入。
+            session_id: 会话 ID（用于历史加载与持久化）。
+
+        Returns:
+            结果字典，字段：
+                reply:       最终回复文本。
+                blocked:     是否被内容审核拦截。
+                moderation:  审核结果。
+                tasks:       本轮产生的转账任务回执列表。
+                trace:       追踪信息（session_id、steps、工具调用名）。
+        """
+        history = self.store.load_messages(session_id)
+        user_message = {"role": "user", "content": user_input}
+
+        initial_state: TransferState = {
+            "messages": history + [user_message],
+            "pending_tool_calls": [],
+            "moderation": {},
+            "task_records": [],
+            "steps": 0,
+            "blocked": False,
+            "final_reply": "",
+            "balance_check": {},
+            "insufficient_balance": False,
+        }
+
+        result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
+
+        # 持久化本轮消息（用户消息 + 助手/工具消息）
+        self._persist_turn(session_id, user_input, history, result)
+
+        # 持久化任务回执
+        tasks = list(result.get("task_records", []))
+        for task in tasks:
+            self.store.save_task(session_id, task)
+
+        reply = result.get("final_reply") or self._extract_final_reply(result)
+        return {
+            "reply": reply,
+            "blocked": bool(result.get("blocked", False)),
+            "moderation": result.get("moderation", {}),
+            "tasks": tasks,
+            "balance": result.get("balance_check", {}),
+            "insufficient_balance": bool(result.get("insufficient_balance", False)),
+            "trace": {
+                "session_id": session_id,
+                "steps": result.get("steps", 0),
+                "tool_names": [t.get("tool") for t in tasks],
+            },
+        }
+
+    def get_balance(self, account_id: str) -> int:
+        """查询账户余额（分）。
+
+        Args:
+            account_id: 账户标识。
+
+        Returns:
+            余额（分）。
+        """
+        return self.balance_store.get_balance(account_id)
+
+    def set_balance(self, account_id: str, balance_fen: int, owner: str = "") -> None:
+        """设置账户余额（分），账户不存在则创建。
+
+        Args:
+            account_id: 账户标识。
+            balance_fen: 余额（分）。
+            owner: 账户归属人（可空）。
+        """
+        self.balance_store.set_balance(account_id, balance_fen, owner)
+
+    def list_tasks(self, session_id: str = "default") -> list[dict[str, Any]]:
+        """查询指定会话的历史任务回执。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            任务回执字典列表。
+        """
+        return self.store.list_tasks(session_id)
+
+    def clear_session(self, session_id: str = "default") -> None:
+        """清空指定会话的持久化数据。
+
+        Args:
+            session_id: 会话 ID。
+        """
+        self.store.clear_session(session_id)
+
+    def _persist_turn(self, session_id: str, user_input: str, history: list[dict[str, Any]], result: dict[str, Any]) -> None:
+        """持久化本轮产生的全部消息。
+
+        Args:
+            session_id: 会话 ID。
+            user_input: 用户输入文本。
+            history: 本轮开始前的历史消息。
+            result: 图运行结果。
+        """
+        self.store.save_message(session_id, "user", user_input)
+        # 图状态 = 历史 + 用户消息 + 本轮新消息，故从 len(history)+1 处切出本轮消息
+        new_messages = result.get("messages", [])[len(history) + 1 :]
+        for message in new_messages:
+            role = message.get("role")
+            if role == "assistant":
+                self.store.save_message(
+                    session_id,
+                    "assistant",
+                    message.get("content") or "",
+                    tool_calls=message.get("tool_calls"),
+                )
+            elif role == "tool":
+                self.store.save_message(
+                    session_id,
+                    "tool",
+                    message.get("content") or "",
+                    tool_call_id=message.get("tool_call_id"),
+                )
+
+    @staticmethod
+    def _extract_final_reply(result: dict[str, Any]) -> str:
+        """从图运行结果中提取最终回复文本。
+
+        Args:
+            result: 图运行结果。
+
+        Returns:
+            回复文本；无则返回占位说明。
+        """
+        for message in reversed(result.get("messages", [])):
+            if message.get("role") == "assistant" and message.get("content"):
+                return str(message["content"])
+        return "（无回复内容）"
+
+
+__all__ = ["TransferAgent"]
