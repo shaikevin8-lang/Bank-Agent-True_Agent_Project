@@ -75,9 +75,30 @@ def test_chat_routing_and_wrap():
 
     search = sup.chat("今天天气怎么样", session_id="s4")
     assert search["agent"] == "common"
-    assert search["tasks"], "天气问题应触发通用搜索工具"
-    assert search["tasks"][0]["tool"] == "tavily_search"
+    assert search["reply"]
+    # 通用搜索工具是否真的产生回执，取决于是否配置了搜索服务：
+    # 未配置时 tavily_search 返回错误结果，按设计不计入 tasks（见 common/agent.py 的 _tools_node）。
+    # 因此这里显式区分两种前置条件，避免测试结果随环境漂移。
+    if _search_configured():
+        assert search["tasks"], "已配置搜索服务时，天气问题应触发通用搜索工具"
+        assert search["tasks"][0]["tool"] == "tavily_search"
+    else:
+        assert search["tasks"] == [], "未配置搜索服务时不应产生搜索回执"
     print("[PASS] chat 路由与汇总：R1/R2/common 分发正确")
+
+
+def _search_configured() -> bool:
+    """返回当前环境是否配置了联网搜索服务（页面运行时配置或环境变量）。"""
+    try:
+        from common.model_manager import get_search_manager
+
+        if get_search_manager().effective() is not None:
+            return True
+    except Exception:  # noqa: BLE001 - 管理器不可用时回落到环境变量判断
+        pass
+    from common.config import load_tavily_config
+
+    return load_tavily_config().is_configured
 
 
 

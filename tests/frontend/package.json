@@ -1,0 +1,1 @@
+{"name":"bank-agent-frontend-tests","private":true,"type":"module","description":"前端设置面板 DOM 测试（仅测试依赖，不进入产品运行时）","scripts":{"test":"node test_settings_panel.mjs"},"dependencies":{"jsdom":"^30.1.2"}}

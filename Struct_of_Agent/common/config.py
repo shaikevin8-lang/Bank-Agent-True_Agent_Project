@@ -8,6 +8,9 @@ API Key 均从环境变量读取（绝不落盘、绝不进入日志）。
 
 [模型接入点] 更换模型供应商时，仅需修改 :func:`load_config` 返回的
 ``DeepSeekConfig`` 中的 ``base_url`` / ``model`` 字段，无需改动上层编排逻辑。
+
+[运行时接入] 页面填写 Base URL / API Key 的场景见 :mod:`common.runtime_config`
+与 :mod:`common.model_manager`，运行时配置优先于本模块的环境变量配置。
 """
 
 from __future__ import annotations
@@ -71,8 +74,8 @@ class DeepSeekConfig:
 
     # DeepSeek OpenAI 兼容接口地址，官方为 https://api.deepseek.com
     base_url: str = "https://api.deepseek.com"
-    # 对话模型标识
-    model: str = "deepseek-chat"
+    # 对话模型标识（deepseek-chat / deepseek-reasoner 已退役，勿再使用）
+    model: str = "deepseek-flash"
     # 银行场景需要确定性输出，温度固定为 0
     temperature: float = 0.0
     # 单次回复最大 token 数（与项目基座文档固定值 1024 保持一致）
@@ -86,6 +89,22 @@ class DeepSeekConfig:
     def is_configured(self) -> bool:
         """返回 API Key 是否已配置（决定能否发起真实模型调用）。"""
         return bool(self.api_key)
+
+    def model_copy(self, *, update: dict | None = None) -> "DeepSeekConfig":
+        """返回替换了部分字段的新配置实例。
+
+        与 pydantic 的 ``model_copy`` 保持同名，便于运行时配置对象与环境变量
+        配置对象在调用方（如模型探测逻辑）中互换使用。
+
+        Args:
+            update: 需要覆盖的字段字典。
+
+        Returns:
+            新的 :class:`DeepSeekConfig` 实例。
+        """
+        import dataclasses
+
+        return dataclasses.replace(self, **(update or {}))
 
 
 def load_config() -> DeepSeekConfig:

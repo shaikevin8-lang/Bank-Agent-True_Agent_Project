@@ -19,6 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.model_manager import RuntimeChatModel, trace_info
+
 from .config import DeepSeekConfig, load_config
 from .graph import build_graph
 from .llm import DEFAULT_ROUTING, ChatModel, DeepSeekChat, MockChat
@@ -47,6 +49,7 @@ class BillAgent:
         moderator: ContentModerationMiddleware | None = None,
         store: TransactionStore | None = None,
         conversation_store: ConversationStore | None = None,
+        model_manager: Any | None = None,
     ) -> None:
         """初始化 Agent 与依赖。
 
@@ -56,9 +59,15 @@ class BillAgent:
             moderator: 内容审核中间件实例。
             store: 账单数据仓储实例（缺省本地 SQLite）。
             conversation_store: 会话消息仓储实例（缺省本地 SQLite）。
+            model_manager: 运行时模型配置管理器；注入后模型可在页面热切换，
+                无需重建已编译的图。
         """
         self.config = config or load_config()
-        self.model = model or self._default_model()
+        base_model = model or self._default_model()
+        self.model_manager = model_manager
+        self.model: ChatModel = (
+            RuntimeChatModel(model_manager, fallback=base_model) if model_manager is not None else base_model
+        )
         self.moderator = moderator or ContentModerationMiddleware()
         self.store = store or TransactionStore()
         self.conversation_store = conversation_store or ConversationStore()
@@ -110,16 +119,18 @@ class BillAgent:
 
         tasks = list(result.get("task_records", []))
         reply = result.get("final_reply") or self._extract_final_reply(result)
+        trace = {
+            "session_id": session_id,
+            "steps": result.get("steps", 0),
+            "tool_names": [t.get("tool") for t in tasks],
+        }
+        trace.update(trace_info(self.model_manager))
         return {
             "reply": reply,
             "blocked": bool(result.get("blocked", False)),
             "moderation": result.get("moderation", {}),
             "tasks": tasks,
-            "trace": {
-                "session_id": session_id,
-                "steps": result.get("steps", 0),
-                "tool_names": [t.get("tool") for t in tasks],
-            },
+            "trace": trace,
         }
 
     def record_transaction(

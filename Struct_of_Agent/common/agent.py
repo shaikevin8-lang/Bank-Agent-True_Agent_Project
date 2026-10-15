@@ -22,6 +22,7 @@ from langgraph.graph import END, START, StateGraph
 from .config import DeepSeekConfig, load_config
 from .llm import ChatModel, DeepSeekChat, MockChat
 from .middleware.content_moderation import ContentModerationMiddleware
+from .model_manager import RuntimeChatModel, trace_info
 from .tavily_search import tavily_search, to_openai_tool
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
@@ -253,6 +254,7 @@ class CommonAgent:
         config: DeepSeekConfig | None = None,
         model: ChatModel | None = None,
         moderator: ContentModerationMiddleware | None = None,
+        model_manager: Any | None = None,
     ) -> None:
         """初始化通用 Agent 与依赖。
 
@@ -260,9 +262,15 @@ class CommonAgent:
             config: DeepSeek 配置（缺省从环境变量加载）。
             model: 模型实例；缺省时若已配置 API Key 使用 DeepSeek，否则使用 MockChat。
             moderator: 内容审核中间件实例。
+            model_manager: 运行时模型配置管理器；注入后模型可在页面热切换，
+                无需重建已编译的图。
         """
         self.config = config or load_config()
-        self.model = model or self._default_model()
+        base_model = model or self._default_model()
+        self.model_manager = model_manager
+        self.model: ChatModel = (
+            RuntimeChatModel(model_manager, fallback=base_model) if model_manager is not None else base_model
+        )
         self.moderator = moderator or ContentModerationMiddleware()
         self.graph = build_common_graph(self.model, self.moderator)
 
@@ -305,16 +313,18 @@ class CommonAgent:
 
         tasks = list(result.get("task_records", []))
         reply = result.get("final_reply") or self._extract_final_reply(result)
+        trace = {
+            "session_id": session_id,
+            "steps": result.get("steps", 0),
+            "tool_names": [t.get("tool") for t in tasks],
+        }
+        trace.update(trace_info(self.model_manager))
         return {
             "reply": reply,
             "blocked": bool(result.get("blocked", False)),
             "moderation": result.get("moderation", {}),
             "tasks": tasks,
-            "trace": {
-                "session_id": session_id,
-                "steps": result.get("steps", 0),
-                "tool_names": [t.get("tool") for t in tasks],
-            },
+            "trace": trace,
         }
 
     @staticmethod

@@ -14,11 +14,17 @@ R1~R6 各场景 Agent 复用本模块的 ``ChatModel`` / ``DeepSeekChat`` / ``Mo
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from openai import OpenAI
 
 from .config import DeepSeekConfig, load_config
+
+if TYPE_CHECKING:  # 仅用于类型标注，避免运行期循环导入
+    from .runtime_config import ModelRuntimeConfig
+
+# 允许传入的配置对象：既可以是环境变量配置，也可以是页面填写的运行时配置
+ModelConfigLike = "DeepSeekConfig | ModelRuntimeConfig"
 
 
 @runtime_checkable
@@ -39,22 +45,53 @@ class ChatModel(Protocol):
 
 
 class DeepSeekChat:
-    """基于 OpenAI SDK 的 DeepSeek 客户端封装（OpenAI 兼容接口）。"""
+    """基于 OpenAI SDK 的 Chat Completions 客户端封装（任意 OpenAI 兼容服务）。
 
-    def __init__(self, config: DeepSeekConfig | None = None) -> None:
+    类名沿用 DeepSeek 以保持向后兼容；实际可指向任何 OpenAI 兼容的
+    ``base_url``（DeepSeek / OpenAI / 通义 / Kimi / 智谱 / 自建网关 / 本地 Ollama 等），
+    因此它同时是「页面填写 Base URL + API Key」功能的执行体。
+
+    Attributes:
+        config: 生效的配置对象（环境变量配置或运行时配置）。
+    """
+
+    def __init__(
+        self,
+        config: DeepSeekConfig | ModelRuntimeConfig | None = None,
+        *,
+        omit_temperature: bool = False,
+        max_retries: int | None = None,
+    ) -> None:
+        """初始化客户端。
+
+        Args:
+            config: 配置对象；缺省从环境变量加载。任何暴露 ``base_url`` /
+                ``api_key`` / ``model`` / ``temperature`` / ``max_tokens`` /
+                ``timeout`` / ``is_configured`` 的对象都可传入。
+            omit_temperature: 是否在请求中省略 ``temperature`` 参数；
+                部分推理模型（如 deepseek-reasoner）不接受该参数。
+            max_retries: SDK 层最大重试次数；``None`` 表示使用 SDK 默认值。
+                连接探测场景传 0，让用户填错地址时立即看到失败原因，
+                而不是等待多次指数退避重试。
+
+        Raises:
+            RuntimeError: 配置中缺少 API Key。
+        """
         self.config = config or load_config()
+        self.omit_temperature = omit_temperature
         if not self.config.is_configured:
             raise RuntimeError(
-                "未检测到 DeepSeek API Key，请先设置环境变量 Deepseek_API。"
+                "未检测到 API Key：请在页面「模型设置」中填写，或设置环境变量 Deepseek_API。"
             )
         self._client = OpenAI(
             api_key=self.config.api_key,
             base_url=self.config.base_url,
             timeout=self.config.timeout,
+            **({"max_retries": max_retries} if max_retries is not None else {}),
         )
 
     def chat(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-        """调用 DeepSeek 完成一次对话补全并返回原始响应字典。
+        """完成一次对话补全并返回原始响应字典。
 
         Args:
             messages: OpenAI 格式消息列表。
@@ -66,9 +103,29 @@ class DeepSeekChat:
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
-            "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
         }
+        if not self.omit_temperature:
+            kwargs["temperature"] = self.config.temperature
+        # 响应格式：默认 text 时**不传该参数**，出站请求的键集合与取值与既有行为完全一致
+        # （仅键的插入顺序不同，对任何 OpenAI 兼容服务都无语义影响）；
+        # 只有显式选择 json_object / json_schema 时才透传。
+        # json_schema 的 schema 刻意写得极宽松（additionalProperties: True）：
+        # Agent 自身还要用 tool_calls / 文本回复表达结果，schema 若收紧会与之冲突，
+        # 这里只借助「结构化输出」约束上游返回 JSON，不接管业务字段契约。
+        # getattr 兜底：环境变量配置 DeepSeekConfig 没有该字段，需保持原样可用。
+        response_format = getattr(self.config, "response_format", "text")
+        if response_format == "json_object":
+            kwargs["response_format"] = {"type": "json_object"}
+        elif response_format == "json_schema":
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "bank_agent_response",
+                    "strict": False,
+                    "schema": {"type": "object", "additionalProperties": True},
+                },
+            }
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
@@ -190,4 +247,4 @@ class MockChat:
         }
 
 
-__all__ = ["ChatModel", "DeepSeekChat", "MockChat"]
+__all__ = ["ChatModel", "DeepSeekChat", "MockChat", "ModelConfigLike"]

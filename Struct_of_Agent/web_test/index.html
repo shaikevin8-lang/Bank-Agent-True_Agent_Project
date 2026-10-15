@@ -173,6 +173,146 @@
   .composer button:disabled { background: #cbd5e1; cursor: not-allowed; }
   .composer button svg { width: 18px; height: 18px; }
   .hint { font-size: 11px; color: #9ca3af; text-align: center; margin-top: 8px; }
+
+  /* ---------- 顶栏右侧：模式徽标 + 设置按钮 ---------- */
+  header .spacer { flex: 1; }
+  .mode-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; line-height: 1;
+    padding: 6px 11px; border-radius: 999px;
+    border: 1px solid var(--border); background: #f8fafc; color: var(--text-sub);
+    white-space: nowrap;
+  }
+  .mode-badge .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: #9ca3af; flex-shrink: 0;
+  }
+  .mode-badge.mode-model { border-color: #bfdbfe; background: #eff6ff; color: #1d4ed8; }
+  .mode-badge.mode-model .dot { background: #2563eb; }
+  .mode-badge.mode-env { border-color: #bbf7d0; background: #f0fdf4; color: #15803d; }
+  .mode-badge.mode-env .dot { background: #16a34a; }
+  .mode-badge.mode-mock { border-color: #fde68a; background: #fffbeb; color: #b45309; }
+  .mode-badge.mode-mock .dot { background: #f59e0b; }
+
+  .icon-btn {
+    width: 36px; height: 36px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: #fff; color: var(--text-sub); cursor: pointer;
+    transition: all .15s;
+  }
+  .icon-btn:hover { border-color: var(--brand); color: var(--brand); background: #f8fafc; }
+  .icon-btn svg { width: 18px; height: 18px; }
+
+  /* ---------- 设置面板 ---------- */
+  .settings-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(15, 23, 42, 0.42);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px;
+  }
+  /* [必须保留] 作者样式表里的 display:flex 会压过浏览器默认样式表的
+     [hidden] { display: none }（作者普通声明 > UA 普通声明，与选择器权重无关），
+     因此不显式覆盖的话，面板即使带 hidden 属性也照样全屏渲染。
+     这条规则是「面板默认关闭」的唯一保障，删掉即回归。 */
+  .settings-overlay[hidden] { display: none; }
+  .settings-panel {
+    width: 100%; max-width: 720px; max-height: 88vh;
+    display: flex; flex-direction: column;
+    background: var(--panel); border-radius: 18px;
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+    overflow: hidden;
+  }
+  .settings-panel > header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px; border-bottom: 1px solid var(--border);
+  }
+  .settings-panel > header h2 { font-size: 15px; font-weight: 600; }
+  .settings-panel > header .grow { flex: 1; }
+  .settings-body { padding: 18px 20px 16px; overflow-y: auto; }
+  .settings-section { margin-bottom: 22px; }
+  .settings-field { display: block; margin-bottom: 12px; }
+  .settings-field > span {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text-sub); margin-bottom: 5px;
+  }
+  .settings-field input, .settings-field select {
+    width: 100%; padding: 9px 11px;
+    border: 1px solid var(--border); border-radius: 9px;
+    font-size: 13px; font-family: inherit; color: var(--text);
+    background: #fff; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .settings-field input:focus, .settings-field select:focus {
+    border-color: var(--brand); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  }
+  .settings-field input:disabled { background: #f8fafc; color: #9ca3af; }
+  .settings-row { display: flex; gap: 12px; }
+  .settings-row > .settings-field { flex: 1; min-width: 0; }
+  /* 响应格式 | 超时：前者略宽，与参考稿一致 */
+  .settings-row-format > .settings-field:first-child { flex: 1.45; }
+  .settings-row-format > .settings-field:last-child { flex: 1; }
+  .settings-key-wrap { position: relative; }
+  .settings-key-wrap input { padding-right: 58px; }
+  .settings-key-wrap button {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    border: none; background: #f1f5f9; color: var(--text-sub);
+    font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
+  }
+  .settings-key-wrap button:hover { background: #e2e8f0; color: var(--text); }
+  /* 联网搜索接入：可选功能，默认折叠 */
+  .settings-optional {
+    border: 1px solid var(--border); border-radius: 11px;
+    padding: 10px 12px; margin-bottom: 4px; background: #fcfcfd;
+  }
+  .settings-optional > summary {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600; color: var(--text);
+    cursor: pointer; list-style: none;
+  }
+  .settings-optional > summary::-webkit-details-marker { display: none; }
+  .settings-optional > summary::before { content: "▸ "; color: var(--brand); }
+  .settings-optional[open] > summary::before { content: "▾ "; }
+  .settings-optional-body { padding-top: 10px; }
+  .settings-optional-body > .desc {
+    font-size: 12px; color: var(--text-sub); line-height: 1.6; margin-bottom: 12px;
+  }
+  .settings-actions { display: flex; align-items: center; gap: 9px; margin-top: 4px; }
+  .settings-actions .grow { flex: 1; }
+  .settings-msg {
+    font-size: 12px; line-height: 1.6; border-radius: 9px;
+    padding: 9px 12px; margin-bottom: 12px; word-break: break-word;
+  }
+  .settings-msg.error { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; }
+  .settings-msg.success { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+  .settings-msg.info { background: #f8fafc; color: var(--text-sub); border: 1px solid var(--border); }
+  /* 旧版后端警示条：/health/live 没有 api_version 时显示（配色同 .settings-msg.error） */
+  .stale-banner {
+    background: #fef2f2; color: #b91c1c; border-bottom: 1px solid #fecaca;
+    padding: 10px 22px; font-size: 13px; line-height: 1.6; word-break: break-word;
+  }
+  /* 同上：作者样式里的 display 会压过 UA 的 [hidden]，必须显式覆盖 */
+  .stale-banner[hidden] { display: none; }
+  .settings-note { font-size: 11px; color: #9ca3af; line-height: 1.6; margin-top: 8px; }
+  .settings-note-inline { font-size: 11px; color: #9ca3af; font-weight: 400; }
+  /* 气泡下方元信息里的模式徽标：更小一号 */
+  .meta .mode-badge { padding: 2px 8px; font-size: 11px; vertical-align: middle; }
+  .meta .mode-badge .dot { width: 6px; height: 6px; }
+  .settings-panel > footer {
+    display: flex; align-items: center; gap: 9px;
+    padding: 14px 20px; border-top: 1px solid var(--border); background: #fcfcfd;
+  }
+  .settings-panel > footer .grow { flex: 1; }
+  .btn {
+    font-size: 13px; font-family: inherit; cursor: pointer;
+    padding: 9px 15px; border-radius: 9px; border: 1px solid var(--border);
+    background: #fff; color: var(--text); transition: all .15s;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+  .btn.primary { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .btn.primary:hover:not(:disabled) { background: var(--brand-hover); color: #fff; }
+  .btn.danger { color: #b91c1c; }
+  .btn.danger:hover:not(:disabled) { border-color: #fca5a5; background: #fef2f2; color: #b91c1c; }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
 </style>
 </head>
 <body>
@@ -182,11 +322,128 @@
       <h1>银行智能 Agent 测试</h1>
       <div class="sub">自然语言对话 · 路由到 R1 转账 / R2 账单</div>
     </div>
+    <div class="spacer"></div>
+    <span class="mode-badge mode-mock" id="modeBadge" title="当前模型接入模式">
+      <span class="dot"></span><span id="modeBadgeText">读取中…</span>
+    </span>
+    <button class="icon-btn" id="settingsBtn" title="模型接入设置" aria-label="模型接入设置">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+      </svg>
+    </button>
   </header>
+
+  <!-- 旧版后端警示条：/health/live 未返回 api_version 时由 refreshModeBadge() 显示（默认隐藏） -->
+  <div class="stale-banner" id="staleBackendBanner" role="alert" hidden>检测到后端服务是旧版本（未提供模型接入接口）：请重启服务后刷新页面 —— 在 Struct_of_Agent 目录执行 python web_test/server.py（或运行 web_test\restart_server.ps1）</div>
 
   <main id="scroll">
     <div class="container" id="chat"></div>
   </main>
+
+  <div class="settings-overlay" id="settingsOverlay" hidden>
+    <section class="settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header>
+        <h2 id="settingsTitle">模型设置</h2>
+        <span class="mode-badge mode-mock" id="llmBadge" title="当前模型接入状态">
+          <span class="dot"></span><span id="llmBadgeText">未配置模型</span>
+        </span>
+        <span class="grow"></span>
+        <button class="icon-btn" id="settingsClose" title="关闭" aria-label="关闭设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </header>
+
+      <div class="settings-body">
+        <!-- ============ 模型接入 ============ -->
+        <section class="settings-section">
+          <label class="settings-field">
+            <span>Base URL</span>
+            <input type="url" id="llmBaseUrl" placeholder="https://example.com/v1" autocomplete="off" spellcheck="false" />
+          </label>
+
+          <label class="settings-field">
+            <span>API Key <span id="llmKeyHint" class="settings-note-inline"></span></span>
+            <span class="settings-key-wrap">
+              <input type="password" id="llmApiKey" placeholder="请输入 API Key" autocomplete="new-password" spellcheck="false" />
+              <button type="button" id="llmKeyToggle">显示</button>
+            </span>
+          </label>
+
+          <label class="settings-field">
+            <span>模型名</span>
+            <input type="text" id="llmModel" placeholder="模型名称" autocomplete="off" spellcheck="false" />
+          </label>
+
+          <div class="settings-row settings-row-format">
+            <label class="settings-field">
+              <span>响应格式</span>
+              <!-- 默认 text：保持现有对话式回答行为，不改动既有问答体验 -->
+              <select id="llmResponseFormat">
+                <option value="text" selected>文本（推荐）</option>
+                <option value="json_object">JSON 对象</option>
+                <option value="json_schema">JSON Schema</option>
+              </select>
+            </label>
+            <label class="settings-field">
+              <span>超时（秒）</span>
+              <input type="number" id="llmTimeout" min="1" max="300" step="1" placeholder="30" />
+            </label>
+          </div>
+
+          <div class="settings-msg" id="llmMsg" hidden></div>
+          <div class="settings-note">密钥仅保存在服务进程内存，不落盘、不写入日志、不写入浏览器存储；接口只返回掩码。</div>
+        </section>
+
+        <!-- ============ 联网搜索接入（可选，默认折叠） ============ -->
+        <details class="settings-optional" id="searchDetails">
+          <summary>联网搜索接入（可选）<span class="mode-badge mode-mock" id="searchBadge"><span class="dot"></span><span id="searchBadgeText">读取中…</span></span></summary>
+          <div class="settings-optional-body">
+            <div class="desc">可选功能，不配置也不影响使用：转账（R1）与账单分析（R2）无需联网搜索即可正常工作。仅当需要天气、汇率、新闻等实时信息时，再填写下面的搜索服务。</div>
+
+            <label class="settings-field">
+              <span>接口地址</span>
+              <input type="url" id="searchBaseUrl" placeholder="https://api.tavily.com/search" autocomplete="off" spellcheck="false" />
+            </label>
+
+            <label class="settings-field">
+              <span>API Key <span id="searchKeyHint" class="settings-note-inline"></span></span>
+              <span class="settings-key-wrap">
+                <input type="password" id="searchApiKey" placeholder="请输入搜索服务 API Key" autocomplete="new-password" spellcheck="false" />
+                <button type="button" id="searchKeyToggle">显示</button>
+              </span>
+            </label>
+
+            <div class="settings-row">
+              <label class="settings-field"><span>返回条数 (1~20)</span><input type="number" id="searchMaxResults" min="1" max="20" step="1" /></label>
+              <label class="settings-field"><span>超时（秒）</span><input type="number" id="searchTimeout" min="1" max="120" step="1" /></label>
+            </div>
+
+            <div class="settings-msg" id="searchMsg" hidden></div>
+
+            <div class="settings-actions">
+              <button type="button" class="btn danger" id="searchClear" title="清除运行时搜索配置，回落到环境变量">清除搜索配置</button>
+              <span class="grow"></span>
+              <button type="button" class="btn" id="searchTest">测试搜索连接</button>
+              <button type="button" class="btn primary" id="searchSave">保存搜索配置</button>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <footer>
+        <button type="button" class="btn danger" id="llmClear" title="清除运行时模型配置，回落到环境变量或 Mock 模式">清除配置</button>
+        <span class="grow"></span>
+        <button type="button" class="btn" id="llmTest">测试连接</button>
+        <button type="button" class="btn primary" id="llmSave">保存并启用</button>
+      </footer>
+    </section>
+  </div>
 
   <footer>
     <div class="input-box">
@@ -222,6 +479,533 @@
 
   const AGENT_LABEL = { R1: '智能转账', R2: '账单分析', common: '通用搜索' };
 
+  const MODE_LABEL = { model: '模型模式', env: '环境变量模式', mock: 'Mock 离线模式' };
+
+  // 非密钥偏好（Base URL / 模型名 / 响应格式）可记忆；API Key 绝不写入浏览器存储
+  const PREF_KEY = 'bank_agent.llm.pref';
+
+  function readPref() {
+    try {
+      const raw = localStorage.getItem(PREF_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch (err) {
+      return {};
+    }
+  }
+
+  /** 只写入非密钥偏好，且始终只保留这三个字段（历史版本遗留的 provider 会被丢弃）。 */
+  function writePref(pref) {
+    try {
+      localStorage.setItem(PREF_KEY, JSON.stringify({
+        base_url: pref.base_url || '',
+        model: pref.model || '',
+        response_format: pref.response_format || 'text'
+      }));
+    } catch (err) {
+      /* 隐私模式下 localStorage 可能不可用，忽略即可 */
+    }
+  }
+
+  function $(id) { return document.getElementById(id); }
+
+  function setMessage(el, text, kind) {
+    if (!el) return;
+    if (!text) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.className = 'settings-msg ' + (kind || 'info');
+    el.textContent = text;
+  }
+
+  // 请求超时（毫秒）。GET 快照类接口应当秒回，8 秒足够；
+  // POST /test 与 PUT 会触发后端真实探测（契约允许后端自己等到 300 秒），见 probeTimeoutMs。
+  // 该常量可被测试覆盖以缩短等待：页面脚本执行前设置
+  // `window.REQUEST_TIMEOUTS = { snapshot: 50 }`，执行后改写 `window.REQUEST_TIMEOUTS.snapshot`。
+  // 生产默认值就是下面这两个数字，不要为了测试把它们调小。
+  const INJECTED_TIMEOUTS = window.REQUEST_TIMEOUTS || null;
+  const REQUEST_TIMEOUTS = Object.assign({ snapshot: 8000, probe: 60000 }, INJECTED_TIMEOUTS || {});
+  window.REQUEST_TIMEOUTS = REQUEST_TIMEOUTS;
+
+  /** 秒数文案：8 / 60 原样显示，测试里缩短成 0.2 之类也照样可读。 */
+  function timeoutSeconds(ms) {
+    const seconds = ms / 1000;
+    return Number.isInteger(seconds) ? String(seconds) : String(Math.round(seconds * 10) / 10);
+  }
+
+  /**
+   * 探测类请求（POST /test、PUT 保存）的前端超时。
+   *
+   * 后端会按请求体里的「超时（秒）」等待上游（契约允许 1~300 秒），前端必须比后端更宽：
+   * 否则用户为慢网关把超时调到 60 秒时，前端会在后端仍在等待时先放弃，
+   * 报出一个假的「后端响应超时」——而这恰恰是慢网关用户最容易踩的坑。
+   *
+   * 测试注入了 window.REQUEST_TIMEOUTS 时完全按注入值走，便于把等待压到毫秒级。
+   */
+  function probeTimeoutMs(body) {
+    if (INJECTED_TIMEOUTS) return REQUEST_TIMEOUTS.probe;
+    const raw = body && body.timeout !== undefined && body.timeout !== null ? Number(body.timeout) : NaN;
+    // 页面留空 => 后端套用默认 30 秒；非数字按默认处理
+    const upstreamMs = (isFinite(raw) && raw > 0 ? raw : 30) * 1000;
+    // 比后端多留 10 秒余量，确保「后端先给出结果」而不是前端先放弃
+    return Math.max(REQUEST_TIMEOUTS.probe, upstreamMs + 10000);
+  }
+
+  /** 超时（含主动 abort）时的统一返回包，绝不弹 alert。 */
+  function timeoutPayload(ms) {
+    return {
+      ok: false,
+      message: '后端响应超时（' + timeoutSeconds(ms) + ' 秒）：服务可能已停止或未响应，请检查终端里的服务进程',
+      error_code: 'TIMEOUT',
+      data: null
+    };
+  }
+
+  /** 旧进程没注册 /api/settings/* 时返回 404，这里直接给出可执行的下一步。 */
+  const STALE_BACKEND_HINT = '；当前后端服务是旧版本，未注册该接口，请重启服务：python web_test/server.py';
+
+  /**
+   * 统一调用后端 /api/settings/*，返回响应包（含 ok / message / error_code / data）。
+   * 保证不会挂起：AbortController + 计时器兜底，超时后一定在 REQUEST_TIMEOUTS 内返回。
+   */
+  async function callApi(path, method, body) {
+    const verb = (method || 'GET').toUpperCase();
+    // 探测类请求（POST /test、PUT 保存）要跟着请求体里的「超时（秒）」放大，见 probeTimeoutMs
+    const timeoutMs = (verb === 'POST' || verb === 'PUT') ? probeTimeoutMs(body) : REQUEST_TIMEOUTS.snapshot;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+
+    let timer = null;
+    let timedOut = false;
+    let outcome;
+    // 这个计时器同时是兜底：即使 fetch 永不 settle（连接挂死），Promise.race 也会返回
+    const timeoutPromise = new Promise(function (resolve) {
+      timer = setTimeout(function () {
+        timedOut = true;
+        if (controller) { try { controller.abort(); } catch (err) { /* 忽略 */ } }
+        resolve({ timeout: true });
+      }, timeoutMs);
+    });
+
+    try {
+      // 包一层把 fetch 的拒绝转成普通值：否则超时先返回、fetch 稍后才失败时，
+      // 会留下一个没人处理的 unhandled rejection。
+      const fetchPromise = (async function () {
+        try {
+          const res = await fetch(path, {
+            method: verb,
+            headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+            body: body === undefined ? undefined : JSON.stringify(body),
+            signal: controller ? controller.signal : undefined
+          });
+          return { res: res };
+        } catch (err) {
+          return { err: err };
+        }
+      })();
+      outcome = await Promise.race([fetchPromise, timeoutPromise]);
+    } finally {
+      if (timer !== null) clearTimeout(timer);
+    }
+
+    if (timedOut || outcome.timeout) return timeoutPayload(timeoutMs);
+    if (outcome.err) {
+      const err = outcome.err;
+      // 主动 abort 或环境自身的 AbortError 都算超时，别报成「无法连接后端服务」
+      if (err && (err.name === 'AbortError' || err.name === 'TimeoutError')) return timeoutPayload(timeoutMs);
+      return { ok: false, message: '无法连接后端服务：' + (err && err.message ? err.message : err), error_code: 'NETWORK_ERROR', data: null };
+    }
+
+    const res = outcome.res;
+    let payload;
+    try {
+      payload = await res.json();
+    } catch (err) {
+      return { ok: false, message: '后端返回了非 JSON 响应（HTTP ' + res.status + '）', error_code: 'BAD_RESPONSE', data: null };
+    }
+    if (!payload || typeof payload !== 'object') {
+      return { ok: false, message: '后端返回格式异常', error_code: 'BAD_RESPONSE', data: null };
+    }
+    // 是否本来就是统一响应包：新版后端对「未注册的 /api/settings/* 路径」也会返回 404，
+    // 但它的 message 已经说明了旧版本与重启办法，此时不能再追加 STALE_BACKEND_HINT，
+    // 否则同一句话会出现两遍。
+    const hadEnvelope = payload.ok !== undefined;
+    if (payload.ok === undefined) payload.ok = res.ok;
+    if (!payload.ok && !payload.message) {
+      // 不是统一响应包：多半是 FastAPI 默认的 {"detail": "..."}（旧进程未注册该接口），
+      // 把 detail 原文带上，用户才看得懂「为什么失败」。
+      const detail = payload.detail === undefined || payload.detail === null
+        ? ''
+        : (typeof payload.detail === 'string' ? payload.detail : JSON.stringify(payload.detail));
+      payload.message = detail
+        ? '后端返回错误（HTTP ' + res.status + '）：' + detail
+        : '请求失败（HTTP ' + res.status + '）';
+    }
+    if (!payload.ok && !hadEnvelope && res.status === 404 && path.indexOf('/api/settings/') === 0) {
+      payload.message = (payload.message || '请求失败（HTTP 404）') + STALE_BACKEND_HINT;
+    }
+    return payload;
+  }
+
+  /** 把响应包渲染成一句可读结果，供测试/保存/清除操作复用。 */
+  function describeResult(payload, onSuccess) {
+    if (payload.ok) return { text: (onSuccess ? onSuccess + '：' : '') + (payload.message || '操作成功'), kind: 'success' };
+    const code = payload.error_code ? '[' + payload.error_code + '] ' : '';
+    return { text: code + (payload.message || '操作失败'), kind: 'error' };
+  }
+
+  function setBusy(buttons, busy, label) {
+    buttons.forEach(function (btn) {
+      if (!btn) return;
+      if (busy) {
+        btn.dataset.originalText = btn.textContent;
+        btn.textContent = label || '处理中…';
+        btn.disabled = true;
+      } else {
+        if (btn.dataset.originalText) btn.textContent = btn.dataset.originalText;
+        btn.disabled = false;
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------- 设置面板
+  const settingsOverlay = $('settingsOverlay');
+  const llmEls = {
+    baseUrl: $('llmBaseUrl'), apiKey: $('llmApiKey'),
+    model: $('llmModel'), responseFormat: $('llmResponseFormat'), timeout: $('llmTimeout'),
+    keyHint: $('llmKeyHint'),
+    msg: $('llmMsg'), badge: $('llmBadge'), badgeText: $('llmBadgeText'),
+    keyToggle: $('llmKeyToggle'),
+    test: $('llmTest'), save: $('llmSave'), clear: $('llmClear')
+  };
+  const searchEls = {
+    baseUrl: $('searchBaseUrl'), apiKey: $('searchApiKey'),
+    maxResults: $('searchMaxResults'), timeout: $('searchTimeout'),
+    keyHint: $('searchKeyHint'), msg: $('searchMsg'),
+    badge: $('searchBadge'), badgeText: $('searchBadgeText'),
+    keyToggle: $('searchKeyToggle'),
+    test: $('searchTest'), save: $('searchSave'), clear: $('searchClear')
+  };
+
+  let llmSnapshot = null;
+  let searchSnapshot = null;
+
+  // 面板头部徽标的文案：未接入时直接说明「未配置模型」，与顶栏 MODE_LABEL 分开维护
+  const PANEL_MODE_LABEL = { model: '模型模式', env: '环境变量模式', mock: '未配置模型' };
+
+  function applyBadge(badge, textEl, mode, label) {
+    if (!badge || !textEl) return;
+    badge.className = 'mode-badge mode-' + (mode === 'model' ? 'model' : mode === 'env' ? 'env' : 'mock');
+    textEl.textContent = label;
+  }
+
+  /** 面板内模型徽标：模型 / 环境变量模式下带上模型名，未接入时显示「未配置模型」。 */
+  function llmBadgeLabel(snapshot) {
+    const mode = snapshot.mode || 'mock';
+    const base = PANEL_MODE_LABEL[mode] || mode;
+    if (mode === 'mock' || !snapshot.model) return base;
+    return base + ' · ' + snapshot.model;
+  }
+
+  /** 把响应格式落到 select 上；值非法（如后端返回了未知取值）时回落到默认 text。 */
+  function setResponseFormat(value) {
+    const allowed = Array.prototype.map.call(llmEls.responseFormat.options, function (item) { return item.value; });
+    llmEls.responseFormat.value = allowed.indexOf(value) >= 0 ? value : 'text';
+  }
+
+  function applyLlmSnapshot(snapshot) {
+    llmSnapshot = snapshot;
+    const pref = readPref();
+    // 已配置时以服务端返回为准；未配置时用本地偏好预填
+    llmEls.baseUrl.value = snapshot.base_url || pref.base_url || '';
+    llmEls.model.value = snapshot.model || pref.model || '';
+    setResponseFormat(snapshot.response_format || pref.response_format || 'text');
+    // 超时留空表示沿用后端默认值（30 秒），由 placeholder 提示。
+    // 这里必须用真值判断：未配置时后端快照给的是 0.0（不是 null），
+    // 若按 `!= null` 判断就会把 "0" 填进输入框，前端校验随即以
+    // 「超时需在 1 ~ 300 秒之间」拦下请求，用户连「测试连接」都点不动。
+    llmEls.timeout.value = snapshot.timeout ? snapshot.timeout : '';
+    llmEls.apiKey.value = '';
+    llmEls.keyHint.textContent = snapshot.api_key_configured
+      ? '· 已配置 ' + snapshot.api_key_masked + '，留空沿用'
+      : (snapshot.env_api_key_present ? '· 未配置，留空将沿用环境变量中的 Key' : '· 必填');
+    applyBadge(llmEls.badge, llmEls.badgeText, snapshot.mode, llmBadgeLabel(snapshot));
+    llmEls.clear.disabled = snapshot.mode !== 'model';
+  }
+
+  function applySearchSnapshot(snapshot) {
+    searchSnapshot = snapshot;
+    searchEls.baseUrl.value = snapshot.base_url || 'https://api.tavily.com/search';
+    searchEls.maxResults.value = snapshot.max_results || 5;
+    searchEls.timeout.value = snapshot.timeout || 10;
+    searchEls.apiKey.value = '';
+    searchEls.keyHint.textContent = snapshot.api_key_configured
+      ? '· 已配置 ' + snapshot.api_key_masked + '，留空沿用'
+      : (snapshot.env_api_key_present ? '· 未配置，留空将沿用环境变量中的 Key' : '· 必填');
+    applyBadge(searchEls.badge, searchEls.badgeText, snapshot.configured ? 'env' : 'mock',
+      snapshot.configured ? '已配置' : '未配置');
+    searchEls.clear.disabled = snapshot.source !== 'runtime';
+  }
+
+  /** 模型配置请求体：只含契约约定的 5 个字段，temperature / max_tokens 已下线。 */
+  function llmPayload() {
+    const rawTimeout = llmEls.timeout.value.trim();
+    return {
+      base_url: llmEls.baseUrl.value.trim(),
+      api_key: llmEls.apiKey.value.trim() || null,
+      model: llmEls.model.value.trim(),
+      response_format: llmEls.responseFormat.value,
+      // 留空 ⇒ null，由后端套用默认超时（30 秒）
+      timeout: rawTimeout === '' ? null : Number(rawTimeout)
+    };
+  }
+
+  function searchPayload() {
+    return {
+      base_url: searchEls.baseUrl.value.trim(),
+      api_key: searchEls.apiKey.value.trim() || null,
+      max_results: Number(searchEls.maxResults.value),
+      timeout: Number(searchEls.timeout.value)
+    };
+  }
+
+  /** 前端预校验，避免把明显非法的请求发给后端。 */
+  function validateLlm() {
+    const base = llmEls.baseUrl.value.trim();
+    if (!base) return '请填写 Base URL';
+    if (!/^https?:\/\//i.test(base)) return 'Base URL 必须以 http:// 或 https:// 开头';
+    if (/^https?:\/\/[^/@]*@/i.test(base)) return 'Base URL 中不要内嵌用户名或密码，请填写到 API Key 字段';
+    if (!llmEls.model.value.trim()) return '请填写模型名';
+    const needsKey = llmSnapshot && !llmSnapshot.api_key_configured && !llmSnapshot.env_api_key_present;
+    if (needsKey && !llmEls.apiKey.value.trim()) return '请填写 API Key';
+    // 超时是可选项：留空表示沿用后端默认值，只在填了内容时才校验范围
+    const rawTimeout = llmEls.timeout.value.trim();
+    if (rawTimeout !== '') {
+      const timeout = Number(rawTimeout);
+      if (!(timeout >= 1 && timeout <= 300)) return '超时需在 1 ~ 300 秒之间';
+    }
+    return '';
+  }
+
+  function validateSearch() {
+    const base = searchEls.baseUrl.value.trim();
+    if (!base) return '请填写搜索接口地址';
+    if (!/^https?:\/\//i.test(base)) return '搜索接口地址必须以 http:// 或 https:// 开头';
+    if (/^https?:\/\/[^/@]*@/i.test(base)) return '搜索接口地址中不要内嵌用户名或密码，请填写到 API Key 字段';
+    const needsKey = searchSnapshot && !searchSnapshot.api_key_configured && !searchSnapshot.env_api_key_present;
+    if (needsKey && !searchEls.apiKey.value.trim()) return '请填写搜索服务 API Key';
+    const count = Number(searchEls.maxResults.value);
+    if (!(count >= 1 && count <= 20)) return '返回条数需在 1 ~ 20 之间';
+    const timeout = Number(searchEls.timeout.value);
+    if (!(timeout >= 1 && timeout <= 120)) return '超时需在 1 ~ 120 秒之间';
+    return '';
+  }
+
+  // ---------------------------------------------------------------- 设置面板动作
+  /** 打开面板时只拉取两份配置：模型 + 搜索（供应商预置接口已下线）。 */
+  async function loadSettings() {
+    const results = await Promise.all([
+      callApi('/api/settings/llm'),
+      callApi('/api/settings/search')
+    ]);
+    const llm = results[0], search = results[1];
+
+    if (llm.ok && llm.data) {
+      applyLlmSnapshot(llm.data);
+    } else {
+      setMessage(llmEls.msg, (llm.error_code ? '[' + llm.error_code + '] ' : '') + (llm.message || '读取模型配置失败'), 'error');
+      // 读取失败时徽标必须落到失败态：否则会一直停在 HTML 里的「读取中…」
+      applyBadge(llmEls.badge, llmEls.badgeText, 'mock', '读取失败');
+    }
+    if (search.ok && search.data) {
+      applySearchSnapshot(search.data);
+    } else {
+      setMessage(searchEls.msg, (search.error_code ? '[' + search.error_code + '] ' : '') + (search.message || '读取搜索配置失败'), 'error');
+      applyBadge(searchEls.badge, searchEls.badgeText, 'mock', '读取失败');
+    }
+  }
+
+  async function runLlmTest() {
+    setMessage(llmEls.msg, '', '');
+    const invalid = validateLlm();
+    if (invalid) { setMessage(llmEls.msg, invalid, 'error'); return; }
+    setBusy([llmEls.test, llmEls.save, llmEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/llm/test', 'POST', llmPayload());
+      if (payload.ok && payload.data) {
+        setMessage(llmEls.msg,
+          '连接成功：模型 ' + payload.data.model + ' 响应正常，耗时 ' + payload.data.latency_ms + ' ms', 'success');
+      } else {
+        setMessage(llmEls.msg,
+          (payload.error_code ? '[' + payload.error_code + '] ' : '') + (payload.message || '连接失败'), 'error');
+      }
+    } finally {
+      setBusy([llmEls.test, llmEls.save, llmEls.clear], false);
+      llmEls.clear.disabled = !llmSnapshot || llmSnapshot.mode !== 'model';
+    }
+  }
+
+  async function runLlmSave() {
+    setMessage(llmEls.msg, '', '');
+    const invalid = validateLlm();
+    if (invalid) { setMessage(llmEls.msg, invalid, 'error'); return; }
+    setBusy([llmEls.test, llmEls.save, llmEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/llm', 'PUT', llmPayload());
+      const described = describeResult(payload, '保存成功');
+      setMessage(llmEls.msg, described.text, described.kind);
+      if (payload.ok && payload.data) {
+        // 只记忆非密钥偏好：Base URL / 模型名 / 响应格式
+        writePref({
+          base_url: payload.data.base_url,
+          model: payload.data.model,
+          response_format: payload.data.response_format || llmEls.responseFormat.value
+        });
+        applyLlmSnapshot(payload.data);
+        await refreshModeBadge();
+      }
+    } finally {
+      setBusy([llmEls.test, llmEls.save, llmEls.clear], false);
+      llmEls.clear.disabled = !llmSnapshot || llmSnapshot.mode !== 'model';
+    }
+  }
+
+  async function runLlmClear() {
+    if (!window.confirm('确定要清除运行时模型配置吗？清除后将回落到环境变量配置，若无环境变量则进入 Mock 离线模式。')) return;
+    setMessage(llmEls.msg, '', '');
+    setBusy([llmEls.test, llmEls.save, llmEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/llm', 'DELETE');
+      const described = describeResult(payload, '已清除');
+      setMessage(llmEls.msg, described.text, described.kind);
+      if (payload.ok && payload.data) {
+        applyLlmSnapshot(payload.data);
+        await refreshModeBadge();
+      }
+    } finally {
+      setBusy([llmEls.test, llmEls.save, llmEls.clear], false);
+      llmEls.clear.disabled = !llmSnapshot || llmSnapshot.mode !== 'model';
+    }
+  }
+
+  async function runSearchTest() {
+    setMessage(searchEls.msg, '', '');
+    const invalid = validateSearch();
+    if (invalid) { setMessage(searchEls.msg, invalid, 'error'); return; }
+    setBusy([searchEls.test, searchEls.save, searchEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/search/test', 'POST', searchPayload());
+      if (payload.ok && payload.data) {
+        setMessage(searchEls.msg, '连接成功：搜索服务响应正常，耗时 ' + payload.data.latency_ms + ' ms', 'success');
+      } else {
+        setMessage(searchEls.msg,
+          (payload.error_code ? '[' + payload.error_code + '] ' : '') + (payload.message || '连接失败'), 'error');
+      }
+    } finally {
+      setBusy([searchEls.test, searchEls.save, searchEls.clear], false);
+      searchEls.clear.disabled = !searchSnapshot || searchSnapshot.source !== 'runtime';
+    }
+  }
+
+  async function runSearchSave() {
+    setMessage(searchEls.msg, '', '');
+    const invalid = validateSearch();
+    if (invalid) { setMessage(searchEls.msg, invalid, 'error'); return; }
+    setBusy([searchEls.test, searchEls.save, searchEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/search', 'PUT', searchPayload());
+      const described = describeResult(payload, '保存成功');
+      setMessage(searchEls.msg, described.text, described.kind);
+      if (payload.ok && payload.data) {
+        applySearchSnapshot(payload.data);
+        await refreshModeBadge();
+      }
+    } finally {
+      setBusy([searchEls.test, searchEls.save, searchEls.clear], false);
+      searchEls.clear.disabled = !searchSnapshot || searchSnapshot.source !== 'runtime';
+    }
+  }
+
+  async function runSearchClear() {
+    if (!window.confirm('确定要清除运行时搜索配置吗？清除后将回落到环境变量配置。')) return;
+    setMessage(searchEls.msg, '', '');
+    setBusy([searchEls.test, searchEls.save, searchEls.clear], true);
+    try {
+      const payload = await callApi('/api/settings/search', 'DELETE');
+      const described = describeResult(payload, '已清除');
+      setMessage(searchEls.msg, described.text, described.kind);
+      if (payload.ok && payload.data) {
+        applySearchSnapshot(payload.data);
+        await refreshModeBadge();
+      }
+    } finally {
+      setBusy([searchEls.test, searchEls.save, searchEls.clear], false);
+      searchEls.clear.disabled = !searchSnapshot || searchSnapshot.source !== 'runtime';
+    }
+  }
+
+  function openSettings() {
+    settingsOverlay.hidden = false;
+    setMessage(llmEls.msg, '', '');
+    setMessage(searchEls.msg, '', '');
+    loadSettings().catch(function (err) {
+      setMessage(llmEls.msg, '读取配置失败：' + err.message, 'error');
+      // 兜底：任何异常路径下两个徽标都不能停在「读取中…」
+      applyBadge(llmEls.badge, llmEls.badgeText, 'mock', '读取失败');
+      applyBadge(searchEls.badge, searchEls.badgeText, 'mock', '读取失败');
+    });
+  }
+
+  function closeSettings() { settingsOverlay.hidden = true; }
+
+  function toggleKeyVisibility(input, button) {
+    const hidden = input.type === 'password';
+    input.type = hidden ? 'text' : 'password';
+    button.textContent = hidden ? '隐藏' : '显示';
+  }
+
+  /**
+   * 旧版后端警示条：/health/live 没有 api_version 字段 = 旧进程，
+   * 它的 /api/settings/* 必然 404，所以在页面加载时就把话说清楚，别等用户点开面板。
+   */
+  function applyStaleBackendBanner(isStale) {
+    const banner = $('staleBackendBanner');
+    if (!banner) return;
+    banner.hidden = !isStale;
+  }
+
+  /** 刷新顶栏模式徽标（读 /health/live，失败时静默降级，不影响聊天）。 */
+  async function refreshModeBadge() {
+    const payload = await callApi('/health/live');
+    if (!payload.ok && !payload.status) {
+      // 后端不可用/超时时也不能让顶栏停在「读取中…」；此时拿不到版本信息，
+      // 警示条保持原状（连不上 ≠ 版本旧）。
+      applyBadge($('modeBadge'), $('modeBadgeText'), 'mock', '后端不可用');
+      return;
+    }
+    const data = payload.data || payload;
+    const version = data.api_version;
+    applyStaleBackendBanner(version === undefined || version === null || version === '');
+    const mode = data.model_mode || 'mock';
+    const name = data.model ? ' · ' + data.model : '';
+    applyBadge($('modeBadge'), $('modeBadgeText'), mode, (MODE_LABEL[mode] || mode) + name);
+  }
+
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('settingsClose').addEventListener('click', closeSettings);
+  settingsOverlay.addEventListener('click', function (event) {
+    if (event.target === settingsOverlay) closeSettings();
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !settingsOverlay.hidden) closeSettings();
+  });
+
+  llmEls.keyToggle.addEventListener('click', function () { toggleKeyVisibility(llmEls.apiKey, llmEls.keyToggle); });
+  searchEls.keyToggle.addEventListener('click', function () { toggleKeyVisibility(searchEls.apiKey, searchEls.keyToggle); });
+  llmEls.test.addEventListener('click', runLlmTest);
+  llmEls.save.addEventListener('click', runLlmSave);
+  llmEls.clear.addEventListener('click', runLlmClear);
+  searchEls.test.addEventListener('click', runSearchTest);
+  searchEls.save.addEventListener('click', runSearchSave);
+  searchEls.clear.addEventListener('click', runSearchClear);
+
   function scrollToBottom() {
     scrollEl.scrollTop = scrollEl.scrollHeight;
   }
@@ -253,6 +1037,17 @@
       }
       if (meta.tools && meta.tools.length) {
         metaEl.appendChild(document.createTextNode('调用工具：' + meta.tools.join('、')));
+      }
+      // 模型信息由后端 trace 提供；字段缺失时不展示、也不报错
+      if (meta.modelMode) {
+        if (metaEl.childNodes.length) metaEl.appendChild(document.createTextNode(' · '));
+        const badge = document.createElement('span');
+        badge.className = 'mode-badge mode-' + (meta.modelMode === 'model' ? 'model' : meta.modelMode === 'env' ? 'env' : 'mock');
+        badge.appendChild(document.createElement('span')).className = 'dot';
+        const label = document.createElement('span');
+        label.textContent = (MODE_LABEL[meta.modelMode] || meta.modelMode) + (meta.modelName ? ' · ' + meta.modelName : '');
+        badge.appendChild(label);
+        metaEl.appendChild(badge);
       }
       chatEl.appendChild(metaEl);
     }
@@ -303,7 +1098,9 @@
       const reply = data.reply || '（无回复内容）';
       addMessage('assistant', reply, {
         agent: data.agent,
-        tools: (data.trace && data.trace.tool_names) || []
+        tools: (data.trace && data.trace.tool_names) || [],
+        modelMode: data.trace && data.trace.model_mode,
+        modelName: data.trace && data.trace.model_name
       });
     } catch (err) {
       removeTyping(typing);
@@ -333,7 +1130,11 @@
     '· 转账：给张三转账100元\n' +
     '· 账单：看看我这个月的消费分类\n' +
     '· 搜索：今天北京天气怎么样\n\n' +
-    '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 其他 → 通用搜索）为你处理。');
+    '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 其他 → 通用搜索）为你处理。\n\n' +
+    '点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账与账单分析。');
+
+  // 页面加载时同步当前模型接入模式徽标（后端不可用时静默降级，不影响聊天）
+  refreshModeBadge().catch(function () {});
 </script>
 </body>
 </html>

@@ -11,6 +11,19 @@ __pycache__/
 *.log
 tmp/
 
+# 前端测试依赖（仅 tests/frontend 使用 jsdom 做 DOM 测试，不属于产品运行时）
+node_modules/
+tests/frontend/package-lock.json
+
 # IDE配置
 .idea/
 .vscode/
+
+# 密钥与本地环境变量（绝不入库；API Key 只走环境变量/页面运行时填写）
+.env
+.env.*
+*.env
+*.key
+*.pem
+secrets/
+local_settings.*

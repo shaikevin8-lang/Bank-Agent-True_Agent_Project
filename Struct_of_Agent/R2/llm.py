@@ -4,6 +4,8 @@
 仅在本模块补充 R2 场景的默认 Mock 路由（账单相关关键词）。
 
 [模型接入点] 接入新供应商时，实现 ``ChatModel`` 协议即可被图编排层无缝使用。
+[运行时接入] 页面填写的 Base URL / API Key 由 ``common.model_manager`` 统一管理，
+经 :class:`common.model_manager.RuntimeChatModel` 委托代理注入，支持热切换。
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.llm import ChatModel, DeepSeekChat, MockChat
+from common.model_manager import ModelConfigManager, RuntimeChatModel, get_model_manager
 
 
 def _default_routing() -> dict[str, dict[str, Any]]:
@@ -32,4 +35,12 @@ def _default_routing() -> dict[str, dict[str, Any]]:
 DEFAULT_ROUTING = _default_routing()
 
 
-__all__ = ["ChatModel", "DeepSeekChat", "MockChat", "DEFAULT_ROUTING"]
+__all__ = [
+    "ChatModel",
+    "DeepSeekChat",
+    "MockChat",
+    "ModelConfigManager",
+    "RuntimeChatModel",
+    "get_model_manager",
+    "DEFAULT_ROUTING",
+]

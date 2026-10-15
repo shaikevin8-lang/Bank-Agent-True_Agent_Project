@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from common.model_manager import RuntimeChatModel, trace_info
+
 from .config import DeepSeekConfig, load_config
 from .graph import build_graph
 from .llm import DEFAULT_ROUTING, ChatModel, DeepSeekChat, MockChat
@@ -30,7 +32,7 @@ class TransferAgent:
 
     Attributes:
         config: DeepSeek 配置。
-        model: 实现 ChatModel 协议的模型实例。
+        model: 实现 ChatModel 协议的模型实例（注入 ``model_manager`` 时为运行时委托代理）。
         moderator: 内容审核中间件。
         store: 持久化仓储。
         graph: 编译后的 LangGraph 图。
@@ -43,6 +45,7 @@ class TransferAgent:
         moderator: ContentModerationMiddleware | None = None,
         store: ConversationStore | None = None,
         balance_store: BalanceStore | None = None,
+        model_manager: Any | None = None,
     ) -> None:
         """初始化 Agent 与依赖。
 
@@ -52,9 +55,15 @@ class TransferAgent:
             moderator: 内容审核中间件实例。
             store: 持久化仓储实例。
             balance_store: 余额仓储实例；缺省使用本地位模拟实现。
+            model_manager: 运行时模型配置管理器；注入后模型可在页面热切换，
+                无需重建已编译的图。
         """
         self.config = config or load_config()
-        self.model = model or self._default_model()
+        base_model = model or self._default_model()
+        self.model_manager = model_manager
+        self.model: ChatModel = (
+            RuntimeChatModel(model_manager, fallback=base_model) if model_manager is not None else base_model
+        )
         self.moderator = moderator or ContentModerationMiddleware()
         self.store = store or ConversationStore()
         self.balance_store = balance_store or BalanceStore()
@@ -111,6 +120,12 @@ class TransferAgent:
             self.store.save_task(session_id, task)
 
         reply = result.get("final_reply") or self._extract_final_reply(result)
+        trace = {
+            "session_id": session_id,
+            "steps": result.get("steps", 0),
+            "tool_names": [t.get("tool") for t in tasks],
+        }
+        trace.update(trace_info(self.model_manager))
         return {
             "reply": reply,
             "blocked": bool(result.get("blocked", False)),
@@ -118,11 +133,7 @@ class TransferAgent:
             "tasks": tasks,
             "balance": result.get("balance_check", {}),
             "insufficient_balance": bool(result.get("insufficient_balance", False)),
-            "trace": {
-                "session_id": session_id,
-                "steps": result.get("steps", 0),
-                "tool_names": [t.get("tool") for t in tasks],
-            },
+            "trace": trace,
         }
 
     def get_balance(self, account_id: str) -> int:

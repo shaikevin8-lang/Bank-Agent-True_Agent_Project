@@ -1,0 +1,38 @@
+# 银行智能 Agent（Struct_of_Agent）运行依赖
+# 安装：pip install -r requirements.txt
+#
+# API Key 有两种接入方式：
+#
+#   方式一（推荐，无需改环境变量、无需重启）：
+#       启动 web_test/server.py 后，在页面右上角「模型设置」中手填 Base URL、
+#       API Key 与模型名（响应格式与超时可选），点「测试连接」校验后
+#       「保存并启用」即时生效。密钥仅存于服务进程内存，不落盘、不写入日志、
+#       不回传前端明文（接口只返回掩码）。
+#
+#   方式二（环境变量，作为兜底）：
+#       Deepseek_API  —— 任意 OpenAI 兼容服务的 Key
+#                        （DeepSeek / 通义 / Kimi / 智谱 / 自建网关…）
+#       Tavily_API    —— Tavily 搜索（https://tavily.com/）
+#
+# 页面未配置且未设置 Deepseek_API 时，程序自动降级为离线 Mock 模式
+# （可启动、可演示，回复为固定文本）。
+
+# 编排与工具层
+langgraph>=1.2.0
+langchain-core>=1.0.0
+
+# 模型接入（OpenAI 兼容，任意供应商复用同一客户端）
+openai>=1.0.0
+
+# 数据与校验
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+
+# HTTP / Web 服务
+httpx>=0.28.0
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+
+# 测试（可选）：pip install pytest
+#   后端测试：python -m pytest tests -q
+#   前端 DOM 测试：cd tests/frontend && npm install jsdom && node test_settings_panel.mjs
