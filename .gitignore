@@ -11,6 +11,9 @@ __pycache__/
 *.log
 tmp/
 
+# 本地持久化数据库（R1 / R2 / 会话侧边栏；仅本机运行数据，绝不入库）
+Struct_of_Agent/web_test/data/
+
 # 前端测试依赖（仅 tests/frontend 使用 jsdom 做 DOM 测试，不属于产品运行时）
 node_modules/
 tests/frontend/package-lock.json

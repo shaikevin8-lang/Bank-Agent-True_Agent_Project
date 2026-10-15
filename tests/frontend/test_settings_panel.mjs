@@ -73,6 +73,82 @@ const HEALTH = {
   api_version: 'test',
 }
 
+// ---------------------------------------------------------------- 会话侧边栏桩
+//
+// 页面加载时会拉 /api/sessions，发消息前可能先 POST /api/sessions，
+// 因此**任何** fetch 打桩都必须能应答这几个路径，否则聊天链路会被
+// 「新建会话失败」提前中断（本文件曾因此漏测聊天气泡元信息）。
+const NOW = '2026-01-01T10:00:00'
+const sessionState = { sessions: [], messages: {}, seq: 0 }
+
+function createStubSession(title) {
+  sessionState.seq += 1
+  const session = {
+    id: 'web-stub-' + sessionState.seq,
+    title: title || '新会话',
+    created_at: NOW, updated_at: NOW,
+    message_count: 0, preview: '', title_set_by_user: !!title,
+  }
+  sessionState.sessions.unshift(session)
+  sessionState.messages[session.id] = []
+  return session
+}
+
+function findStubSession(id) {
+  return sessionState.sessions.filter((s) => s.id === id)[0] || null
+}
+
+function touchStubSession(session, role, content, agent, trace) {
+  sessionState.messages[session.id].push({
+    role, content, created_at: NOW,
+    agent: agent || null,
+    model_mode: (trace && trace.model_mode) || null,
+    model_name: (trace && trace.model_name) || null,
+    tools: (trace && trace.tool_names) || [],
+  })
+  session.message_count = sessionState.messages[session.id].length
+  session.preview = content
+  session.updated_at = NOW
+  // 首条用户消息成为标题（用户手动改过名则保持不动）
+  if (role === 'user' && !session.title_set_by_user && session.message_count === 1) {
+    session.title = content
+  }
+}
+
+/** 会话接口的最小桩；不匹配时返回 null，交给调用方自己的打桩处理。 */
+async function sessionFallback(url, options) {
+  const method = (options && options.method) || 'GET'
+  if (url === '/api/sessions' && method === 'GET') {
+    return jsonResponse({ ok: true, message: '', error_code: null, data: { sessions: sessionState.sessions.slice() } })
+  }
+  if (url === '/api/sessions' && method === 'POST') {
+    const body = options && options.body ? JSON.parse(options.body) : {}
+    return jsonResponse({ ok: true, message: '已新建会话', error_code: null, data: { session: createStubSession(body.title) } })
+  }
+  if (typeof url === 'string' && url.indexOf('/api/sessions/') === 0) {
+    const id = decodeURIComponent(url.slice('/api/sessions/'.length))
+    const session = findStubSession(id)
+    if (method === 'DELETE') {
+      if (!session) return jsonResponse({ ok: false, message: '会话不存在或已被删除', error_code: 'SESSION_NOT_FOUND', data: null }, 404)
+      sessionState.sessions = sessionState.sessions.filter((s) => s.id !== id)
+      delete sessionState.messages[id]
+      return jsonResponse({ ok: true, message: '会话已删除', error_code: null, data: { deleted: id } })
+    }
+    if (!session) return jsonResponse({ ok: false, message: '会话不存在或已被删除', error_code: 'SESSION_NOT_FOUND', data: null }, 404)
+    if (method === 'PATCH') {
+      const body = JSON.parse(options.body)
+      session.title = body.title
+      session.title_set_by_user = true
+      return jsonResponse({ ok: true, message: '已重命名', error_code: null, data: { session } })
+    }
+    return jsonResponse({
+      ok: true, message: '', error_code: null,
+      data: { session, messages: sessionState.messages[id] || [] },
+    })
+  }
+  return null
+}
+
 /** 记录所有请求，并按路径返回契约响应（未打桩的 URL 直接抛错，用于发现多余请求）。 */
 const calls = []
 let llmSnapshot = LLM_SNAPSHOT_MOCK
@@ -140,10 +216,18 @@ async function stubFetch(url, options = {}) {
   if (url === '/health/live') {
     return jsonResponse({ ...HEALTH, model_mode: llmSnapshot.mode, model: llmSnapshot.model })
   }
+  const sessionReply = await sessionFallback(url, options)
+  if (sessionReply) return sessionReply
   if (url === '/api/chat') {
+    const session = findStubSession(body && body.session_id)
+    const trace = { session_id: 's', steps: 1, tool_names: ['transfer_by_name'], model_mode: 'model', model_name: 'deepseek-flash', agent: 'R1' }
+    if (session) {
+      touchStubSession(session, 'user', body.message)
+      touchStubSession(session, 'assistant', '好的，已为您处理。', 'R1', trace)
+    }
     return jsonResponse({
       reply: '好的，已为您处理。', blocked: false, moderation: {}, tasks: [], agent: 'R1',
-      trace: { session_id: 's', steps: 1, tool_names: ['transfer_by_name'], model_mode: 'model', model_name: 'deepseek-flash', agent: 'R1' },
+      trace,
     })
   }
   throw new Error('未打桩的请求: ' + method + ' ' + url)
@@ -490,12 +574,19 @@ const alertCalls = { count: 0 };
 
 /** 用给定 fetch 打桩重新装载一份页面；timeouts 省略时用页面自己的生产默认值。 */
 async function loadFreshPage(fetchImpl, timeouts) {
+  // 包一层：会话接口由公共桩应答，各用例自己的打桩只关心设置接口，
+  // 不必为「页面加载要拉会话列表」重复造轮子。
+  const wrappedFetch = async (url, options) => {
+    const fallback = await sessionFallback(url, options);
+    if (fallback) return fallback;
+    return fetchImpl(url, options);
+  };
   const fresh = new JSDOM(html, {
     runScripts: 'dangerously',
     pretendToBeVisual: true,
     url: 'http://127.0.0.1:8000/',
     beforeParse(window) {
-      window.fetch = fetchImpl;
+      window.fetch = wrappedFetch;
       window.confirm = () => true;
       window.alert = () => { alertCalls.count += 1; };
       if (timeouts) window.REQUEST_TIMEOUTS = Object.assign({}, timeouts);

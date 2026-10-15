@@ -336,3 +336,18 @@ class ConversationStore:
                 message["tool_call_id"] = row.tool_call_id
             messages.append(message)
         return messages
+
+    def clear_session(self, session_id: str) -> None:
+        """删除指定会话的全部消息（演示环境重置 / 侧边栏删除会话时调用）。
+
+        与 R1 的同名方法保持一致：删除会话时两边的多轮上下文都要清掉，
+        否则侧边栏里删掉的会话仍会在子 Agent 里留下「记忆」。
+
+        Args:
+            session_id: 会话 ID。
+        """
+        with Session(self._engine) as session:
+            session.execute(
+                MessageRecord.__table__.delete().where(MessageRecord.session_id == session_id)
+            )
+            session.commit()

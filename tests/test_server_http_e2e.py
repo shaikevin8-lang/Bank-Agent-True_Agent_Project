@@ -17,100 +17,24 @@
     7. DELETE /api/settings/llm       回落 Mock
 
 任何一环缺失（旧进程 = 404）或热切换失效（对话仍走 Mock / 旧模型），本测试立即失败。
+
+``live_server`` 夹具已提到 ``tests/conftest.py``，供会话侧边栏等真实 HTTP 测试复用。
 """
 
 from __future__ import annotations
 
-import socket
 import sys
-import threading
-import time
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import httpx
-import pytest
-import uvicorn
 
 _STRUCT = Path(__file__).resolve().parent.parent / "Struct_of_Agent"
 if str(_STRUCT) not in sys.path:
     sys.path.insert(0, str(_STRUCT))
 
-# 就绪轮询上限：uvicorn 启动 + FastAPI 应用导入通常 < 1s，10s 留足余量但不会挂死
-_READY_TIMEOUT_S = 10.0
-# 单次 HTTP 请求超时（本地回环，30s 足够宽松）
-_REQUEST_TIMEOUT_S = 30.0
-# 优雅退出等待上限
-_SHUTDOWN_TIMEOUT_S = 15.0
-# 就绪轮询间隔（轮询而非固定 sleep，尽快返回）
-_POLL_INTERVAL_S = 0.05
-
 _GOOD_KEY = "good-key-1234"
 _MODEL = "fake-model"
-
-
-def _free_port() -> int:
-    """取一个空闲端口：先绑定再关闭，把端口号交给 uvicorn。
-
-    绑定 ``0`` 让内核分配一个当前空闲的端口，随后立即关闭；
-    uvicorn 稍后会在同一个端口上重新绑定。
-
-    Returns:
-        本机回环地址上的空闲 TCP 端口号。
-    """
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
-@pytest.fixture()
-def live_server() -> Iterator[httpx.Client]:
-    """在后台线程启动真实 uvicorn，等待就绪后交出 httpx 客户端。
-
-    应用在**夹具内部**导入：``conftest.py`` 的 autouse 隔离夹具
-    （清空环境变量密钥 + 重置进程级管理器）会先执行，保证服务启动时
-    读到的是干净的运行时状态，而不是被前一个测试污染过的单例。
-
-    Yields:
-        指向 ``http://127.0.0.1:<port>`` 的 httpx 客户端。
-    """
-    from web_test.server import app  # 延迟导入：先让 autouse 隔离夹具生效
-
-    port = _free_port()
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning")
-    server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="e2e-uvicorn", daemon=True)
-    thread.start()
-
-    # trust_env=False：忽略机器上的 HTTP(S)_PROXY，避免回环请求被代理劫持导致假失败
-    client = httpx.Client(
-        base_url=f"http://127.0.0.1:{port}", timeout=_REQUEST_TIMEOUT_S, trust_env=False
-    )
-    try:
-        deadline = time.monotonic() + _READY_TIMEOUT_S
-        last_error: Exception | None = None
-        while time.monotonic() < deadline:
-            if not thread.is_alive():
-                raise RuntimeError(
-                    f"uvicorn 线程在端口 {port} 上提前退出，服务未能启动"
-                    "（端口可能刚被其他进程占用）"
-                )
-            try:
-                if client.get("/health/live").status_code == 200:
-                    break
-            except httpx.HTTPError as error:  # 尚未开始监听：连接被拒绝等
-                last_error = error
-            time.sleep(_POLL_INTERVAL_S)
-        else:
-            raise RuntimeError(f"服务未在 {_READY_TIMEOUT_S}s 内就绪：{last_error!r}")
-
-        yield client
-    finally:
-        # 先关客户端（释放 keep-alive 连接），再请求优雅退出并回收线程与端口
-        client.close()
-        server.should_exit = True
-        thread.join(timeout=_SHUTDOWN_TIMEOUT_S)
-        assert not thread.is_alive(), "uvicorn 线程未能在超时内退出，端口可能泄漏"
 
 
 def _llm_payload(fake_openai: Any, **overrides: Any) -> dict[str, Any]:

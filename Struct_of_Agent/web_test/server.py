@@ -29,9 +29,21 @@
     - 启动时打印一行自检信息（版本 / 已注册设置路由 / 地址，不含任何密钥）。
 重启服务请用 ``web_test/restart_server.ps1``（或 ``restart_server.bat``）。
 
-[临时数据库] R1 / R2 的持久化使用临时 SQLite 数据库（进程重启即清空），
-仅用于本地功能测试；接入真实数据库时，将 :func:`_build_supervisor` 中的
-``db_url`` 替换为 PostgreSQL 连接串即可。
+[会话侧边栏] 页面左侧提供会话侧边栏（新建 / 历史列表 / 切换 / 重命名 / 删除），
+由 ``web_test.session_store.ChatSessionStore`` 提供持久化：
+    GET    /api/sessions            会话列表（按最近活跃倒序）
+    POST   /api/sessions            新建会话（顺带清理上一个空会话）
+    GET    /api/sessions/{id}       单个会话 + 完整对话记录
+    PATCH  /api/sessions/{id}       重命名
+    DELETE /api/sessions/{id}       删除（同时清掉 R1/R2 的该会话上下文）
+``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
+``session_id`` 自动补建，因此首条消息会顺带生成标题。
+
+[持久化数据库] R1 / R2 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
+文件（``r1.db`` / ``r2.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
+数据目录可用环境变量 ``BANK_AGENT_DATA_DIR`` 覆盖（测试指向临时目录）。
+接入真实数据库时，将 :func:`_build_supervisor` 中的 ``db_url`` 替换为 PostgreSQL
+连接串即可。演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账。
 
 启动方式（在项目根目录执行）：
     python web_test/server.py
@@ -41,9 +53,7 @@
 
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +62,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
@@ -65,6 +75,13 @@ from R1.persistence import ConversationStore as R1ConversationStore
 from R2 import BillAgent, TransactionStore
 from R2.persistence import ConversationStore as R2ConversationStore
 from supervisor import SupervisorAgent
+from web_test.session_store import (
+    ChatSessionStore,
+    SessionNotFoundError,
+    is_valid_session_id,
+    resolve_data_dir,
+    sqlite_url,
+)
 
 # 默认演示账户与初始余额（单位：分，¥1000.00），便于转账功能直接演示
 DEFAULT_ACCOUNT_ID = "622200001"
@@ -75,8 +92,8 @@ DEFAULT_BALANCE_FEN = 100000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-14.settings-v2"
-API_FEATURES = ("settings.llm", "settings.search", "chat", "health")
+API_VERSION = "2026-10-14.sessions-v3"
+API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
 _HTML_PATH = Path(__file__).resolve().parent / "index.html"
@@ -86,22 +103,22 @@ BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口�
 
 
 def _build_supervisor() -> SupervisorAgent:
-    """构造总调度器，R1/R2 均接入临时 SQLite 数据库与运行时模型配置。
+    """构造总调度器，R1/R2 均接入持久化 SQLite 数据库与运行时模型配置。
 
     Returns:
         已装配 R1/R2 子 Agent 的 SupervisorAgent 实例。
     """
-    tmp_dir = tempfile.mkdtemp(prefix="bank_agent_web_")
+    data_dir = resolve_data_dir()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
 
-    # R1：会话 + 余额同库；预置演示账户余额
-    r1_db = f"sqlite:///{os.path.join(tmp_dir, 'r1.db')}"
+    # R1：会话 + 余额同库；仅在账户不存在时播种演示余额（重启不抹掉已发生的转账）
+    r1_db = sqlite_url(data_dir / "r1.db")
     r1_conv = R1ConversationStore(db_url=r1_db)
     r1_balance = BalanceStore(db_url=r1_db)
-    r1_balance.set_balance(DEFAULT_ACCOUNT_ID, DEFAULT_BALANCE_FEN, owner="演示账户")
+    r1_balance.ensure_account(DEFAULT_ACCOUNT_ID, DEFAULT_BALANCE_FEN, owner="演示账户")
 
     # R2：流水 + 报告 + 会话同库
-    r2_db = f"sqlite:///{os.path.join(tmp_dir, 'r2.db')}"
+    r2_db = sqlite_url(data_dir / "r2.db")
     r2_store = TransactionStore(db_url=r2_db)
     r2_conv = R2ConversationStore(db_url=r2_db)
 
@@ -119,12 +136,42 @@ app = FastAPI(title="银行智能 Agent 本地测试", version="0.2.0")
 # 进程级单例总调度器
 _supervisor = _build_supervisor()
 
+# 进程级单例会话仓储（惰性创建：数据库文件在首次访问时才落地）
+_session_store: ChatSessionStore | None = None
+
+
+def get_session_store() -> ChatSessionStore:
+    """返回进程级会话仓储单例。
+
+    惰性创建而非模块级实例化，便于测试把它替换成指向临时数据库的仓储
+    （``monkeypatch.setattr(server, "_session_store", store)``）。
+
+    Returns:
+        会话仓储实例。
+    """
+    global _session_store
+    if _session_store is None:
+        _session_store = ChatSessionStore(db_url=sqlite_url(resolve_data_dir() / "web_sessions.db"))
+    return _session_store
+
 
 class ChatRequest(BaseModel):
     """一次对话请求。"""
 
     message: str = Field(..., description="用户自然语言输入")
     session_id: str = Field(default="default", description="会话 ID")
+
+
+class SessionCreateRequest(BaseModel):
+    """新建会话请求；标题可留空，留空时使用默认标题「新会话」。"""
+
+    title: str | None = Field(default=None, description="会话标题；留空则使用默认标题")
+
+
+class SessionRenameRequest(BaseModel):
+    """重命名会话请求。"""
+
+    title: str = Field(..., description="新的会话标题")
 
 
 class LlmSettingsRequest(BaseModel):
@@ -166,6 +213,26 @@ def _ok(message: str = "", data: Any = None) -> dict[str, Any]:
     return {"ok": True, "message": message, "error_code": None, "data": data}
 
 
+def _fail(message: str, error_code: str, status_code: int = 400) -> JSONResponse:
+    """构造失败响应包（契约第 3 节）。
+
+    会话接口的失败必须与成功同构（含 ``ok`` / ``error_code``），否则前端只能
+    显示「请求失败（HTTP 4xx）」，看不出是「会话已被删除」还是「标题为空」。
+
+    Args:
+        message: 面向用户的提示。
+        error_code: 机器可读错误码。
+        status_code: HTTP 状态码。
+
+    Returns:
+        统一响应包形式的 JSON 响应。
+    """
+    return JSONResponse(
+        status_code=status_code,
+        content={"ok": False, "message": message, "error_code": error_code, "data": None},
+    )
+
+
 @app.exception_handler(SettingsError)
 async def _settings_error_handler(_request: Request, error: SettingsError) -> JSONResponse:
     """将接入配置错误统一渲染为契约约定的响应包。
@@ -181,15 +248,19 @@ async def _settings_error_handler(_request: Request, error: SettingsError) -> JS
 
 
 @app.exception_handler(RequestValidationError)
-async def _request_validation_handler(_request: Request, error: RequestValidationError) -> JSONResponse:
+async def _request_validation_handler(request: Request, error: RequestValidationError) -> JSONResponse:
     """把请求体校验失败也渲染成统一响应包（契约第 3 节）。
 
     FastAPI 默认返回 ``{"detail": [...]}``，前端拿不到 ``ok`` / ``error_code``，
-    只能显示「请求失败（HTTP 422）」。契约要求所有 ``/api/settings/*`` 接口
-    都返回统一响应包，因此这里把校验错误翻译成 ``LLM_CONFIG_INVALID``。
+    只能显示「请求失败（HTTP 422）」。契约要求所有接口都返回统一响应包，
+    因此这里把校验错误翻译成错误码。
+
+    错误码按路由区分：会话接口用 ``SESSION_REQUEST_INVALID``，
+    其余（对话 / 接入配置）沿用既有的 ``LLM_CONFIG_INVALID``，
+    否则用户会看到「模型配置不合法」这种驴唇不对马嘴的提示。
 
     Args:
-        _request: 请求对象（未使用）。
+        request: 请求对象（用于区分路由）。
         error: FastAPI 抛出的校验错误。
 
     Returns:
@@ -200,9 +271,14 @@ async def _request_validation_handler(_request: Request, error: RequestValidatio
         for item in error.errors()
     )
     message = f"请求参数不合法：{fields}" if fields else "请求参数不合法"
+    error_code = (
+        "SESSION_REQUEST_INVALID"
+        if request.url.path.startswith("/api/sessions")
+        else "LLM_CONFIG_INVALID"
+    )
     return JSONResponse(
         status_code=422,
-        content={"ok": False, "message": message, "error_code": "LLM_CONFIG_INVALID", "data": None},
+        content={"ok": False, "message": message, "error_code": error_code, "data": None},
     )
 
 
@@ -215,18 +291,23 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
     FastAPI 默认的 ``{"detail": "Not Found"}``，前端只能显示
     「请求失败（HTTP 404）」，用户完全看不出该重启服务。
 
-    这里**只**在 ``status_code == 404`` 且请求路径以 ``/api/settings/`` 开头时
-    改写响应体；其余任何路径 / 状态码都原样返回 FastAPI 的默认 JSON，
-    保证既有接口行为不变。
+    这里**只**改写两类请求，其余任何路径 / 状态码都原样返回 FastAPI 的默认 JSON，
+    保证既有接口行为不变：
+
+    - ``404`` 且路径以 ``/api/settings/`` 开头 → ``BACKEND_OUTDATED``（旧进程）；
+    - ``405`` 且路径以 ``/api/sessions`` 开头 → 统一响应包。会话接口的全部响应
+      都必须是统一响应包（契约第 3 节），否则前端只能显示
+      「请求失败（HTTP 405）」，看不出是方法用错了。
 
     Args:
         request: 当前请求（用于读取路径）。
         exc: Starlette 抛出的 HTTP 异常。
 
     Returns:
-        统一响应包（旧后端）或 FastAPI 默认 JSON 响应。
+        统一响应包（旧后端 / 会话接口方法错误）或 FastAPI 默认 JSON 响应。
     """
-    if exc.status_code == 404 and request.url.path.startswith("/api/settings/"):
+    path = request.url.path
+    if exc.status_code == 404 and path.startswith("/api/settings/"):
         return JSONResponse(
             status_code=404,
             content={
@@ -235,6 +316,17 @@ async def _http_exception_handler(request: Request, exc: StarletteHTTPException)
                 "error_code": "BACKEND_OUTDATED",
                 "data": None,
             },
+        )
+    if exc.status_code == 405 and path.startswith("/api/sessions"):
+        return JSONResponse(
+            status_code=405,
+            content={
+                "ok": False,
+                "message": f"该接口不支持 {request.method} 方法",
+                "error_code": "SESSION_METHOD_NOT_ALLOWED",
+                "data": None,
+            },
+            headers=getattr(exc, "headers", None),
         )
     return JSONResponse(
         status_code=exc.status_code,
@@ -251,7 +343,7 @@ def index() -> FileResponse:
 
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> dict:
-    """接收一条自然语言消息，路由到子 Agent 并返回统一结果。
+    """接收一条自然语言消息，路由到子 Agent 并返回统一结果，同时写入会话库。
 
     Args:
         request: 对话请求（message + session_id）。
@@ -259,7 +351,155 @@ def chat(request: ChatRequest) -> dict:
     Returns:
         统一契约字典（reply / blocked / moderation / tasks / trace / agent）。
     """
-    return _supervisor.chat(request.message, request.session_id)
+    result = _supervisor.chat(request.message, request.session_id)
+    _record_turn(request.session_id, request.message, result)
+    return result
+
+
+def _record_turn(session_id: str, user_message: str, result: dict[str, Any]) -> None:
+    """把一轮问答写入会话库，供左侧侧边栏展示与回看。
+
+    会话不存在时按传入的 ``session_id`` 自动补建（首条用户消息顺带生成标题）。
+    落库失败**绝不能**影响本次对话：回复已经生成好了，侧边栏缺一条记录远好过
+    整个请求报 500，因此这里只打印一行告警。
+
+    Args:
+        session_id: 会话 ID。
+        user_message: 用户输入原文。
+        result: 子 Agent 返回的统一契约字典。
+    """
+    if not is_valid_session_id(session_id):
+        print(f"[web_test] 会话 ID 不合法，跳过记录：{session_id!r}")
+        return
+    try:
+        store = get_session_store()
+        store.append_message(session_id, "user", user_message)
+        trace = result.get("trace") or {}
+        store.append_message(
+            session_id,
+            "assistant",
+            str(result.get("reply") or ""),
+            agent=result.get("agent"),
+            model_mode=trace.get("model_mode"),
+            model_name=trace.get("model_name"),
+            tools=[str(name) for name in (trace.get("tool_names") or [])],
+        )
+    except Exception as error:  # noqa: BLE001 - 记录失败不得影响对话本身
+        print(f"[web_test] 会话记录写入失败：{error!r}")
+
+
+def _clear_agent_context(session_id: str) -> None:
+    """删除会话时一并清掉 R1/R2 中该会话的多轮上下文。
+
+    侧边栏删掉的会话不应在子 Agent 里留下"记忆"（否则同一 session_id 再次出现时
+    会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2 的在
+    ``agent.conversation_store``，这里按鸭子类型逐个尝试，清理失败只告警。
+
+    Args:
+        session_id: 会话 ID。
+    """
+    for agent in getattr(_supervisor, "agents", {}).values():
+        for attribute in ("store", "conversation_store"):
+            store = getattr(agent, attribute, None)
+            clear = getattr(store, "clear_session", None)
+            if not callable(clear):
+                continue
+            try:
+                clear(session_id)
+            except Exception as error:  # noqa: BLE001 - 上下文清理失败不影响侧边栏删除
+                print(f"[web_test] 清理会话上下文失败（{type(agent).__name__}.{attribute}）：{error!r}")
+
+
+# --------------------------------------------------------------------------------------
+# 会话侧边栏
+# --------------------------------------------------------------------------------------
+
+
+@app.get("/api/sessions")
+def list_sessions() -> dict:
+    """列出全部历史会话（按最近活跃倒序）。
+
+    Returns:
+        统一响应包，``data.sessions`` 为会话列表。
+    """
+    return _ok(data={"sessions": get_session_store().list_sessions()})
+
+
+@app.post("/api/sessions")
+def create_session(payload: SessionCreateRequest | None = Body(default=None)) -> Any:
+    """新建会话，并清理上一个还没有说过话的空会话。
+
+    Args:
+        payload: 可选的新建参数（自定义标题）。
+
+    Returns:
+        统一响应包，``data.session`` 为新建的会话。
+    """
+    title = payload.title if payload else None
+    try:
+        record = get_session_store().create_session(title)
+    except ValueError as error:
+        return _fail(str(error), "SESSION_TITLE_INVALID", 422)
+    return _ok("已新建会话", data={"session": record})
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(session_id: str) -> Any:
+    """读取单个会话及其完整对话记录。
+
+    Args:
+        session_id: 会话 ID。
+
+    Returns:
+        统一响应包，``data`` 含 ``session`` 与 ``messages``；会话不存在时 404。
+    """
+    if not is_valid_session_id(session_id):
+        return _fail("会话 ID 不合法", "SESSION_ID_INVALID", 400)
+    store = get_session_store()
+    record = store.get_session(session_id)
+    if record is None:
+        return _fail("会话不存在或已被删除", "SESSION_NOT_FOUND", 404)
+    return _ok(data={"session": record, "messages": store.list_messages(session_id)})
+
+
+@app.patch("/api/sessions/{session_id}")
+def rename_session(session_id: str, payload: SessionRenameRequest) -> Any:
+    """重命名会话；重命名后不再被首条消息自动标题覆盖。
+
+    Args:
+        session_id: 会话 ID。
+        payload: 新标题。
+
+    Returns:
+        统一响应包，``data.session`` 为更新后的会话。
+    """
+    if not is_valid_session_id(session_id):
+        return _fail("会话 ID 不合法", "SESSION_ID_INVALID", 400)
+    try:
+        record = get_session_store().rename_session(session_id, payload.title)
+    except SessionNotFoundError:
+        return _fail("会话不存在或已被删除", "SESSION_NOT_FOUND", 404)
+    except ValueError as error:
+        return _fail(str(error), "SESSION_TITLE_INVALID", 422)
+    return _ok("已重命名", data={"session": record})
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(session_id: str) -> Any:
+    """删除会话及其对话记录，并清理 R1/R2 中该会话的上下文。
+
+    Args:
+        session_id: 会话 ID。
+
+    Returns:
+        统一响应包，``data.deleted`` 为被删除的会话 ID；会话不存在时 404。
+    """
+    if not is_valid_session_id(session_id):
+        return _fail("会话 ID 不合法", "SESSION_ID_INVALID", 400)
+    if not get_session_store().delete_session(session_id):
+        return _fail("会话不存在或已被删除", "SESSION_NOT_FOUND", 404)
+    _clear_agent_context(session_id)
+    return _ok("会话已删除", data={"deleted": session_id})
 
 
 @app.get("/health/live")
@@ -415,19 +655,40 @@ def _registered_settings_routes() -> list[str]:
     return sorted(routes)
 
 
+def _registered_session_routes() -> list[str]:
+    """列出当前进程真正注册的 ``/api/sessions*`` 路由。
+
+    Returns:
+        形如 ``"GET /api/sessions"`` 的字符串列表（已排序）。
+    """
+    routes: list[str] = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/api/sessions"):
+            continue
+        methods = getattr(route, "methods", None) or ()
+        routes.append(f"{'/'.join(sorted(methods))} {path}")
+    return sorted(routes)
+
+
 def _log_startup(port: int = 8000) -> None:
     """打印一行启动自检信息，便于与页面显示的版本对照排障。
 
-    只输出版本、路由与地址，**不涉及任何密钥**（密钥从不写日志）。
+    只输出版本、路由、数据目录与地址，**不涉及任何密钥**（密钥从不写日志）。
 
     Args:
         port: 监听端口。
     """
     routes = _registered_settings_routes()
+    session_routes = _registered_session_routes()
     print(
         f"[web_test] API_VERSION={API_VERSION} | features={','.join(API_FEATURES)} "
         f"| 已注册设置路由({len(routes)}): {' '.join(routes)} "
         f"| 服务地址: http://127.0.0.1:{port}"
+    )
+    print(
+        f"[web_test] 已注册会话路由({len(session_routes)}): {' '.join(session_routes)} "
+        f"| 数据目录: {resolve_data_dir()}（重启后历史保留）"
     )
     print(f"[web_test] 若页面提示 404 / BACKEND_OUTDATED，请重启服务：python web_test/server.py（API_VERSION={API_VERSION}）")
 

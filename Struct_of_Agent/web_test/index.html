@@ -4,6 +4,22 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>银行智能 Agent 测试</title>
+<script>
+  /*
+   * 首帧定态：侧边栏开合必须在样式生效前就决定好。
+   * 放到 </body> 前的脚本里做的话，窄屏会先按 CSS 默认渲染出「抽屉 + 全屏遮罩」，
+   * 再被脚本收起，用户能看到明显的一闪。这里同步执行、且不依赖任何 DOM 节点。
+   */
+  (function () {
+    try {
+      var stored = localStorage.getItem('bank_agent.sidebar');
+      var narrow = window.innerWidth <= 860;
+      if (stored === 'collapsed' || (stored !== 'open' && narrow)) {
+        document.documentElement.className += ' sidebar-collapsed';
+      }
+    } catch (err) { /* 隐私模式下 localStorage 不可用：保持默认展开 */ }
+  })();
+</script>
 <style>
   :root {
     --bg: #f4f6f8;
@@ -24,10 +40,16 @@
       "Microsoft YaHei", "Helvetica Neue", sans-serif;
     background: var(--bg);
     color: var(--text);
-    display: flex;
-    flex-direction: column;
+    /* dvh 跟随移动端可视视口（地址栏/软键盘），避免输入区被顶出屏幕；
+       不支持 dvh 的浏览器用上一行的 100vh 兜底 */
     height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
   }
+
+  /* 两栏布局：左侧会话侧边栏 + 右侧对话区（原 header/main/footer 竖排结构不变） */
+  .app { display: flex; height: 100vh; height: 100dvh; }
+  .chat-column { display: flex; flex-direction: column; flex: 1; min-width: 0; }
 
   /* 顶部标题栏 */
   header {
@@ -174,6 +196,119 @@
   .composer button svg { width: 18px; height: 18px; }
   .hint { font-size: 11px; color: #9ca3af; text-align: center; margin-top: 8px; }
 
+  /* ---------- 左侧会话侧边栏 ---------- */
+  .sidebar {
+    width: 264px; flex-shrink: 0;
+    display: flex; flex-direction: column;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    margin-left: 0;
+    transition: margin-left .18s ease;
+  }
+  /* 折叠：用负外边距推出去，保留过渡动画且不干扰右侧布局计算。
+     类挂在 <html> 上，这样 <head> 里的极小脚本能在首帧之前就定好状态
+     （否则窄屏会先闪一下「抽屉 + 全屏遮罩」再收起）。 */
+  html.sidebar-collapsed .sidebar { margin-left: -264px; }
+  .sidebar-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 14px 12px 10px;
+  }
+  .sidebar-head h2 {
+    font-size: 12px; font-weight: 600; color: var(--text-sub);
+    letter-spacing: .04em;
+  }
+  .sidebar-head .grow { flex: 1; }
+  .new-chat {
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+    margin: 0 12px 10px;
+    padding: 9px 12px;
+    border: 1px solid var(--brand); border-radius: 10px;
+    background: var(--brand); color: #fff;
+    font-size: 13px; font-family: inherit; font-weight: 500;
+    cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .new-chat:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
+  .new-chat:disabled { background: #cbd5e1; border-color: #cbd5e1; cursor: not-allowed; }
+  .new-chat svg { width: 15px; height: 15px; }
+  .session-list {
+    flex: 1; overflow-y: auto;
+    padding: 0 8px 12px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .session-empty {
+    font-size: 12px; color: #9ca3af; line-height: 1.8;
+    text-align: center; padding: 18px 10px;
+    white-space: pre-line;
+  }
+  .session-empty.error { color: #b91c1c; }
+  .session-item {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 8px 8px 10px;
+    border: 1px solid transparent; border-radius: 9px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .session-item:hover { background: #f1f5f9; }
+  .session-item:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .session-item.active { background: #eff6ff; border-color: #bfdbfe; }
+  .session-main { flex: 1; min-width: 0; }
+  .session-title {
+    font-size: 13px; line-height: 1.4; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .session-item.active .session-title { color: #1d4ed8; font-weight: 500; }
+  .session-sub { font-size: 11px; color: #9ca3af; margin-top: 2px; }
+  /* 图标按钮默认不可点：opacity:0 只挡眼睛不挡指针，触屏没有 hover，
+     误触行右边缘就会弹出删除确认。这里显形时才恢复可点。 */
+  .session-actions {
+    display: flex; gap: 2px; flex-shrink: 0;
+    opacity: 0; pointer-events: none;
+    transition: opacity .12s;
+  }
+  .session-item:hover .session-actions,
+  .session-item:focus-within .session-actions,
+  .session-item.active .session-actions { opacity: 1; pointer-events: auto; }
+  .session-action {
+    width: 24px; height: 24px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border: none; border-radius: 6px; background: transparent;
+    color: var(--text-sub); cursor: pointer;
+    transition: background .12s, color .12s;
+  }
+  .session-action:hover { background: #e2e8f0; color: var(--text); }
+  .session-action.danger:hover { background: #fee2e2; color: #b91c1c; }
+  .session-action svg { width: 14px; height: 14px; }
+  .session-rename {
+    width: 100%; font-size: 13px; font-family: inherit; color: var(--text);
+    padding: 2px 5px; border: 1px solid var(--brand); border-radius: 6px;
+    background: #fff; outline: none;
+  }
+  .sidebar-foot {
+    border-top: 1px solid var(--border);
+    padding: 9px 12px; font-size: 11px; color: #9ca3af; line-height: 1.6;
+  }
+  /* 侧边栏内联提示：会话操作失败走这里，不污染对话记录 */
+  .sidebar-alert {
+    margin: 0 12px 8px; padding: 8px 10px;
+    border: 1px solid #fecaca; border-radius: 8px;
+    background: #fef2f2; color: #b91c1c;
+    font-size: 11px; line-height: 1.6;
+    word-break: break-word;
+  }
+  /* 移动端：侧边栏改为抽屉浮层，点遮罩收起 */
+  .sidebar-backdrop { display: none; }
+  @media (max-width: 860px) {
+    .sidebar {
+      position: fixed; top: 0; bottom: 0; left: 0; z-index: 45;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.22);
+    }
+    html:not(.sidebar-collapsed) .sidebar-backdrop {
+      display: block; position: fixed; inset: 0; z-index: 44;
+      background: rgba(15, 23, 42, 0.35);
+    }
+  }
+
   /* ---------- 顶栏右侧：模式徽标 + 设置按钮 ---------- */
   header .spacer { flex: 1; }
   .mode-badge {
@@ -316,7 +451,40 @@
 </style>
 </head>
 <body>
+<div class="app" id="app">
+  <!-- ==================== 左侧：会话侧边栏 ==================== -->
+  <aside class="sidebar" id="sidebar" aria-label="会话侧边栏">
+    <div class="sidebar-head">
+      <h2>会话</h2>
+      <span class="grow"></span>
+    </div>
+    <button type="button" class="new-chat" id="newSessionBtn" title="开始一个新会话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <line x1="12" y1="5" x2="12" y2="19"></line>
+        <line x1="5" y1="12" x2="19" y2="12"></line>
+      </svg>
+      新建会话
+    </button>
+    <div class="session-list" id="sessionList"></div>
+    <!-- 会话操作失败的提示位：不写进对话记录，也不落库 -->
+    <div class="sidebar-alert" id="sidebarAlert" role="status" hidden></div>
+    <div class="sidebar-foot">历史会话保存在服务端数据库中，重启服务后仍在。</div>
+  </aside>
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+  <!-- ==================== 右侧：对话区 ==================== -->
+  <div class="chat-column">
   <header>
+    <button class="icon-btn" id="sidebarToggle" title="收起 / 展开侧边栏"
+            aria-label="收起或展开侧边栏" aria-controls="sidebar" aria-expanded="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
     <div class="logo">银</div>
     <div>
       <h1>银行智能 Agent 测试</h1>
@@ -464,9 +632,11 @@
           </svg>
         </button>
       </div>
-      <div class="hint">Enter 发送 · Shift + Enter 换行 · 数据存储于临时数据库，重启后清空</div>
+      <div class="hint">Enter 发送 · Shift + Enter 换行 · 会话记录保存在服务端数据库中（重启服务后仍在）</div>
     </div>
   </footer>
+  </div><!-- /.chat-column -->
+</div><!-- /.app -->
 
 <script>
   const chatEl = document.getElementById('chat');
@@ -474,10 +644,23 @@
   const sendBtn = document.getElementById('send');
   const scrollEl = document.getElementById('scroll');
 
-  // 每次打开页面生成独立会话，避免多标签页历史串扰
-  const sessionId = 'web-' + Date.now();
+  // 会话改由服务端管理（见下方「会话侧边栏」一节）：页面只记住「当前会话 ID」，
+  // 刷新后自动回到同一个会话；一个会话都没有时，在发出首条消息前自动新建。
 
   const AGENT_LABEL = { R1: '智能转账', R2: '账单分析', common: '通用搜索' };
+
+  /**
+   * 安全查表：只认对象自身的键，命不中时返回 fallback。
+   *
+   * 直接写 `TABLE[key]` 会命中原型链（`TABLE['toString']` 拿到的是函数），
+   * 后端一旦返回异常值，界面上就会出现
+   * `function toString() { [native code] }` 这种鬼东西。
+   */
+  function labelOf(table, key, fallback) {
+    if (typeof key !== 'string' || !key) return fallback;
+    if (!Object.prototype.hasOwnProperty.call(table, key)) return fallback;
+    return table[key];
+  }
 
   const MODE_LABEL = { model: '模型模式', env: '环境变量模式', mock: 'Mock 离线模式' };
 
@@ -699,7 +882,7 @@
   /** 面板内模型徽标：模型 / 环境变量模式下带上模型名，未接入时显示「未配置模型」。 */
   function llmBadgeLabel(snapshot) {
     const mode = snapshot.mode || 'mock';
-    const base = PANEL_MODE_LABEL[mode] || mode;
+    const base = labelOf(PANEL_MODE_LABEL, mode, mode);
     if (mode === 'mock' || !snapshot.model) return base;
     return base + ' · ' + snapshot.model;
   }
@@ -985,7 +1168,7 @@
     applyStaleBackendBanner(version === undefined || version === null || version === '');
     const mode = data.model_mode || 'mock';
     const name = data.model ? ' · ' + data.model : '';
-    applyBadge($('modeBadge'), $('modeBadgeText'), mode, (MODE_LABEL[mode] || mode) + name);
+    applyBadge($('modeBadge'), $('modeBadgeText'), mode, labelOf(MODE_LABEL, mode, mode) + name);
   }
 
   $('settingsBtn').addEventListener('click', openSettings);
@@ -1029,10 +1212,11 @@
     if (meta) {
       const metaEl = document.createElement('div');
       metaEl.className = 'meta';
-      if (meta.agent && AGENT_LABEL[meta.agent]) {
+      const agentLabel = labelOf(AGENT_LABEL, meta.agent, '');
+      if (agentLabel) {
         const tag = document.createElement('span');
         tag.className = 'tag';
-        tag.textContent = AGENT_LABEL[meta.agent];
+        tag.textContent = agentLabel;
         metaEl.appendChild(tag);
       }
       if (meta.tools && meta.tools.length) {
@@ -1045,7 +1229,7 @@
         badge.className = 'mode-badge mode-' + (meta.modelMode === 'model' ? 'model' : meta.modelMode === 'env' ? 'env' : 'mock');
         badge.appendChild(document.createElement('span')).className = 'dot';
         const label = document.createElement('span');
-        label.textContent = (MODE_LABEL[meta.modelMode] || meta.modelMode) + (meta.modelName ? ' · ' + meta.modelName : '');
+        label.textContent = labelOf(MODE_LABEL, meta.modelMode, meta.modelMode) + (meta.modelName ? ' · ' + meta.modelName : '');
         badge.appendChild(label);
         metaEl.appendChild(badge);
       }
@@ -1076,25 +1260,462 @@
     inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
   }
 
+  // ---------------------------------------------------------------- 会话侧边栏
+  //
+  // 会话列表、标题与对话记录全部由服务端持久化（/api/sessions）；
+  // 页面只把「当前会话 ID」记在 localStorage，刷新后自动回到同一会话。
+  // 切换会话时复用原 session_id，R1/R2 因此能加载到该会话的多轮上下文。
+  const SESSION_KEY = 'bank_agent.active_session';
+  const SIDEBAR_KEY = 'bank_agent.sidebar';
+  const SIDEBAR_MOBILE_MAX = 860;
+
+  // 折叠类挂在 <html> 上（见 <head> 的首帧脚本），不挂在 .app 上：
+  // 这样首帧渲染前就能定好状态，窄屏不会先闪一下「抽屉 + 遮罩」再收起。
+  const sessionListEl = $('sessionList');
+  const newSessionBtn = $('newSessionBtn');
+
+  const ICON_RENAME = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>';
+  const ICON_TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path></svg>';
+
+  /** 当前会话 ID；null 表示还没有会话（首条消息发出前会自动新建）。 */
+  let currentSessionId = null;
+  /** 侧边栏列表（服务端返回的顺序：最近活跃在前）。 */
+  let sessions = [];
+  /**
+   * 在途的新建请求。
+   *
+   * 存 Promise 而不是布尔量：并发调用要**共享同一个结果**。
+   * 早先用布尔守卫直接 `return null`，导致「点新建 → 立刻发送」时
+   * ensureSession() 拿到 null，消息被静默丢掉（连提示都没有）。
+   */
+  let creatingPromise = null;
+  /**
+   * 会话选择的代次。
+   *
+   * 每次「切换 / 新建 / 删除当前会话」都自增；异步响应回来后先比代次，
+   * 不是最新的就丢弃。没有这道闸，慢的详情响应会覆盖用户后来选中的会话，
+   * 造成「高亮是 B、对话区是 A」的错位。
+   */
+  let selectionToken = 0;
+  /** 列表请求的代次：只接受最新一次快照，避免旧响应让已删除的会话复活。 */
+  let listToken = 0;
+  /** 正在就地重命名的会话 ID；非空时挂起重绘，避免把输入框连同半截标题一起销毁。 */
+  let renamingId = null;
+  let renderPending = false;
+  let alertTimer = null;
+
+  function readStorage(key) {
+    try { return localStorage.getItem(key) || ''; } catch (err) { return ''; }
+  }
+
+  /** 只写非敏感偏好（会话 ID / 侧边栏开合），失败（隐私模式）时静默忽略。 */
+  function writeStorage(key, value) {
+    try {
+      if (value) localStorage.setItem(key, value);
+      else localStorage.removeItem(key);
+    } catch (err) { /* 忽略 */ }
+  }
+
+  /** 把响应包压成一行可读原因，供侧边栏提示复用。 */
+  function describeFailure(payload) {
+    return (payload && payload.error_code ? '[' + payload.error_code + '] ' : '')
+      + ((payload && payload.message) || '未知错误');
+  }
+
+  /** 侧边栏内联提示（会话操作失败走这里，不写进对话记录）。 */
+  function showSidebarAlert(message) {
+    const box = $('sidebarAlert');
+    if (!box) return;
+    box.textContent = message;
+    box.hidden = false;
+    if (alertTimer) clearTimeout(alertTimer);
+    alertTimer = setTimeout(function () { box.hidden = true; }, 8000);
+  }
+
+  /** 时间文案：今天只显示 HH:MM，其余显示 MM-DD。 */
+  function formatTime(iso) {
+    if (!iso) return '';
+    const date = new Date(iso);
+    if (isNaN(date.getTime())) return '';
+    const pad = function (n) { return String(n).padStart(2, '0'); };
+    const now = new Date();
+    const sameDay = date.getFullYear() === now.getFullYear()
+      && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
+    return sameDay
+      ? pad(date.getHours()) + ':' + pad(date.getMinutes())
+      : pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+  }
+
+  /** 未记忆过开合状态时，窄屏默认收起（移动端抽屉）。 */
+  function sidebarShouldCollapse() {
+    const stored = readStorage(SIDEBAR_KEY);
+    if (stored === 'collapsed') return true;
+    if (stored === 'open') return false;
+    return window.innerWidth <= SIDEBAR_MOBILE_MAX;
+  }
+
+  function applySidebarCollapsed(collapsed) {
+    // 类挂在 <html> 上：<head> 的首帧脚本与这里改的是同一个元素
+    if (document.documentElement) {
+      document.documentElement.classList.toggle('sidebar-collapsed', !!collapsed);
+    }
+    const toggle = $('sidebarToggle');
+    if (toggle) toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+
+  function findSession(sessionId) {
+    for (let i = 0; i < sessions.length; i += 1) {
+      if (sessions[i].id === sessionId) return sessions[i];
+    }
+    return null;
+  }
+
+  function sessionIconButton(action, label, svg) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'session-action' + (action === 'delete' ? ' danger' : '');
+    btn.dataset.act = action;
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.innerHTML = svg;
+    btn.addEventListener('click', function (event) {
+      event.stopPropagation();
+      const item = btn.closest('.session-item');
+      if (!item) return;
+      if (action === 'delete') deleteSession(item.dataset.id);
+      else startRename(item, findSession(item.dataset.id));
+    });
+    return btn;
+  }
+
+  function buildSessionItem(session) {
+    const item = document.createElement('div');
+    const isActive = session.id === currentSessionId;
+    item.className = 'session-item' + (isActive ? ' active' : '');
+    item.dataset.id = session.id;
+    if (session.preview) item.title = session.preview;
+    // 可聚焦 + 角色：键盘用户必须能切换会话（原来是不可聚焦的 div）
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    if (isActive) item.setAttribute('aria-current', 'true');
+
+    const main = document.createElement('div');
+    main.className = 'session-main';
+    const title = document.createElement('div');
+    title.className = 'session-title';
+    title.textContent = session.title || '新会话';
+    const sub = document.createElement('div');
+    sub.className = 'session-sub';
+    const count = session.message_count || 0;
+    const when = formatTime(session.updated_at);
+    sub.textContent = (count ? count + ' 条消息' : '空会话') + (when ? ' · ' + when : '');
+    main.appendChild(title);
+    main.appendChild(sub);
+    item.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'session-actions';
+    actions.appendChild(sessionIconButton('rename', '重命名', ICON_RENAME));
+    actions.appendChild(sessionIconButton('delete', '删除', ICON_TRASH));
+    item.appendChild(actions);
+
+    item.addEventListener('click', function (event) {
+      if (event.target.closest && event.target.closest('.session-action')) return;
+      if (session.id === currentSessionId) return;
+      activateSession(session.id);
+    });
+    item.addEventListener('keydown', function (event) {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      // 焦点在图标按钮上时交给按钮自己处理
+      if (event.target !== item) return;
+      event.preventDefault();
+      if (session.id !== currentSessionId) activateSession(session.id);
+    });
+    title.addEventListener('dblclick', function (event) {
+      event.stopPropagation();
+      startRename(item, session);
+    });
+    return item;
+  }
+
+  function renderSessions() {
+    if (!sessionListEl) return;
+    // 重命名编辑中先挂起：整表重建会销毁输入框，导致半截标题被强制提交、
+    // 或用户清空后重打的改名意图被静默丢弃。编辑结束后由 startRename 补一次。
+    if (renamingId) { renderPending = true; return; }
+    renderPending = false;
+    sessionListEl.textContent = '';
+    if (!sessions.length) {
+      const empty = document.createElement('div');
+      empty.className = 'session-empty';
+      empty.id = 'sessionEmpty';
+      empty.textContent = '暂无历史会话\n点击上方「新建会话」开始';
+      sessionListEl.appendChild(empty);
+      return;
+    }
+    sessions.forEach(function (session) { sessionListEl.appendChild(buildSessionItem(session)); });
+  }
+
+  /**
+   * 会话列表读取失败时的占位。
+   *
+   * 不能什么都不画：空白侧边栏会让用户以为「历史会话都没了」。
+   * 这里明确说是读取失败，并带上后端给的原因（如旧进程 404）。
+   */
+  function renderSessionsError(message) {
+    if (!sessionListEl) return;
+    sessionListEl.textContent = '';
+    const box = document.createElement('div');
+    box.className = 'session-empty error';
+    box.id = 'sessionEmpty';
+    box.textContent = message;
+    sessionListEl.appendChild(box);
+  }
+
+  /** 拉取会话列表并重绘侧边栏；成功返回列表，失败返回 null（不打断对话）。 */
+  async function loadSessions() {
+    const token = ++listToken;
+    const payload = await callApi('/api/sessions');
+    // 迟到的快照必须丢弃：否则「删除会话」之后，一个删除前发出的列表响应
+    // 会让已删除的条目在侧边栏里复活（点进去才发现是 404）。
+    if (token !== listToken) return null;
+    if (!payload.ok || !payload.data) {
+      // 已经有列表时保留旧内容（例如发送消息后的刷新失败），只在空列表时提示失败
+      if (!sessions.length) {
+        renderSessionsError('历史会话读取失败\n' + (payload.message || '请检查后端服务是否在运行'));
+      }
+      return null;
+    }
+    sessions = payload.data.sessions || [];
+    renderSessions();
+    return sessions;
+  }
+
+  /** 新建会话：服务端会顺带清掉上一个还没说过话的空会话，避免侧边栏堆满「新会话」。 */
+  function createSession() {
+    // 并发调用共享同一个在途请求：否则第二次调用被直接丢弃，调用方拿到 null
+    if (creatingPromise) return creatingPromise;
+    if (newSessionBtn) newSessionBtn.disabled = true;
+
+    const token = ++selectionToken;
+    creatingPromise = (async function () {
+      try {
+        const payload = await callApi('/api/sessions', 'POST', {});
+        if (!payload.ok || !payload.data || !payload.data.session) {
+          showSidebarAlert('新建会话失败：' + describeFailure(payload));
+          return null;
+        }
+        const session = payload.data.session;
+        // 只有在这期间用户没有做别的选择时，才把新会话设为当前会话。
+        // 否则「点新建 → 立刻点历史会话」会被这次迟到的响应抢回去。
+        if (token === selectionToken) {
+          currentSessionId = session.id;
+          writeStorage(SESSION_KEY, session.id);
+          await loadSessions();
+          showWelcome();
+        } else {
+          await loadSessions();
+        }
+        return session;
+      } finally {
+        creatingPromise = null;
+        if (newSessionBtn) newSessionBtn.disabled = false;
+      }
+    })();
+    return creatingPromise;
+  }
+
+  /** 保证存在当前会话（没有就新建）；返回可用的 session_id 或 null。 */
+  async function ensureSession() {
+    if (currentSessionId) return currentSessionId;
+    const created = await createSession();
+    // 等待期间用户可能已经切到别的会话，那就用他正在看的那个
+    if (currentSessionId) return currentSessionId;
+    return created ? created.id : null;
+  }
+
+  /** 切换到指定会话：加载其历史消息并渲染。 */
+  async function activateSession(sessionId) {
+    if (!sessionId) return;
+    const token = ++selectionToken;
+    currentSessionId = sessionId;
+    writeStorage(SESSION_KEY, sessionId);
+    renderSessions();
+
+    const payload = await callApi('/api/sessions/' + encodeURIComponent(sessionId));
+    // 迟到的响应：用户已经切走（或删掉了）这个会话，直接丢弃，
+    // 否则会出现「高亮是 B、对话区是 A」的错位。
+    if (token !== selectionToken) return;
+
+    if (!payload.ok || !payload.data) {
+      if (payload.error_code === 'SESSION_NOT_FOUND') {
+        // 会话已被其它标签页删除：回到欢迎态并刷新列表
+        currentSessionId = null;
+        writeStorage(SESSION_KEY, '');
+        await loadSessions();
+        showWelcome();
+        return;
+      }
+      // 先清空：否则屏幕上是上一个会话的记录，却高亮着这个读不出来的会话
+      clearChat();
+      addMessage('assistant', '读取会话失败：' + describeFailure(payload));
+      return;
+    }
+    renderHistory(payload.data.messages || []);
+  }
+
+  /** 删除会话（二次确认）；删掉的若是当前会话，则切到最近的会话或回到欢迎态。 */
+  async function deleteSession(sessionId) {
+    const session = findSession(sessionId);
+    const name = session ? session.title : sessionId;
+    if (!window.confirm('确定要删除会话「' + name + '」吗？该会话的对话记录将一并删除。')) return;
+
+    const payload = await callApi('/api/sessions/' + encodeURIComponent(sessionId), 'DELETE');
+    if (!payload.ok) {
+      showSidebarAlert('删除会话失败：' + describeFailure(payload));
+      return;
+    }
+    const wasActive = sessionId === currentSessionId;
+    if (wasActive) {
+      currentSessionId = null;
+      writeStorage(SESSION_KEY, '');
+      selectionToken += 1;   // 作废在途的详情 / 新建响应
+    }
+    await loadSessions();
+    if (!wasActive) return;
+    const next = sessions.length ? sessions[0].id : '';
+    if (next) await activateSession(next);
+    else showWelcome();
+  }
+
+  /** 重命名会话；成功后以服务端列表为准重绘，并把焦点还给该条目。 */
+  async function renameSession(sessionId, title) {
+    const payload = await callApi('/api/sessions/' + encodeURIComponent(sessionId), 'PATCH', { title: title });
+    if (!payload.ok) {
+      showSidebarAlert('重命名失败：' + describeFailure(payload));
+    }
+    await loadSessions();
+    focusSessionItem(sessionId);
+  }
+
+  /** 把焦点还给侧边栏里指定会话的条目（重命名提交后键盘用户不该被弹回页首）。 */
+  function focusSessionItem(sessionId) {
+    if (!sessionListEl) return;
+    const all = sessionListEl.querySelectorAll('.session-item');
+    for (let i = 0; i < all.length; i += 1) {
+      if (all[i].dataset.id === sessionId) {
+        try { all[i].focus(); } catch (err) { /* 忽略 */ }
+        return;
+      }
+    }
+  }
+
+  /** 就地重命名：标题替换为输入框，Enter 提交 / Esc 取消 / 失焦提交。 */
+  function startRename(item, session) {
+    if (!item || !session) return;
+    const titleEl = item.querySelector('.session-title');
+    if (!titleEl) return;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'session-rename';
+    input.maxLength = 40;
+    input.value = session.title || '';
+
+    let settled = false;
+    renamingId = session.id;
+    const finish = function (save) {
+      if (settled) return;
+      settled = true;
+      renamingId = null;
+      const value = input.value.trim();
+      if (input.parentNode) input.replaceWith(titleEl);
+      if (save && value && value !== session.title) {
+        renameSession(session.id, value);
+        return;
+      }
+      // 取消 / 未改动：把焦点还给标题，并补上编辑期间挂起的重绘
+      titleEl.tabIndex = -1;
+      try { titleEl.focus(); } catch (err) { /* 忽略 */ }
+      if (renderPending) renderSessions();
+    };
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+      else if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', function () { finish(true); });
+    input.addEventListener('click', function (event) { event.stopPropagation(); });
+    input.addEventListener('dblclick', function (event) { event.stopPropagation(); });
+
+    titleEl.replaceWith(input);
+    input.focus();
+    input.select();
+  }
+
+  /** 清空对话区。 */
+  function clearChat() {
+    chatEl.textContent = '';
+  }
+
+  /** 欢迎语：只在会话没有历史消息时显示，属于界面提示、不落库。 */
+  function showWelcome() {
+    clearChat();
+    addMessage('assistant',
+      '你好，我是银行智能助手。你可以用自然语言告诉我需求，例如：\n' +
+      '· 转账：给张三转账100元\n' +
+      '· 账单：看看我这个月的消费分类\n' +
+      '· 搜索：今天北京天气怎么样\n\n' +
+      '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 其他 → 通用搜索）为你处理。\n\n' +
+      '左侧可以新建会话或回到历史会话；点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账与账单分析。');
+  }
+
+  /** 渲染历史消息：复用聊天气泡与元信息样式。 */
+  function renderHistory(messages) {
+    clearChat();
+    if (!messages.length) { showWelcome(); return; }
+    messages.forEach(function (message) {
+      if (message.role === 'user') {
+        addMessage('user', message.content);
+        return;
+      }
+      addMessage('assistant', message.content, {
+        agent: message.agent,
+        tools: message.tools || [],
+        modelMode: message.model_mode,
+        modelName: message.model_name
+      });
+    });
+  }
+
   async function send(text) {
     text = (text || inputEl.value).trim();
-    if (!text) return;
-
-    inputEl.value = '';
-    autoResize();
-    addMessage('user', text);
-
+    if (!text || sendBtn.disabled) return;
     sendBtn.disabled = true;
-    const typing = addTyping();
 
+    let typing = null;
+    /** 本条消息所属的会话：回复回来时必须还是当前会话，才允许写进对话区。 */
+    let mySession = null;
     try {
+      // 没有当前会话时先新建：首条用户消息会成为该会话的标题
+      const sessionId = await ensureSession();
+      if (!sessionId) return;
+      mySession = sessionId;
+
+      inputEl.value = '';
+      autoResize();
+      addMessage('user', text);
+      typing = addTyping();
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: text, session_id: sessionId })
       });
       const data = await res.json();
-      removeTyping(typing);
+
+      // 等待期间用户切走（或删掉）了这个会话：对话区已经不是它的了，
+      // 回复不能追加上去。记录已由服务端落库，切回去就能看到。
+      if (mySession !== currentSessionId) return;
+
       const reply = data.reply || '（无回复内容）';
       addMessage('assistant', reply, {
         agent: data.agent,
@@ -1103,11 +1724,17 @@
         modelName: data.trace && data.trace.model_name
       });
     } catch (err) {
-      removeTyping(typing);
-      addMessage('assistant', '请求失败：' + err.message);
+      if (mySession === null || mySession === currentSessionId) {
+        addMessage('assistant', '请求失败：' + err.message);
+      }
     } finally {
+      removeTyping(typing);
       sendBtn.disabled = false;
-      inputEl.focus();
+      // 用户可能正在重命名会话：抢焦点会让输入框失焦、半截标题被提交
+      const active = document.activeElement;
+      if (!active || active === document.body || active === inputEl) inputEl.focus();
+      // 标题 / 消息条数 / 排序都可能变了，重新拉一次列表（失败不影响本次对话）
+      loadSessions().catch(function () {});
     }
   }
 
@@ -1124,14 +1751,35 @@
     chip.addEventListener('click', () => send(chip.dataset.text));
   });
 
-  // 欢迎语
-  addMessage('assistant',
-    '你好，我是银行智能助手。你可以用自然语言告诉我需求，例如：\n' +
-    '· 转账：给张三转账100元\n' +
-    '· 账单：看看我这个月的消费分类\n' +
-    '· 搜索：今天北京天气怎么样\n\n' +
-    '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 其他 → 通用搜索）为你处理。\n\n' +
-    '点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账与账单分析。');
+  // ---------------------------------------------------------------- 侧边栏初始化
+  // <head> 的首帧脚本已经定好了初始状态，这里只同步按钮的 aria-expanded
+  applySidebarCollapsed(sidebarShouldCollapse());
+
+  if ($('sidebarToggle')) {
+    $('sidebarToggle').addEventListener('click', function () {
+      const collapsed = !document.documentElement.classList.contains('sidebar-collapsed');
+      applySidebarCollapsed(collapsed);
+      writeStorage(SIDEBAR_KEY, collapsed ? 'collapsed' : 'open');
+    });
+  }
+  if ($('sidebarBackdrop')) {
+    // 移动端抽屉：点遮罩收起
+    $('sidebarBackdrop').addEventListener('click', function () { applySidebarCollapsed(true); });
+  }
+  if (newSessionBtn) newSessionBtn.addEventListener('click', function () { createSession(); });
+
+  /**
+   * 页面加载：拉会话列表 → 恢复上次的会话（找不到就取最近一个，一个都没有就显示欢迎语）。
+   * 接口不可用时静默降级为欢迎语，不影响对话框本身可用。
+   */
+  (async function initSessions() {
+    const list = await loadSessions();
+    if (!list) { showWelcome(); return; }
+    const stored = readStorage(SESSION_KEY);
+    const target = findSession(stored) ? stored : (list.length ? list[0].id : '');
+    if (target) await activateSession(target);
+    else showWelcome();
+  })();
 
   // 页面加载时同步当前模型接入模式徽标（后端不可用时静默降级，不影响聊天）
   refreshModeBadge().catch(function () {});

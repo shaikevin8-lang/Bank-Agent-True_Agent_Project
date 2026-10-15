@@ -142,6 +142,28 @@ class BalanceStore:
                     row.owner = owner
             session.commit()
 
+    def ensure_account(self, account_id: str, balance_fen: int, owner: str = "") -> bool:
+        """账户不存在时创建并置初始余额；已存在则**不改动**余额。
+
+        与 :meth:`set_balance` 的区别：后者每次调用都会把余额重置为给定值。
+        持久化数据库下（web_test 的演示账户），服务重启不应抹掉用户已经转账
+        产生的余额变化，因此启动播种必须用本方法。
+
+        Args:
+            account_id: 账户标识。
+            balance_fen: 初始余额（分），仅在账户不存在时生效。
+            owner: 账户归属人（可空）。
+
+        Returns:
+            本次调用创建了账户返回 True，账户已存在返回 False。
+        """
+        with Session(self._engine) as session:
+            if session.get(AccountRecord, account_id) is not None:
+                return False
+            session.add(AccountRecord(account_id=account_id, balance_fen=balance_fen, owner=owner))
+            session.commit()
+            return True
+
     def debit(self, account_id: str, amount_fen: int) -> bool:
         """扣减账户余额（分）。余额不足时返回 False 且不扣款。
 
