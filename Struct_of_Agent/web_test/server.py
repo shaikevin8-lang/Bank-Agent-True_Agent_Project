@@ -54,6 +54,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -65,7 +66,7 @@ if str(_ROOT) not in sys.path:
 
 from fastapi import Body, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -368,6 +369,35 @@ def chat(request: ChatRequest) -> dict:
     result = _supervisor.chat(request.message, request.session_id)
     _record_turn(request.session_id, request.message, result)
     return result
+
+
+@app.post("/api/chat/stream")
+def chat_stream(request: ChatRequest) -> StreamingResponse:
+    """流式聊天接口：SSE 格式逐段返回结果，多任务场景先完成的先展示。
+
+    与 `/api/chat` 的区别在于：多任务时每个子任务完成后立即推送一段，
+    用户无需等待全部任务结束。最后以 `data: [DONE]` 结束。
+
+    Args:
+        request: 对话请求（message + session_id）。
+
+    Returns:
+        SSE 流式响应。
+    """
+
+    def event_generator():
+        for chunk in _supervisor.chat_stream(request.message, request.session_id):
+            # done 事件：先落库再推给前端，避免客户端断开导致记录丢失
+            if chunk.get("type") == "done":
+                _record_turn(request.session_id, request.message, chunk.get("result", {}))
+            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 def _record_turn(session_id: str, user_message: str, result: dict[str, Any]) -> None:

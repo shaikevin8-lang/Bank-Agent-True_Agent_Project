@@ -241,6 +241,76 @@ class SupervisorAgent:
         merged["trace"] = trace
         return merged
 
+    def chat_stream(self, user_input: str, session_id: str = "default"):
+        """流式处理一条用户消息：token 级实时产出 + 任务级进度通知。
+
+        事件格式（SSE data 载荷）：
+            - ``{"type":"plan","plan":list,"router":str}``：LLM 调度器输出的任务计划。
+            - ``{"type":"task_start","index":int,"total":int,"agent":str,"task":str}``：开始执行子任务。
+            - ``{"type":"token","index":int,"content":str}``：LLM 增量文本（index 对应任务序号）。
+            - ``{"type":"task_done","index":int,"total":int,"agent":str,"result":dict}``：子任务完成。
+            - ``{"type":"done","result":dict}``：全部任务完成后的合并结果（用于落库）。
+            - ``{"type":"error","error":str}``：执行异常。
+
+        Args:
+            user_input: 用户自然语言输入。
+            session_id: 会话 ID。
+
+        Yields:
+            事件字典。
+        """
+        plan = self._plan(user_input)
+        router_mode = "llm" if plan else "rule"
+        if not plan:
+            target = self.route(user_input)
+            plan = [{"agent": target if target in self.agents else "common", "task": user_input}]
+
+        yield {"type": "plan", "plan": plan, "router": router_mode}
+
+        results: list[dict[str, Any]] = []
+        for index, item in enumerate(plan):
+            yield {
+                "type": "task_start",
+                "index": index,
+                "total": len(plan),
+                "agent": item["agent"],
+                "task": item["task"],
+            }
+            agent = self._resolve_agent(item["agent"])
+            stream_fn = getattr(agent, "chat_stream", None)
+            if stream_fn is None:
+                # 该 Agent 无流式能力，回退同步调用
+                result = self._dispatch(item["agent"], agent, item["task"], session_id)
+                results.append(result)
+            else:
+                task_result: dict[str, Any] | None = None
+                for ev in stream_fn(item["task"], session_id):
+                    if ev["type"] == "token":
+                        yield {"type": "token", "index": index, "content": ev["content"]}
+                    elif ev["type"] == "final":
+                        task_result = ev["result"]
+                    elif ev["type"] == "error":
+                        task_result = self._failure_result(RuntimeError(ev["error"]))
+                results.append(
+                    self._wrap(item["agent"], task_result) if task_result is not None
+                    else self._wrap(item["agent"], self._failure_result(RuntimeError("无结果")))
+                )
+
+            yield {
+                "type": "task_done",
+                "index": index,
+                "total": len(plan),
+                "agent": item["agent"],
+                "result": results[-1],
+            }
+
+        merged = results[0] if len(results) == 1 else self._merge_results(plan, results)
+        trace = dict(merged.get("trace") or {})
+        trace["router"] = router_mode
+        trace["plan"] = plan
+        merged["trace"] = trace
+        yield {"type": "done", "result": merged}
+
     def _resolve_agent(self, name: str) -> Any:
         """按名称取子 Agent 实例；未注册的名称回落到 common。
 

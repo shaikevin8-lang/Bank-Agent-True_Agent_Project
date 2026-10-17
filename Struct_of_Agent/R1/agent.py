@@ -79,6 +79,17 @@ class TransferAgent:
             return DeepSeekChat(self.config)
         return MockChat(routing=DEFAULT_ROUTING)
 
+    def chat_stream(self, user_input: str, session_id: str = "default"):
+        """流式版本：LLM token 实时产出，graph 层无感知。
+
+        Yields:
+            ``{"type":"token","content":str}`` / ``{"type":"final","result":dict}``
+            / ``{"type":"error","error":str}``。
+        """
+        from common.streaming import run_chat_stream
+
+        return run_chat_stream(lambda: self.chat(user_input, session_id))
+
     def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
         """处理一条用户消息并返回结构化结果。
 

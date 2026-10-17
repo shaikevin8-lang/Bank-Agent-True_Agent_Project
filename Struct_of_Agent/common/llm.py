@@ -14,7 +14,8 @@ R1~R6 各场景 Agent 复用本模块的 ``ChatModel`` / ``DeepSeekChat`` / ``Mo
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+import contextvars
+from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
 from openai import OpenAI
 
@@ -25,6 +26,35 @@ if TYPE_CHECKING:  # 仅用于类型标注，避免运行期循环导入
 
 # 允许传入的配置对象：既可以是环境变量配置，也可以是页面填写的运行时配置
 ModelConfigLike = "DeepSeekConfig | ModelRuntimeConfig"
+
+# token 级流式输出的注入点（ContextVar 保证并发/线程隔离）：
+# 上层（Agent.chat_stream）在工作线程里 set 一个 sink 回调后照常调用 graph.invoke，
+# 模型层检测到 sink 存在时自动改用 stream=True，把每个 content delta 实时推给 sink，
+# 图编排层无感知、零改动。sink 为 None 时行为与原来完全一致（同步一次性返回）。
+_token_sink: contextvars.ContextVar[Callable[[str], None] | None] = contextvars.ContextVar(
+    "bank_agent_token_sink", default=None
+)
+
+
+def set_token_sink(sink: Callable[[str], None]) -> contextvars.Token:
+    """设置当前上下文的 token sink，返回 token 供 :func:`reset_token_sink` 复位。
+
+    Args:
+        sink: 接收增量文本的回调（如 ``queue.put`` 的偏函数）。
+
+    Returns:
+        ContextVar Token。
+    """
+    return _token_sink.set(sink)
+
+
+def reset_token_sink(token: contextvars.Token) -> None:
+    """复位 token sink 到设置前的状态。
+
+    Args:
+        token: :func:`set_token_sink` 返回的 Token。
+    """
+    _token_sink.reset(token)
 
 
 @runtime_checkable
@@ -129,8 +159,65 @@ class DeepSeekChat:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        response = self._client.chat.completions.create(**kwargs)
-        return response.model_dump()
+
+        sink = _token_sink.get()
+        if sink is None:
+            response = self._client.chat.completions.create(**kwargs)
+            return response.model_dump()
+        return self._chat_streaming(kwargs, sink)
+
+    def _chat_streaming(self, kwargs: dict[str, Any], sink: Callable[[str], None]) -> dict[str, Any]:
+        """以 stream=True 完成对话补全：逐 token 推给 sink，同时累积为完整响应。
+
+        返回结构与同步调用（``response.model_dump()``）同构，调用方（图编排层）
+        无需区分本次是否为流式。tool_calls 在流式协议中按 index 分片增量下发，
+        这里负责合并为完整的 tool_calls 列表。
+
+        Args:
+            kwargs: 已组装好的 chat.completions.create 参数（未含 stream）。
+            sink: 接收 content 增量的回调。
+
+        Returns:
+            OpenAI 兼容的 chat completion 字典。
+        """
+        stream = self._client.chat.completions.create(**kwargs, stream=True)
+        content_parts: list[str] = []
+        tool_calls_acc: dict[int, dict[str, Any]] = {}
+        finish_reason: str | None = None
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            delta = choice.delta
+            if delta is not None:
+                if delta.content:
+                    content_parts.append(delta.content)
+                    sink(delta.content)
+                if delta.tool_calls:
+                    for part in delta.tool_calls:
+                        acc = tool_calls_acc.setdefault(
+                            part.index,
+                            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                        )
+                        if part.id:
+                            acc["id"] += part.id
+                        if part.function:
+                            if part.function.name:
+                                acc["function"]["name"] += part.function.name
+                            if part.function.arguments:
+                                acc["function"]["arguments"] += part.function.arguments
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
+
+        message: dict[str, Any] = {"role": "assistant", "content": "".join(content_parts) or None}
+        tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return {
+            "id": "chatcmpl-stream",
+            "choices": [{"index": 0, "finish_reason": finish_reason or "stop", "message": message}],
+        }
 
 
 class MockChat:
@@ -164,13 +251,30 @@ class MockChat:
         last = messages[-1] if messages else {}
         if last.get("role") == "tool":
             # 工具执行完毕：读取工具结果并回显为最终回复
-            return self._assistant_text(self._echo_tool_result(last.get("content", "")))
+            return self._respond(self._assistant_text(self._echo_tool_result(last.get("content", ""))))
 
         text = str(self._latest_user_content(messages))
         for keyword, tool_call in self._routing.items():
             if keyword in text:
-                return self._assistant_tool_call(tool_call)
-        return self._assistant_text("已收到您的请求（Mock 模式，未触发工具）。")
+                return self._respond(self._assistant_tool_call(tool_call))
+        return self._respond(self._assistant_text("已收到您的请求（Mock 模式，未触发工具）。"))
+
+    @staticmethod
+    def _respond(result: dict[str, Any]) -> dict[str, Any]:
+        """若当前上下文注册了 token sink，把回复文本分片推入以模拟流式输出。
+
+        Args:
+            result: 已构造好的 chat completion 字典。
+
+        Returns:
+            原样返回 result（sink 推送只是副作用）。
+        """
+        sink = _token_sink.get()
+        if sink is not None:
+            content = result["choices"][0]["message"].get("content") or ""
+            for i in range(0, len(content), 4):
+                sink(content[i : i + 4])
+        return result
 
     @staticmethod
     def _echo_tool_result(content: str) -> str:
@@ -247,4 +351,4 @@ class MockChat:
         }
 
 
-__all__ = ["ChatModel", "DeepSeekChat", "MockChat", "ModelConfigLike"]
+__all__ = ["ChatModel", "DeepSeekChat", "MockChat", "ModelConfigLike", "set_token_sink", "reset_token_sink"]
