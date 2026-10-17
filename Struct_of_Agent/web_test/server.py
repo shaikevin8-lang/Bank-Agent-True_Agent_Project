@@ -4,13 +4,14 @@
 并可点击右上角「模型设置」在页面上选择/填写 Base URL、API Key 与模型名，
 测试连接后即时生效（无需重启服务、无需修改环境变量）。
 
-后端复用 ``SupervisorAgent``（总调度器），按自然语言意图三路分发：
+后端复用 ``SupervisorAgent``（总调度器），按自然语言意图分发：
     - 涉及转账 → R1（智能转账）
     - 涉及账单 → R2（账单分析）
+    - 涉及理财 → R3（理财操作：风险评估/产品推荐与对比/一键申购/一键赎回）
     - 其余（天气/汇率/寒暄等搜索问答）→ common（CommonAgent，走 Tavily 搜索 + LLM）
 
 用户以自然语言输入（如「给张三转账100元」「看看我这个月的消费分类」
-「今天北京天气怎么样」），Agent 以自然语言回复。
+「帮我做个风险评估」「申购稳健增利90天1000元」），Agent 以自然语言回复。
 
 [模型接入] 由 ``common.model_manager`` 提供进程级运行时配置：
     GET/PUT/DELETE /api/settings/llm        模型接入配置（测试 /api/settings/llm/test）
@@ -39,16 +40,16 @@
 ``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
 ``session_id`` 自动补建，因此首条消息会顺带生成标题。
 
-[持久化数据库] R1 / R2 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
-文件（``r1.db`` / ``r2.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
+[持久化数据库] R1 / R2 / R3 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
+文件（``r1.db`` / ``r2.db`` / ``r3.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
 数据目录可用环境变量 ``BANK_AGENT_DATA_DIR`` 覆盖（测试指向临时目录）。
 接入真实数据库时，将 :func:`_build_supervisor` 中的 ``db_url`` 替换为 PostgreSQL
-连接串即可。演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账。
+连接串即可。演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账与申赎。
 
 启动方式（在项目根目录执行）：
-    python web_test/server.py
+    py web_test/server.py
 或：
-    uvicorn web_test.server:app --reload
+    py -m uvicorn web_test.server:app --reload
 """
 
 from __future__ import annotations
@@ -74,6 +75,8 @@ from R1 import BalanceStore, TransferAgent
 from R1.persistence import ConversationStore as R1ConversationStore
 from R2 import BillAgent, TransactionStore
 from R2.persistence import ConversationStore as R2ConversationStore
+from R3 import WealthAgent, WealthStore
+from R3.persistence import ConversationStore as R3ConversationStore
 from supervisor import SupervisorAgent
 from web_test.session_store import (
     ChatSessionStore,
@@ -86,27 +89,30 @@ from web_test.session_store import (
 # 默认演示账户与初始余额（单位：分，¥1000.00），便于转账功能直接演示
 DEFAULT_ACCOUNT_ID = "622200001"
 DEFAULT_BALANCE_FEN = 100000
+# R3 理财演示账户初始余额（单位：分，¥100,000.00）：
+# 覆盖全部演示产品的起购金额（¥1~¥10,000），保证申购/赎回流程可完整演示
+R3_DEFAULT_BALANCE_FEN = 10_000_000
 
 # 后端版本 / 能力握手（版本错配排障用）：
 # 页面 index.html 每次请求都从磁盘读取（FileResponse），但路由是在进程启动时绑定好的。
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-14.sessions-v3"
+API_VERSION = "2026-10-17.wealth-r3"
 API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
 _HTML_PATH = Path(__file__).resolve().parent / "index.html"
 
 # 旧版后端未注册接口时的统一提示（见 _http_exception_handler）
-BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口；请重启服务：python web_test/server.py"
+BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口；请重启服务：py web_test/server.py"
 
 
 def _build_supervisor() -> SupervisorAgent:
-    """构造总调度器，R1/R2 均接入持久化 SQLite 数据库与运行时模型配置。
+    """构造总调度器，R1/R2/R3 均接入持久化 SQLite 数据库与运行时模型配置。
 
     Returns:
-        已装配 R1/R2 子 Agent 的 SupervisorAgent 实例。
+        已装配 R1/R2/R3 子 Agent 的 SupervisorAgent 实例。
     """
     data_dir = resolve_data_dir()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
@@ -122,11 +128,19 @@ def _build_supervisor() -> SupervisorAgent:
     r2_store = TransactionStore(db_url=r2_db)
     r2_conv = R2ConversationStore(db_url=r2_db)
 
+    # R3：测评 + 产品 + 持仓 + 订单 + 余额 + 会话同库；
+    # 仅在账户不存在时播种演示余额（重启不抹掉已发生的申赎）
+    r3_db = sqlite_url(data_dir / "r3.db")
+    r3_store = WealthStore(db_url=r3_db)
+    r3_conv = R3ConversationStore(db_url=r3_db)
+    r3_store.ensure_account(DEFAULT_ACCOUNT_ID, R3_DEFAULT_BALANCE_FEN)
+
     # 传「获取管理器的函数」而不是管理器实例，使 Agent 每次调用时惰性解析，
     # 避免导入期绑定单例、与设置路由解析到的实例不一致（陈旧引用缺陷）。
     agents = {
         "R1": TransferAgent(store=r1_conv, balance_store=r1_balance, model_manager=model_manager),
         "R2": BillAgent(store=r2_store, conversation_store=r2_conv, model_manager=model_manager),
+        "R3": WealthAgent(store=r3_store, conversation_store=r3_conv, model_manager=model_manager),
     }
     return SupervisorAgent(agents=agents, model_manager=model_manager)
 
@@ -389,10 +403,10 @@ def _record_turn(session_id: str, user_message: str, result: dict[str, Any]) -> 
 
 
 def _clear_agent_context(session_id: str) -> None:
-    """删除会话时一并清掉 R1/R2 中该会话的多轮上下文。
+    """删除会话时一并清掉 R1/R2/R3 中该会话的多轮上下文。
 
     侧边栏删掉的会话不应在子 Agent 里留下"记忆"（否则同一 session_id 再次出现时
-    会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2 的在
+    会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2/R3 的在
     ``agent.conversation_store``，这里按鸭子类型逐个尝试，清理失败只告警。
 
     Args:
@@ -486,7 +500,7 @@ def rename_session(session_id: str, payload: SessionRenameRequest) -> Any:
 
 @app.delete("/api/sessions/{session_id}")
 def delete_session(session_id: str) -> Any:
-    """删除会话及其对话记录，并清理 R1/R2 中该会话的上下文。
+    """删除会话及其对话记录，并清理 R1/R2/R3 中该会话的上下文。
 
     Args:
         session_id: 会话 ID。
@@ -550,7 +564,7 @@ def get_llm_settings() -> dict:
 
 
 @app.post("/api/settings/llm/test")
-def test_llm_settings(request: LlmSettingsRequest) -> dict:
+def probe_llm_settings(request: LlmSettingsRequest) -> dict:
     """测试模型连接，不改变当前生效配置。
 
     Args:
@@ -604,7 +618,7 @@ def get_search_settings() -> dict:
 
 
 @app.post("/api/settings/search/test")
-def test_search_settings(request: SearchSettingsRequest) -> dict:
+def probe_search_settings(request: SearchSettingsRequest) -> dict:
     """测试搜索服务连接，不改变当前生效配置。
 
     Args:
@@ -690,7 +704,7 @@ def _log_startup(port: int = 8000) -> None:
         f"[web_test] 已注册会话路由({len(session_routes)}): {' '.join(session_routes)} "
         f"| 数据目录: {resolve_data_dir()}（重启后历史保留）"
     )
-    print(f"[web_test] 若页面提示 404 / BACKEND_OUTDATED，请重启服务：python web_test/server.py（API_VERSION={API_VERSION}）")
+    print(f"[web_test] 若页面提示 404 / BACKEND_OUTDATED，请重启服务：py web_test/server.py（API_VERSION={API_VERSION}）")
 
 
 if __name__ == "__main__":

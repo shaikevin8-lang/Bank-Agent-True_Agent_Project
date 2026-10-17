@@ -80,12 +80,15 @@ $env:Tavily_API   = "你的 Tavily API Key"
 在项目根目录运行：
 
 ```powershell
-python web_test/server.py
+py web_test/server.py
 ```
 
 启动后浏览器访问 <http://127.0.0.1:8000> 即可在对话框内与银行 Agent 对话。
 
-> 也可以使用 `uvicorn web_test.server:app --reload` 启动。
+> 也可以使用 `py -m uvicorn web_test.server:app --reload` 启动。
+> 这里用 `py`（Windows 自带 Python 启动器）而不是 `python`：本机 `python` 可能指向
+> Python 2（如 Miniconda 的 2.7），会因中文注释/新语法直接报
+> `SyntaxError: Non-ASCII character ...`。`py` 固定解析到 Python 3。
 > 启动时会打印两行自检信息（`API_VERSION`、已注册的设置/会话路由、数据目录、服务地址），
 > 可与页面显示的接口版本对照排障。
 

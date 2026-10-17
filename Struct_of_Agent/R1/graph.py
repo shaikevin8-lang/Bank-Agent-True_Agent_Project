@@ -225,7 +225,19 @@ def _balance_check_node(state: TransferState, model: ChatModel, balance_store: B
         return {"balance_check": check, "insufficient_balance": False}
 
     reply = _compose_insufficient_reply(model, balance_fen, amount_fen)
-    messages = state.get("messages", []) + [{"role": "assistant", "content": reply}]
+    # 余额不足时不执行转账，但必须为每个 pending tool_call 补一条 tool 回执，
+    # 否则历史里会出现「assistant(tool_calls) 后紧跟 assistant」的非法序列，
+    # 下一轮请求发给 OpenAI 兼容接口会被拒绝（insufficient tool messages）。
+    tool_results = [
+        {
+            "role": "tool",
+            "tool_call_id": call.get("id", ""),
+            "name": (call.get("function") or {}).get("name", ""),
+            "content": json.dumps({"status": "rejected", "error": "余额不足，转账未执行"}, ensure_ascii=False),
+        }
+        for call in tool_calls
+    ]
+    messages = state.get("messages", []) + tool_results + [{"role": "assistant", "content": reply}]
     return {
         "balance_check": check,
         "insufficient_balance": True,
