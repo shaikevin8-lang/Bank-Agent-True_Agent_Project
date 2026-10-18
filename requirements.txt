@@ -28,6 +28,11 @@ openai>=1.0.0
 sqlalchemy>=2.0.0
 pydantic>=2.0.0
 
+# 数据库（正式持久化：PostgreSQL 16.6 + psycopg 3 + Alembic）
+#   连接串由环境变量 BANK_AGENT_DB_URL 提供，见 docs/AI_Banking_Agent_数据库实施说明.md
+psycopg[binary]>=3.2.0
+alembic>=1.14.0
+
 # HTTP / Web 服务
 httpx>=0.28.0
 fastapi>=0.115.0

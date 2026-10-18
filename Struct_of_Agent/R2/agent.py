@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.model_manager import RuntimeChatModel, trace_info
+from db.repository import Database
 
 from .config import DeepSeekConfig, load_config
 from .graph import build_graph
@@ -57,8 +58,8 @@ class BillAgent:
             config: DeepSeek 配置（缺省从环境变量加载）。
             model: 模型实例；缺省时若已配置 API Key 使用 DeepSeek，否则使用 MockChat。
             moderator: 内容审核中间件实例。
-            store: 账单数据仓储实例（缺省本地 SQLite）。
-            conversation_store: 会话消息仓储实例（缺省本地 SQLite）。
+            store: 账单数据仓储实例（缺省使用同一 PostgreSQL 上下文）。
+            conversation_store: 会话消息仓储实例（缺省使用同一 PostgreSQL 上下文）。
             model_manager: 运行时模型配置管理器；注入后模型可在页面热切换，
                 无需重建已编译的图。
         """
@@ -69,8 +70,17 @@ class BillAgent:
             RuntimeChatModel(model_manager, fallback=base_model) if model_manager is not None else base_model
         )
         self.moderator = moderator or ContentModerationMiddleware()
-        self.store = store or TransactionStore()
-        self.conversation_store = conversation_store or ConversationStore()
+        # 流水、报告与会话共用一个 PostgreSQL 上下文。
+        if store is None or conversation_store is None:
+            database = (
+                getattr(store, "db", None)
+                or getattr(conversation_store, "db", None)
+                or Database.from_env()
+            )
+            store = store or TransactionStore(database=database)
+            conversation_store = conversation_store or ConversationStore(database=database)
+        self.store = store
+        self.conversation_store = conversation_store
         self._tools = build_bill_tools(self.model, self.store)
         self.graph = build_graph(self.model, self.moderator, self._tools)
 

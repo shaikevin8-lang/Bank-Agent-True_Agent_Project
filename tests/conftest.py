@@ -7,14 +7,17 @@
 from __future__ import annotations
 
 import atexit
+import getpass
 import json
 import os
+import secrets
 import shutil
 import socket
 import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Iterator
@@ -36,6 +39,39 @@ if str(_STRUCT) not in sys.path:
 _TEST_DATA_DIR = tempfile.mkdtemp(prefix="bank_agent_tests_")
 os.environ.setdefault("BANK_AGENT_DATA_DIR", _TEST_DATA_DIR)
 atexit.register(shutil.rmtree, _TEST_DATA_DIR, ignore_errors=True)
+
+
+def _ensure_writable_pytest_temp_root() -> None:
+    """保证 ``tmp_path`` 的根目录可写，必要时改用仓库内的临时目录。
+
+    pytest 默认把 ``tmp_path`` 放在 ``%TEMP%\\pytest-of-<用户>``。这个目录一旦
+    被其它账户（例如更早的沙箱进程）以不可读写的权限创建，之后每次使用
+    ``tmp_path`` 都会在 setup 阶段抛 ``PermissionError``，而且当前用户无权删除它。
+    这里只在默认根目录确实不可写时，把 ``PYTEST_DEBUG_TEMPROOT`` 指到仓库内
+    被 git 忽略的 ``.pytest-tmp/``；正常环境完全不受影响。
+
+    ``PYTEST_DEBUG_TEMPROOT`` 由 pytest 在**首次使用** ``tmp_path`` 时才读取，
+    因此放在 conftest 导入期设置是有效的。
+    """
+    if os.environ.get("PYTEST_DEBUG_TEMPROOT"):
+        return
+
+    default_root = Path(tempfile.gettempdir()) / f"pytest-of-{getpass.getuser()}"
+    try:
+        default_root.mkdir(parents=True, exist_ok=True)
+        probe = default_root / f".write-probe-{os.getpid()}"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return
+    except OSError:
+        pass
+
+    fallback = _ROOT / ".pytest-tmp"
+    fallback.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(fallback)
+
+
+_ensure_writable_pytest_temp_root()
 
 # 真实 uvicorn 夹具的参数：就绪轮询上限、单次请求超时、优雅退出上限、轮询间隔
 _READY_TIMEOUT_S = 10.0
@@ -244,7 +280,7 @@ def _free_port() -> int:
 
 
 @pytest.fixture()
-def live_server() -> Iterator[httpx.Client]:
+def live_server(pg_clean: str) -> Iterator[httpx.Client]:
     """在后台线程启动真实 uvicorn，等待就绪后交出 httpx 客户端。
 
     既有测试大多基于 ``fastapi.testclient.TestClient``，它直连 ASGI 应用、
@@ -296,3 +332,128 @@ def live_server() -> Iterator[httpx.Client]:
         server.should_exit = True
         thread.join(timeout=_SHUTDOWN_TIMEOUT_S)
         assert not thread.is_alive(), "uvicorn 线程未能在超时内退出，端口可能泄漏"
+
+
+# ---------------------------------------------------------------------------
+# PostgreSQL 运行时夹具（Web / R1 / R2 共用一个测试库）
+# ---------------------------------------------------------------------------
+
+TEST_DB_URL = os.environ.get("BANK_AGENT_TEST_DB_URL", "").strip()
+RUNTIME_DB_PREFIX = "bank_agent_it_runtime_"
+PROTECTED_DATABASES = frozenset({"bank_agent", "bank_agent_fresh"})
+
+# 只清 app schema；audit.event 的 append-only 触发器禁止 TRUNCATE。
+TRUNCATE_APP_SQL = """
+TRUNCATE TABLE
+    app.conversation_message,
+    app.conversation_session,
+    app.idempotency_key,
+    app.bill_report,
+    app.bank_transaction,
+    app.task,
+    app.account,
+    app.principal,
+    app.tenant
+RESTART IDENTITY CASCADE
+"""
+
+
+@dataclass(frozen=True)
+class RuntimeDatabase:
+    """一个临时 PostgreSQL 测试库。"""
+
+    name: str
+    url: str
+    engine: Any
+
+
+@pytest.fixture(scope="session")
+def runtime_pg_database() -> Iterator[RuntimeDatabase]:
+    """创建独立测试库并执行 ``alembic upgrade head``。
+
+    未设置 ``BANK_AGENT_TEST_DB_URL`` 时跳过所有依赖它的测试；开关必须指向
+    维护库（例如 ``.../postgres``），因为夹具要 ``CREATE DATABASE``。
+    """
+    if not TEST_DB_URL:
+        pytest.skip(
+            "未设置 BANK_AGENT_TEST_DB_URL：Web/R1/R2 的运行时持久化测试需要真实 PostgreSQL。"
+            "运行方式：$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://user:pass@127.0.0.1:5432/postgres'"
+        )
+
+    import alembic.command as alembic_command
+    from alembic.config import Config
+    from sqlalchemy import create_engine, text
+    from sqlalchemy.engine import make_url
+
+    from db.session import ALEMBIC_INI
+
+    maintenance_url = make_url(TEST_DB_URL)
+    if maintenance_url.get_backend_name() != "postgresql":
+        pytest.fail("BANK_AGENT_TEST_DB_URL 必须是 PostgreSQL（postgresql+psycopg://）连接串")
+    if maintenance_url.database in PROTECTED_DATABASES:
+        pytest.fail(
+            f"BANK_AGENT_TEST_DB_URL 指向受保护库 {maintenance_url.database!r}；"
+            "请改指向维护库（例如 .../postgres）"
+        )
+
+    name = RUNTIME_DB_PREFIX + secrets.token_hex(4)
+    admin_engine = create_engine(TEST_DB_URL, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
+    with admin_engine.connect() as connection:
+        connection.execute(text(f'CREATE DATABASE "{name}"'))
+
+    url = maintenance_url.set(database=name).render_as_string(hide_password=False)
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("sqlalchemy.url", url)
+    alembic_command.upgrade(config, "head")
+
+    engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    try:
+        yield RuntimeDatabase(name=name, url=url, engine=engine)
+    finally:
+        engine.dispose()
+        with admin_engine.connect() as connection:
+            connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        admin_engine.dispose()
+
+
+@pytest.fixture()
+def runtime_pg_url(runtime_pg_database: RuntimeDatabase) -> str:
+    """返回临时测试库连接串。"""
+    return runtime_pg_database.url
+
+
+@pytest.fixture()
+def pg_clean(runtime_pg_database: RuntimeDatabase, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """清空 app schema、重新 seed，并让服务进程使用该测试库。
+
+    每个用例开始与结束都重置 ``web_test.server`` 的进程级单例，避免上一个
+    用例的引擎/会话仓储泄漏到下一个用例。
+    """
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+
+    from db import seed as db_seed
+
+    with runtime_pg_database.engine.begin() as connection:
+        connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+        connection.execute(text(TRUNCATE_APP_SQL))
+    with Session(runtime_pg_database.engine) as session:
+        db_seed.seed(session)
+        session.commit()
+
+    monkeypatch.setenv("BANK_AGENT_DB_URL", runtime_pg_database.url)
+
+    import web_test.server as server
+
+    def _reset_server() -> None:
+        if server._database is not None:
+            server._database.dispose()
+        server._database = None
+        server._supervisor = None
+        server._session_store = None
+
+    _reset_server()
+    try:
+        yield runtime_pg_database.url
+    finally:
+        _reset_server()

@@ -21,8 +21,8 @@ import web_test.server as server  # noqa: E402
 
 
 @pytest.fixture()
-def client() -> TestClient:
-    """返回 Web 应用测试客户端。"""
+def client(pg_clean: str) -> TestClient:
+    """返回 Web 应用测试客户端（使用干净的 PostgreSQL 测试库）。"""
     return TestClient(server.app)
 
 

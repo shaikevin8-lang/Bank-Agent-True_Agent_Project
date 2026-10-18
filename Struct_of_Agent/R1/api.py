@@ -18,8 +18,16 @@ from .interfaces import AgentChatRequest, AgentChatResponse
 
 app = FastAPI(title="R1 智能转账 Agent", version="0.1.0")
 
-# 单例 Agent；依赖注入替换可在此处调整
-_agent = TransferAgent()
+# 惰性单例：导入模块本身不连数据库，首次请求时才校验迁移并建立连接。
+_agent: TransferAgent | None = None
+
+
+def get_agent() -> TransferAgent:
+    """返回进程级 R1 Agent。"""
+    global _agent
+    if _agent is None:
+        _agent = TransferAgent()
+    return _agent
 
 
 @app.post("/api/v1/r1/chat", response_model=AgentChatResponse, tags=["R1"])
@@ -32,7 +40,7 @@ def chat(request: AgentChatRequest) -> AgentChatResponse:
     Returns:
         AgentChatResponse 结构化响应。
     """
-    result = _agent.chat(request.message, request.session_id)
+    result = get_agent().chat(request.message, request.session_id)
     return AgentChatResponse(**result)
 
 
@@ -46,7 +54,7 @@ def list_tasks(session_id: str) -> dict:
     Returns:
         包含 tasks 列表的字典。
     """
-    return {"tasks": _agent.list_tasks(session_id)}
+    return {"tasks": get_agent().list_tasks(session_id)}
 
 
 @app.get("/health/live", tags=["health"])

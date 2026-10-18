@@ -95,7 +95,7 @@ def test_empty_query_is_rejected_by_both_tools():
             raise AssertionError(f"{tool.name} 未拒绝空关键词")
 
 
-def test_web_chat_records_a_search_task_once_search_is_configured(fake_search):
+def test_web_chat_records_a_search_task_once_search_is_configured(fake_search, pg_clean: str):
     """端到端：页面配好联网搜索后，通用问题必须真的产生搜索回执。
 
     这条用例补回一处**依赖环境**的覆盖缺口：``Example/test_supervisor.py`` 里

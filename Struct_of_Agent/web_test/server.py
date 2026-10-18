@@ -43,11 +43,16 @@
 ``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
 ``session_id`` 自动补建，因此首条消息会顺带生成标题。
 
-[持久化数据库] R1 / R2 / R3 / R4 / R5 / R6 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
-文件（``r1.db`` / ``r2.db`` / ``r3.db`` / ``r4.db`` / ``r5.db`` / ``r6.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
+[持久化数据库] R1 / R2 / 会话侧边栏统一使用一个 PostgreSQL（``app`` / ``audit``
+schema），连接串来自 ``BANK_AGENT_DB_URL``（或 ``DATABASE_URL``）。应用启动只
+校验 Alembic 版本，不自动建表；演示租户/账户用幂等 seed 补齐，重启不会抹掉
+已发生的余额变化。Web、R1、R2 共用 ``app.conversation_session`` /
+``app.conversation_message``。
+
+R3 / R4 / R5 / R6 仍沿用 ``web_test/data/`` 下的本地 SQLite
+（``r3.db`` / ``r4.db`` / ``r5.db`` / ``r6.db``），**服务重启后历史仍在**；
 数据目录可用环境变量 ``BANK_AGENT_DATA_DIR`` 覆盖（测试指向临时目录）。
-接入真实数据库时，将 :func:`_build_supervisor` 中的 ``db_url`` 替换为 PostgreSQL
-连接串即可。演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账与申赎。
+演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账与申赎。
 
 启动方式（在项目根目录执行）：
     py web_test/server.py
@@ -75,6 +80,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
+from db.repository import Database
+from db.seed import seed as seed_demo_data
+from db.session import get_database_url, safe_database_url, session_scope
 from R1 import BalanceStore, TransferAgent
 from R1.persistence import ConversationStore as R1ConversationStore
 from R2 import BillAgent, TransactionStore
@@ -93,7 +101,6 @@ from web_test.session_store import (
     SessionNotFoundError,
     is_valid_session_id,
     resolve_data_dir,
-    sqlite_url,
 )
 
 # 默认演示账户与初始余额（单位：分，¥1000.00），便于转账功能直接演示
@@ -108,7 +115,7 @@ R3_DEFAULT_BALANCE_FEN = 10_000_000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-18.all-r6"
+API_VERSION = "2026-10-18.postgres-r6"
 API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
@@ -118,46 +125,90 @@ _HTML_PATH = Path(__file__).resolve().parent / "index.html"
 BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口；请重启服务：py web_test/server.py"
 
 
-def _build_supervisor() -> SupervisorAgent:
-    """构造总调度器，R1~R6 均接入持久化 SQLite 数据库与运行时模型配置。
+_database: Database | None = None
+_supervisor: SupervisorAgent | None = None
+_session_store: ChatSessionStore | None = None
+
+
+def get_database() -> Database:
+    """返回进程级 PostgreSQL 上下文，首次调用时校验迁移并补齐演示数据。
+
+    应用启动**不建表**：``Database.from_env`` 只调用 ``assert_schema_current``；
+    表结构由 ``python scripts/db.py upgrade`` 显式创建。seed 使用确定性业务键，
+    重复执行不会覆盖已变化的余额或产生重复流水。
+
+    Returns:
+        数据库上下文。
+
+    Raises:
+        MigrationStateError: 数据库未迁移到代码 head。
+    """
+    global _database
+    if _database is None:
+        database = Database.from_env()
+        with session_scope(database.engine) as session:
+            seed_demo_data(session)
+        _database = database
+    return _database
+
+
+def _sqlite_url(path: Path) -> str:
+    """把本地文件路径转换为 SQLAlchemy 的 SQLite 连接串。
+
+    仅供尚未迁移到 PostgreSQL 的 R3~R6 场景使用。
+
+    Args:
+        path: 数据库文件路径。
+
+    Returns:
+        形如 ``sqlite:///D:/.../r3.db`` 的连接串。
+    """
+    return f"sqlite:///{path}"
+
+
+def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
+    """构造总调度器：R1/R2 走 PostgreSQL，R3~R6 沿用本地 SQLite。
+
+    Args:
+        database: 共享数据库上下文；缺省使用进程级上下文。
 
     Returns:
         已装配 R1~R6 子 Agent 的 SupervisorAgent 实例。
     """
+    database = database or get_database()
+    # R3~R6 尚未迁移到 PostgreSQL，仍使用 web_test/data/ 下的本地 SQLite 文件。
     data_dir = resolve_data_dir()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
 
-    # R1：会话 + 余额同库；仅在账户不存在时播种演示余额（重启不抹掉已发生的转账）
-    r1_db = sqlite_url(data_dir / "r1.db")
-    r1_conv = R1ConversationStore(db_url=r1_db)
-    r1_balance = BalanceStore(db_url=r1_db)
+    # R1：会话 + 任务 + 余额；仅在账户不存在时播种演示余额。
+    r1_conv = R1ConversationStore(database=database)
+    r1_balance = BalanceStore(database=database)
     r1_balance.ensure_account(DEFAULT_ACCOUNT_ID, DEFAULT_BALANCE_FEN, owner="演示账户")
 
-    # R2：流水 + 报告 + 会话同库
-    r2_db = sqlite_url(data_dir / "r2.db")
-    r2_store = TransactionStore(db_url=r2_db)
-    r2_conv = R2ConversationStore(db_url=r2_db)
+    # R2：流水 + 报告 + 会话；与 R1/Web 共用 app 表。
+    r2_store = TransactionStore(database=database)
+    r2_conv = R2ConversationStore(database=database)
 
     # R3：测评 + 产品 + 持仓 + 订单 + 余额 + 会话同库；
     # 仅在账户不存在时播种演示余额（重启不抹掉已发生的申赎）
-    r3_db = sqlite_url(data_dir / "r3.db")
+    r3_db = _sqlite_url(data_dir / "r3.db")
     r3_store = WealthStore(db_url=r3_db)
     r3_conv = R3ConversationStore(db_url=r3_db)
     r3_store.ensure_account(DEFAULT_ACCOUNT_ID, R3_DEFAULT_BALANCE_FEN)
 
     # R4：卡片 + 操作回执 + 会话同库；演示卡片在 CardStore 初始化时自动播种
-    r4_db = sqlite_url(data_dir / "r4.db")
+    r4_db = _sqlite_url(data_dir / "r4.db")
     r4_store = CardStore(db_url=r4_db)
     r4_conv = R4ConversationStore(db_url=r4_db)
 
     # R5：订阅/代扣 + 提醒 + 操作回执 + 会话同库；演示订阅在 SubscriptionStore 初始化时自动播种
-    r5_db = sqlite_url(data_dir / "r5.db")
+    r5_db = _sqlite_url(data_dir / "r5.db")
     r5_store = SubscriptionStore(db_url=r5_db)
     r5_conv = R5ConversationStore(db_url=r5_db)
 
     # R6：生日工作流 + 预算预留 + 礼品订单 + 账户余额 + 会话同库；
     # 预算演示账户余额在 WorkflowStore 初始化时自动播种
-    r6_db = sqlite_url(data_dir / "r6.db")
+    r6_db = _sqlite_url(data_dir / "r6.db")
     r6_store = WorkflowStore(db_url=r6_db)
     r6_conv = R6ConversationStore(db_url=r6_db)
 
@@ -174,13 +225,15 @@ def _build_supervisor() -> SupervisorAgent:
     return SupervisorAgent(agents=agents, model_manager=model_manager)
 
 
+def get_supervisor() -> SupervisorAgent:
+    """返回进程级总调度器（惰性创建，便于测试注入替身）。"""
+    global _supervisor
+    if _supervisor is None:
+        _supervisor = _build_supervisor()
+    return _supervisor
+
+
 app = FastAPI(title="银行智能 Agent 本地测试", version="0.2.0")
-
-# 进程级单例总调度器
-_supervisor = _build_supervisor()
-
-# 进程级单例会话仓储（惰性创建：数据库文件在首次访问时才落地）
-_session_store: ChatSessionStore | None = None
 
 
 def get_session_store() -> ChatSessionStore:
@@ -194,7 +247,7 @@ def get_session_store() -> ChatSessionStore:
     """
     global _session_store
     if _session_store is None:
-        _session_store = ChatSessionStore(db_url=sqlite_url(resolve_data_dir() / "web_sessions.db"))
+        _session_store = ChatSessionStore(database=get_database())
     return _session_store
 
 
@@ -394,7 +447,7 @@ def chat(request: ChatRequest) -> dict:
     Returns:
         统一契约字典（reply / blocked / moderation / tasks / trace / agent）。
     """
-    result = _supervisor.chat(request.message, request.session_id)
+    result = get_supervisor().chat(request.message, request.session_id)
     _record_turn(request.session_id, request.message, result)
     return result
 
@@ -470,7 +523,7 @@ def _clear_agent_context(session_id: str) -> None:
     Args:
         session_id: 会话 ID。
     """
-    for agent in getattr(_supervisor, "agents", {}).values():
+    for agent in getattr(get_supervisor(), "agents", {}).values():
         for attribute in ("store", "conversation_store"):
             store = getattr(agent, attribute, None)
             clear = getattr(store, "clear_session", None)
@@ -758,9 +811,13 @@ def _log_startup(port: int = 8000) -> None:
         f"| 已注册设置路由({len(routes)}): {' '.join(routes)} "
         f"| 服务地址: http://127.0.0.1:{port}"
     )
+    try:
+        target = safe_database_url(get_database_url())
+    except Exception as error:  # noqa: BLE001 - 启动日志不能因为未配置连接串而中断
+        target = f"<未配置：{error}>"
     print(
         f"[web_test] 已注册会话路由({len(session_routes)}): {' '.join(session_routes)} "
-        f"| 数据目录: {resolve_data_dir()}（重启后历史保留）"
+        f"| 数据库: {target}（启动只校验 Alembic 版本，不建表）"
     )
     print(f"[web_test] 若页面提示 404 / BACKEND_OUTDATED，请重启服务：py web_test/server.py（API_VERSION={API_VERSION}）")
 

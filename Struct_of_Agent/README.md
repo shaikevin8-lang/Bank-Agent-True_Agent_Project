@@ -18,8 +18,12 @@
 
 为方便测试，当前内置了：
 
-- **本地持久化数据库**：R1~R6 与会话侧边栏的数据落在 `web_test/data/` 下的 SQLite
-  文件（**服务重启后历史仍在**），仅用于本地功能验证；接入真实数据库时替换连接串即可。
+- **统一 PostgreSQL 持久化（R1 / R2 / 会话侧边栏）**：Web 会话侧边栏、R1 任务/余额、
+  R2 流水/报告统一写入同一个 PostgreSQL 的 `app` / `audit` schema（**服务重启后历史仍在**）。
+  连接串来自 `BANK_AGENT_DB_URL`；首次运行先执行 `python scripts/db.py upgrade` 和
+  `python scripts/db.py seed`（详见 [docs/AI_Banking_Agent_数据库实施说明.md](../docs/AI_Banking_Agent_数据库实施说明.md)）。
+- **R3~R6 仍为本地 SQLite**：理财、卡片、订阅、跨场景联动的数据继续落在 `web_test/data/`
+  下的 `r3.db` ~ `r6.db`（**服务重启后历史仍在**），后续按同一套设计迁入 PostgreSQL。
 - **临时 Web 网页**：[web_test](web_test) 目录下提供了一个简单的聊天页面，用于直接对话测试。
   页面**左侧是会话侧边栏**：可新建会话、查看历史会话列表、点击切回旧会话继续对话，
   也可以重命名或删除会话（标题默认取首条消息）。
@@ -92,6 +96,14 @@ $env:Tavily_API   = "你的 Tavily API Key"
 
 ## 启动服务器
 
+先准备 PostgreSQL（只需一次）：
+
+```powershell
+$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent'
+python scripts/db.py upgrade     # 建表 / 升级到 head
+python scripts/db.py seed        # 演示租户、账户与合成流水（幂等）
+```
+
 在项目根目录运行：
 
 ```powershell
@@ -115,8 +127,8 @@ py web_test/server.py
 > 这里用 `py`（Windows 自带 Python 启动器）而不是 `python`：本机 `python` 可能指向
 > Python 2（如 Miniconda 的 2.7），会因中文注释/新语法直接报
 > `SyntaxError: Non-ASCII character ...`。`py` 固定解析到 Python 3。
-> 启动时会打印两行自检信息（`API_VERSION`、已注册的设置/会话路由、数据目录、服务地址），
-> 可与页面显示的接口版本对照排障。
+> 启动时会打印两行自检信息（`API_VERSION`、已注册的设置/会话路由、脱敏后的数据库地址、
+> 服务地址），可与页面显示的接口版本对照排障。应用启动只校验 Alembic 版本，不自动建表。
 
 ## 会话侧边栏
 
@@ -130,15 +142,18 @@ py web_test/server.py
 | **删除** | 悬停条目右侧的垃圾桶图标；会二次确认，并一并清掉 R1~R6 里该会话的上下文 |
 | **收起侧边栏** | 顶栏最左侧的三条横线按钮；状态会被记住，窄屏（≤860px）默认收起为抽屉 |
 
-会话与消息保存在 `web_test/data/web_sessions.db`，**重启服务后历史仍在**；
-数据目录可用环境变量 `BANK_AGENT_DATA_DIR` 覆盖。该目录已在 `.gitignore` 中忽略。
+会话与消息保存在 PostgreSQL 的 `app.conversation_session` / `app.conversation_message`，
+与 R1/R2 共用同一张会话表，**重启服务后历史仍在**。删除会话按设计文档做归档，
+消息不物理删除。
 
 > 演示账户（`622200001`）的余额只在账户不存在时播种：
-> - R1 初始余额 ¥1000.00；
+> - R1 初始余额 ¥1000.00（PostgreSQL，由 `scripts/db.py seed` 播种）；
 > - R3 初始余额 ¥100,000.00（覆盖全部演示产品的起购金额）；
 > - R6 预算账户初始余额 ¥10,000.00（用于生日预算预留与礼品下单）。
 > 因此重启服务不会把已经转出去的钱重置回来，也不会抹掉已发生的申赎与订单。
-> 想重置演示数据，删掉 `web_test/data/` 目录再重启即可。
+> 想重置 R1/R2 演示数据，执行
+> `python scripts/db.py reset --env demo --confirm RESET-DEMO-DATA`（审计记录会保留）；
+> 想重置 R3~R6 演示数据，删掉 `web_test/data/` 下的 `r3.db` ~ `r6.db` 再重启即可。
 
 接口与错误码的完整约定见 [docs/前端会话侧边栏-契约.md](docs/前端会话侧边栏-契约.md)。
 

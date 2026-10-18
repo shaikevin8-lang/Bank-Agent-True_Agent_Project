@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.model_manager import RuntimeChatModel, trace_info
+from db.repository import Database
 
 from .config import DeepSeekConfig, load_config
 from .graph import build_graph
@@ -53,8 +54,8 @@ class TransferAgent:
             config: DeepSeek 配置（缺省从环境变量加载）。
             model: 模型实例；缺省时若已配置 API Key 使用 DeepSeek，否则使用 MockChat。
             moderator: 内容审核中间件实例。
-            store: 持久化仓储实例。
-            balance_store: 余额仓储实例；缺省使用本地位模拟实现。
+            store: 持久化仓储实例；缺省使用同一 PostgreSQL 上下文。
+            balance_store: 余额仓储实例；缺省使用同一 PostgreSQL 上下文。
             model_manager: 运行时模型配置管理器；注入后模型可在页面热切换，
                 无需重建已编译的图。
         """
@@ -65,8 +66,14 @@ class TransferAgent:
             RuntimeChatModel(model_manager, fallback=base_model) if model_manager is not None else base_model
         )
         self.moderator = moderator or ContentModerationMiddleware()
-        self.store = store or ConversationStore()
-        self.balance_store = balance_store or BalanceStore()
+        # 会话与余额必须落在同一个 PostgreSQL；缺省时共享一个 Database，
+        # 避免两个仓储各自建连接池、也避免退回到独立 SQLite 文件。
+        if store is None or balance_store is None:
+            database = getattr(store, "db", None) or getattr(balance_store, "db", None) or Database.from_env()
+            store = store or ConversationStore(database=database)
+            balance_store = balance_store or BalanceStore(database=database)
+        self.store = store
+        self.balance_store = balance_store
         self.graph = build_graph(self.model, self.moderator, self.balance_store)
 
     def _default_model(self) -> ChatModel:

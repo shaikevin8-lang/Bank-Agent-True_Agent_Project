@@ -16,58 +16,46 @@
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 import uuid
-from pathlib import Path
-from typing import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
-from sqlalchemy.orm import Session
 
 import web_test.server as server
 from web_test.session_store import (
     DEFAULT_TITLE,
-    ChatSessionRecord,
     ChatSessionStore,
     SessionNotFoundError,
     auto_title,
     is_valid_session_id,
     normalize_title,
-    sqlite_url,
 )
 
 
 @pytest.fixture()
-def db_url() -> Iterator[str]:
-    """每个测试一个全新的临时数据库文件。
-
-    这里刻意**不用** pytest 的 ``tmp_path``：本机
-    ``%TEMP%\\pytest-of-<user>`` 目录存在历史遗留的 Windows 权限问题
-    （``os.scandir`` 报 WinError 5），会让所有使用 ``tmp_path`` 的测试在
-    收集阶段就报错。自建临时目录既等价又不受影响。
-    """
-    directory = Path(tempfile.mkdtemp(prefix="bank_agent_sessions_"))
-    try:
-        yield sqlite_url(directory / "web_sessions.db")
-    finally:
-        shutil.rmtree(directory, ignore_errors=True)
+def db_url(pg_clean: str) -> str:
+    """每个测试使用清空并重新 seed 的 PostgreSQL 测试库。"""
+    return pg_clean
 
 
 @pytest.fixture()
 def store(db_url: str) -> ChatSessionStore:
-    """每个测试一个全新的会话库（临时文件）。"""
-    return ChatSessionStore(db_url=db_url)
+    """每个测试一个独立的会话仓储。"""
+    store = ChatSessionStore(db_url=db_url)
+    try:
+        yield store
+    finally:
+        store.db.dispose()
 
 
 @pytest.fixture()
-def client(store: ChatSessionStore, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-    """Web 应用测试客户端，并把进程级会话仓储换成临时库。
+def client(
+    store: ChatSessionStore, pg_clean: str, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    """Web 应用测试客户端，并把进程级会话仓储换成测试库。
 
     路由是通过 ``get_session_store()`` 惰性取单例的，所以替换模块级
-    ``_session_store`` 即可让整条接口链路落到临时库，测试之间互不干扰。
+    ``_session_store`` 即可让整条接口链路落到测试库，测试之间互不干扰。
     """
     monkeypatch.setattr(server, "_session_store", store)
     return TestClient(server.app)
@@ -208,37 +196,32 @@ def test_append_message_auto_creates_the_session(store: ChatSessionStore) -> Non
     assert record["message_count"] == 1
 
 
-def test_append_message_survives_a_concurrent_empty_session_prune(
+def test_append_message_survives_a_concurrent_session_archive(
     store: ChatSessionStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """并发下会话被「清理空会话」删掉时，消息不能丢。
+    """并发归档发生在「读会话」与「写消息」之间时，消息不能丢。
 
-    真实故障（并发压测复现）：``create_session`` 会清理还没有说过话的空会话，
-    而 ``append_message`` 是「先 SELECT 再 UPDATE」。pysqlite 默认只在 DML 时才真正
-    开启事务，所以 SELECT 不持锁 —— 另一个线程的清理可以在两步之间提交，
-    于是 UPDATE 命中 0 行，SQLAlchemy 抛 ``StaleDataError``，整条消息写不进去。
-    更糟的是 ``_record_turn`` 会吞掉这个异常，接口照样返回 200，消息静默丢失。
-
-    这里用「在 SELECT 与 UPDATE 之间删掉会话行」精确复现那个窗口。
+    旧 SQLite 实现是「先 SELECT 再 UPDATE」，另一个线程清理空会话会让 UPDATE
+    命中 0 行，消息静默丢失。PostgreSQL 实现在写消息后重新确认会话状态：
+    新消息已经落库，就把会话恢复为 active，避免「写进去但看不见」。
     """
     session = store.create_session()
     session_id = session["id"]
 
-    original = ChatSessionStore._count_user_messages
+    original = store._sessions._message_count
     fired = {"done": False}
 
-    def racing_count(db_session, target_id):
+    def racing_count(db_session, target_id, origin):
         if not fired["done"]:
             fired["done"] = True
-            # 模拟另一个线程此刻把这个「空会话」清理掉（正是 create_session 的行为）
-            with Session(store._engine) as other:
-                other.execute(
-                    delete(ChatSessionRecord).where(ChatSessionRecord.session_id == target_id)
-                )
-                other.commit()
-        return original(db_session, target_id)
+            # 模拟另一个线程此刻把这个会话归档
+            with store.db.transaction() as other:
+                row = store._sessions._row(other, session_id, active_only=False)
+                assert row is not None
+                row.status = "archived"
+        return original(db_session, target_id, origin)
 
-    monkeypatch.setattr(ChatSessionStore, "_count_user_messages", staticmethod(racing_count))
+    monkeypatch.setattr(store._sessions, "_message_count", racing_count)
 
     store.append_message(session_id, "user", "并发写入的消息")
 
@@ -477,7 +460,7 @@ def test_delete_endpoint_clears_the_agent_context(
 ) -> None:
     """删掉的会话不应在 R1/R2 里留下多轮上下文。"""
     recorded: list[str] = []
-    for agent in server._supervisor.agents.values():
+    for agent in server.get_supervisor().agents.values():
         for attribute in ("store", "conversation_store"):
             target = getattr(agent, attribute, None)
             if callable(getattr(target, "clear_session", None)):
@@ -610,16 +593,16 @@ def test_session_lifecycle_over_real_http(live_server) -> None:
     assert live_server.get(f"/api/sessions/{session_id}").status_code == 404
 
 
-def test_sessions_survive_a_real_process_restart(live_server) -> None:
-    """服务重启后历史仍在：直接换一个仓储实例读同一份数据库文件。
+def test_sessions_survive_a_real_process_restart(live_server, pg_clean: str) -> None:
+    """服务重启后历史仍在：换一个仓储实例读同一个 PostgreSQL。
 
-    ``live_server`` 用的是 ``BANK_AGENT_DATA_DIR`` 下的库；这里从该目录
-    重新打开一份仓储，验证「重启后历史会话仍在」这一核心承诺。
+    ``live_server`` 用的是 ``pg_clean`` 提供的测试库；这里重新打开一份仓储，
+    验证「重启后历史会话仍在」这一核心承诺。
     """
     session_id = live_server.post("/api/sessions", json={}).json()["data"]["session"]["id"]
     live_server.post("/api/chat", json={"message": "重启前说的话", "session_id": session_id})
 
-    reopened = ChatSessionStore(db_url=sqlite_url(server.resolve_data_dir() / "web_sessions.db"))
+    reopened = ChatSessionStore(db_url=pg_clean)
 
     record = reopened.get_session(session_id)
     assert record is not None, "重启后会话丢失"

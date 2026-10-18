@@ -297,6 +297,13 @@ def build_bill_tools(model: ChatModel, store: TransactionStore) -> list:
         """
         transactions = store.list_transactions(account_id, period)
         abnormal = _detect_abnormal_rules(transactions)
+        # 设计文档 §4.7：异常识别结果要落到 is_abnormal / abnormal_reason，
+        # 报告统计才能直接读取，而不是每次重新跑规则。
+        for item in abnormal:
+            store.mark_abnormal(
+                str(item.get("transaction_id") or ""),
+                "；".join(item.get("abnormal_reasons") or []),
+            )
         judgment = _llm_judge_summary(model, abnormal)
         return {
             "status": "ok",

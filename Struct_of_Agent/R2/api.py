@@ -18,8 +18,16 @@ from .interfaces import BillChatRequest, BillChatResponse
 
 app = FastAPI(title="R2 账单分析 Agent", version="0.1.0")
 
-# 单例 Agent；依赖注入替换可在此处调整
-_agent = BillAgent()
+# 惰性单例：导入模块本身不连数据库，首次请求时才校验迁移并建立连接。
+_agent: BillAgent | None = None
+
+
+def get_agent() -> BillAgent:
+    """返回进程级 R2 Agent。"""
+    global _agent
+    if _agent is None:
+        _agent = BillAgent()
+    return _agent
 
 
 @app.post("/api/v1/r2/chat", response_model=BillChatResponse, tags=["R2"])
@@ -32,7 +40,7 @@ def chat(request: BillChatRequest) -> BillChatResponse:
     Returns:
         BillChatResponse 结构化响应。
     """
-    result = _agent.chat(request.message, request.session_id)
+    result = get_agent().chat(request.message, request.session_id)
     return BillChatResponse(**result)
 
 
@@ -47,7 +55,7 @@ def list_transactions(account_id: str, period: str = "") -> dict:
     Returns:
         包含 transactions 列表的字典。
     """
-    return {"transactions": _agent.list_transactions(account_id, period)}
+    return {"transactions": get_agent().list_transactions(account_id, period)}
 
 
 @app.get("/api/v1/r2/reports/{account_id}", tags=["R2"])
@@ -61,7 +69,7 @@ def list_reports(account_id: str, report_type: str = "") -> dict:
     Returns:
         包含 reports 列表的字典。
     """
-    return {"reports": _agent.list_reports(account_id, report_type)}
+    return {"reports": get_agent().list_reports(account_id, report_type)}
 
 
 @app.get("/health/live", tags=["health"])

@@ -10,6 +10,8 @@ __pycache__/
 # 日志、缓存
 *.log
 tmp/
+# pytest 的 tmp_path 兜底目录（默认 %TEMP% 不可写时启用，见 tests/conftest.py）
+.pytest-tmp/
 
 # 本地持久化数据库（R1 / R2 / 会话侧边栏；仅本机运行数据，绝不入库）
 Struct_of_Agent/web_test/data/
