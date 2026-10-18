@@ -2,15 +2,16 @@
 
 职责（对应基座文档「图状态只保存路由/澄清/计划」）：
     1. 用 LLM 分析用户意图：把用户输入拆分为一个或多个子任务，并为每个子任务
-       选择负责的场景子 Agent（R1 转账 / R2 账单 / R3 理财 / common 通用）；
+       选择负责的场景子 Agent（R1 转账 / R2 账单 / R3 理财 / R4 卡片 / common 通用）；
     2. 按计划逐个分发执行，并汇总为一条统一回复；
     3. LLM 不可用或输出非法时，自动回退到规则路由（关键词 + 正则），保证离线可用；
-    4. 不承载任何转账/账单/理财业务规则——业务在子 Agent 内，安全/事实/持久化在共享底座。
+    4. 不承载任何转账/账单/理财/卡片业务规则——业务在子 Agent 内，安全/事实/持久化在共享底座。
 
 分发目标：
     - 涉及转账 → R1（TransferAgent）
     - 涉及账单 → R2（BillAgent）
     - 涉及理财 → R3（WealthAgent）
+    - 涉及卡片 → R4（CardAgent）
     - 其余（搜索/寒暄/通用问答）→ common（CommonAgent，走 Tavily 搜索 + LLM）
 
 [前后端接入点] 前端/后端只依赖本类即可，无需感知子 Agent 细节。
@@ -30,15 +31,22 @@ from common.agent import CommonAgent
 from common.config import load_config
 from common.llm import DeepSeekChat
 from common.model_manager import RuntimeChatModel, trace_info
+from common.prompts import SUPERVISOR_SYSTEM_PROMPT
 from R1 import TransferAgent
 from R2 import BillAgent
 from R3 import WealthAgent
+from R4 import CardAgent
+from R5 import SubscriptionAgent
+from R6 import WorkflowAgent
 
 # 规则路由关键词表：LLM 调度器不可用时的兜底（R4~R6 追加条目即可扩展）
 _ROUTE_KEYWORDS: dict[str, list[str]] = {
     "R1": ["转账", "汇款", "收款", "AA", "转给", "定时", "余额", "姓名", "手机号", "备注"],
     "R2": ["账单", "消费", "分类", "统计", "异常", "月报", "年报", "月度", "年度", "记录", "支出"],
     "R3": ["理财", "风险", "测评", "申购", "赎回", "基金", "产品推荐", "产品对比", "对比", "持仓", "买入", "卖出"],
+    "R4": ["卡片", "办卡", "额度", "提额", "限额", "解锁", "冻结", "挂失", "信用卡", "银行卡", "虚拟卡", "演示卡"],
+    "R5": ["订阅", "续费", "代扣", "自动扣费", "会员", "解约", "取消订阅"],
+    "R6": ["生日", "礼品", "蛋糕", "鲜花", "预留", "生日预算"],
 }
 
 # 规则路由正则兜底：覆盖口语化表达（如「给李四转一百块」不含「转账」也能路由到 R1）。
@@ -52,6 +60,9 @@ _AGENT_CAPABILITIES: dict[str, str] = {
     "R1": "智能转账：按姓名/手机号/历史备注转账、定时转账、AA 收款、余额查询",
     "R2": "账单分析：记录消费、消费分类统计、异常交易识别、月度/年度账单报告",
     "R3": "理财操作：风险评估、理财产品推荐与对比、申购、赎回、持仓查询",
+    "R4": "卡片管理：虚拟/演示卡申请、额度调整、交易限制与解锁、挂失与冻结",
+    "R5": "订阅/代扣管理：识别订阅扣费、续费提醒、取消订阅/代扣",
+    "R6": "跨场景联动：生日预算预留、定时触发、鲜花与蛋糕礼品下单",
     "common": "通用问答：天气、汇率、新闻、百科、寒暄，以及无法归入上述场景的请求",
 }
 
@@ -92,6 +103,9 @@ class SupervisorAgent:
             "R1": TransferAgent(model_manager=self.model_manager),
             "R2": BillAgent(model_manager=self.model_manager),
             "R3": WealthAgent(model_manager=self.model_manager),
+            "R4": CardAgent(model_manager=self.model_manager),
+            "R5": SubscriptionAgent(model_manager=self.model_manager),
+            "R6": WorkflowAgent(model_manager=self.model_manager),
         }
 
     def register(self, name: str, agent: Any) -> None:
@@ -144,8 +158,7 @@ class SupervisorAgent:
             if name in self.agents or name == "common"
         )
         prompt = (
-            "你是银行智能助理的调度器。请分析用户输入，将其拆分为一个或多个相互独立的子任务，"
-            "并为每个子任务选择唯一负责的执行模块：\n"
+            "可用执行模块：\n"
             f"{capabilities}\n"
             "要求：\n"
             "1. 只输出 JSON 数组，形如 [{\"agent\": \"R1\", \"task\": \"给张三转账100元\"}]，不要输出任何其它文字；\n"
@@ -155,7 +168,13 @@ class SupervisorAgent:
             f"用户输入：{user_input}"
         )
         try:
-            response = self._router_model.chat([{"role": "user", "content": prompt}], None)
+            response = self._router_model.chat(
+                [
+                    {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                None,
+            )
             text = (response["choices"][0]["message"].get("content") or "").strip()
         except Exception:  # noqa: BLE001 - 模型异常时静默回退规则路由
             return None

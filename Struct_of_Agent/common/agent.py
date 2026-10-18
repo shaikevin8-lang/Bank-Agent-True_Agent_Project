@@ -23,10 +23,14 @@ from .config import DeepSeekConfig, load_config
 from .llm import ChatModel, DeepSeekChat, MockChat
 from .middleware.content_moderation import ContentModerationMiddleware
 from .model_manager import RuntimeChatModel, trace_info
+from .prompts import build_system_prompt
 from .tavily_search import tavily_search, to_openai_tool
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
 _MAX_STEPS = 8
+
+# 通用 Agent 的 system prompt（身份 + 通用问答职责 + 共享准则）
+_SYSTEM_PROMPT = build_system_prompt("common")
 
 # 通用搜索工具名（用于回执标记与追踪）
 _SEARCH_TOOL_NAME = "tavily_search"
@@ -112,7 +116,7 @@ def _agent_node(state: CommonState, model: ChatModel, tool_schemas: list[dict[st
     Returns:
         更新后的状态片段。
     """
-    messages = state.get("messages", [])
+    messages = [{"role": "system", "content": _SYSTEM_PROMPT}] + state.get("messages", [])
     response = model.chat(messages, tool_schemas)
     choice = response["choices"][0]
     message = choice.get("message", {})

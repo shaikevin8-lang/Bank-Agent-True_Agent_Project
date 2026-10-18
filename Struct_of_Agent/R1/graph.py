@@ -25,8 +25,13 @@ from .persistence import BalanceStore
 from .state import TransferState
 from .tools import TOOL_MAP, TRANSFER_TOOL_NAMES, to_openai_tools
 
+from common.prompts import build_system_prompt
+
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
 _MAX_STEPS = 8
+
+# 场景 system prompt（身份 + 转账职责 + 共享准则）
+_SYSTEM_PROMPT = build_system_prompt("R1")
 
 # 缺省付款账户：当转账工具未显式给出 from_account 时，余额校验落到该账户
 DEFAULT_ACCOUNT_ID = "622200001"
@@ -87,7 +92,7 @@ def _agent_node(state: TransferState, model: ChatModel, tool_schemas: list[dict[
     Returns:
         更新后的状态片段。
     """
-    messages = state.get("messages", [])
+    messages = [{"role": "system", "content": _SYSTEM_PROMPT}] + state.get("messages", [])
     response = model.chat(messages, tool_schemas)
     choice = response["choices"][0]
     message = choice.get("message", {})

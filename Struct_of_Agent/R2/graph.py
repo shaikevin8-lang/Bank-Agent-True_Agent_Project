@@ -24,8 +24,13 @@ from .middleware.content_moderation import ContentModerationMiddleware
 from .state import BillState
 from .tools import to_openai_tools
 
+from common.prompts import build_system_prompt
+
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
 _MAX_STEPS = 8
+
+# 场景 system prompt（身份 + 账单分析职责 + 共享准则）
+_SYSTEM_PROMPT = build_system_prompt("R2")
 
 
 def _moderate_node(state: BillState, moderator: ContentModerationMiddleware) -> dict[str, Any]:
@@ -68,7 +73,7 @@ def _agent_node(state: BillState, model: ChatModel, tool_schemas: list[dict[str,
     Returns:
         更新后的状态片段。
     """
-    messages = state.get("messages", [])
+    messages = [{"role": "system", "content": _SYSTEM_PROMPT}] + state.get("messages", [])
     response = model.chat(messages, tool_schemas)
     choice = response["choices"][0]
     message = choice.get("message", {})

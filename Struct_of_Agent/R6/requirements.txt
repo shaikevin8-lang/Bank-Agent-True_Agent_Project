@@ -1,0 +1,8 @@
+# R6 跨场景联动（生日工作流）Agent 运行依赖
+langgraph>=1.2.0
+openai>=1.0.0
+sqlalchemy>=2.0.0
+pydantic>=2.0.0
+httpx>=0.28.0
+fastapi>=0.115.0
+uvicorn>=0.34.0

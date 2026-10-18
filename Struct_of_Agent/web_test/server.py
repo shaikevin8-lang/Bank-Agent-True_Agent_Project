@@ -8,6 +8,9 @@
     - 涉及转账 → R1（智能转账）
     - 涉及账单 → R2（账单分析）
     - 涉及理财 → R3（理财操作：风险评估/产品推荐与对比/一键申购/一键赎回）
+    - 涉及卡片 → R4（卡片管理：申请/额度调整/交易限制/冻结/挂失）
+    - 涉及订阅/代扣 → R5（订阅管理：识别扣费/续费提醒/取消订阅与代扣）
+    - 涉及生日/礼品 → R6（跨场景联动：预算预留/定时触发/鲜花蛋糕下单）
     - 其余（天气/汇率/寒暄等搜索问答）→ common（CommonAgent，走 Tavily 搜索 + LLM）
 
 用户以自然语言输入（如「给张三转账100元」「看看我这个月的消费分类」
@@ -36,12 +39,12 @@
     POST   /api/sessions            新建会话（顺带清理上一个空会话）
     GET    /api/sessions/{id}       单个会话 + 完整对话记录
     PATCH  /api/sessions/{id}       重命名
-    DELETE /api/sessions/{id}       删除（同时清掉 R1/R2 的该会话上下文）
+    DELETE /api/sessions/{id}       删除（同时清掉 R1~R6 的该会话上下文）
 ``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
 ``session_id`` 自动补建，因此首条消息会顺带生成标题。
 
-[持久化数据库] R1 / R2 / R3 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
-文件（``r1.db`` / ``r2.db`` / ``r3.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
+[持久化数据库] R1 / R2 / R3 / R4 / R5 / R6 / 会话侧边栏的数据统一落在 ``web_test/data/`` 下的 SQLite
+文件（``r1.db`` / ``r2.db`` / ``r3.db`` / ``r4.db`` / ``r5.db`` / ``r6.db`` / ``web_sessions.db``），**服务重启后历史仍在**。
 数据目录可用环境变量 ``BANK_AGENT_DATA_DIR`` 覆盖（测试指向临时目录）。
 接入真实数据库时，将 :func:`_build_supervisor` 中的 ``db_url`` 替换为 PostgreSQL
 连接串即可。演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账与申赎。
@@ -78,6 +81,12 @@ from R2 import BillAgent, TransactionStore
 from R2.persistence import ConversationStore as R2ConversationStore
 from R3 import WealthAgent, WealthStore
 from R3.persistence import ConversationStore as R3ConversationStore
+from R4 import CardAgent, CardStore
+from R4.persistence import ConversationStore as R4ConversationStore
+from R5 import SubscriptionAgent, SubscriptionStore
+from R5.persistence import ConversationStore as R5ConversationStore
+from R6 import WorkflowAgent, WorkflowStore
+from R6.persistence import ConversationStore as R6ConversationStore
 from supervisor import SupervisorAgent
 from web_test.session_store import (
     ChatSessionStore,
@@ -99,7 +108,7 @@ R3_DEFAULT_BALANCE_FEN = 10_000_000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-17.wealth-r3"
+API_VERSION = "2026-10-18.all-r6"
 API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
@@ -110,10 +119,10 @@ BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口�
 
 
 def _build_supervisor() -> SupervisorAgent:
-    """构造总调度器，R1/R2/R3 均接入持久化 SQLite 数据库与运行时模型配置。
+    """构造总调度器，R1~R6 均接入持久化 SQLite 数据库与运行时模型配置。
 
     Returns:
-        已装配 R1/R2/R3 子 Agent 的 SupervisorAgent 实例。
+        已装配 R1~R6 子 Agent 的 SupervisorAgent 实例。
     """
     data_dir = resolve_data_dir()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
@@ -136,12 +145,31 @@ def _build_supervisor() -> SupervisorAgent:
     r3_conv = R3ConversationStore(db_url=r3_db)
     r3_store.ensure_account(DEFAULT_ACCOUNT_ID, R3_DEFAULT_BALANCE_FEN)
 
+    # R4：卡片 + 操作回执 + 会话同库；演示卡片在 CardStore 初始化时自动播种
+    r4_db = sqlite_url(data_dir / "r4.db")
+    r4_store = CardStore(db_url=r4_db)
+    r4_conv = R4ConversationStore(db_url=r4_db)
+
+    # R5：订阅/代扣 + 提醒 + 操作回执 + 会话同库；演示订阅在 SubscriptionStore 初始化时自动播种
+    r5_db = sqlite_url(data_dir / "r5.db")
+    r5_store = SubscriptionStore(db_url=r5_db)
+    r5_conv = R5ConversationStore(db_url=r5_db)
+
+    # R6：生日工作流 + 预算预留 + 礼品订单 + 账户余额 + 会话同库；
+    # 预算演示账户余额在 WorkflowStore 初始化时自动播种
+    r6_db = sqlite_url(data_dir / "r6.db")
+    r6_store = WorkflowStore(db_url=r6_db)
+    r6_conv = R6ConversationStore(db_url=r6_db)
+
     # 传「获取管理器的函数」而不是管理器实例，使 Agent 每次调用时惰性解析，
     # 避免导入期绑定单例、与设置路由解析到的实例不一致（陈旧引用缺陷）。
     agents = {
         "R1": TransferAgent(store=r1_conv, balance_store=r1_balance, model_manager=model_manager),
         "R2": BillAgent(store=r2_store, conversation_store=r2_conv, model_manager=model_manager),
         "R3": WealthAgent(store=r3_store, conversation_store=r3_conv, model_manager=model_manager),
+        "R4": CardAgent(store=r4_store, conversation_store=r4_conv, model_manager=model_manager),
+        "R5": SubscriptionAgent(store=r5_store, conversation_store=r5_conv, model_manager=model_manager),
+        "R6": WorkflowAgent(store=r6_store, conversation_store=r6_conv, model_manager=model_manager),
     }
     return SupervisorAgent(agents=agents, model_manager=model_manager)
 
@@ -433,10 +461,10 @@ def _record_turn(session_id: str, user_message: str, result: dict[str, Any]) -> 
 
 
 def _clear_agent_context(session_id: str) -> None:
-    """删除会话时一并清掉 R1/R2/R3 中该会话的多轮上下文。
+    """删除会话时一并清掉 R1~R6 中该会话的多轮上下文。
 
     侧边栏删掉的会话不应在子 Agent 里留下"记忆"（否则同一 session_id 再次出现时
-    会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2/R3 的在
+    会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2/R3/R4/R5/R6 的在
     ``agent.conversation_store``，这里按鸭子类型逐个尝试，清理失败只告警。
 
     Args:

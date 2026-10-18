@@ -502,7 +502,7 @@
     <div class="logo">银</div>
     <div>
       <h1>银行智能 Agent 测试</h1>
-      <div class="sub">自然语言对话 · 路由到 R1 转账 / R2 账单</div>
+      <div class="sub">自然语言对话 · 路由到 R1 转账 / R2 账单 / R3 理财 / R4 卡片 / R5 订阅 / R6 生日联动</div>
     </div>
     <div class="spacer"></div>
     <span class="mode-badge mode-mock" id="modeBadge" title="当前模型接入模式">
@@ -635,6 +635,11 @@
         <button class="chip" data-text="记录一笔美团外卖午餐消费66元">记录一笔美团外卖午餐消费66元</button>
         <button class="chip" data-text="今天北京天气怎么样">今天北京天气怎么样</button>
         <button class="chip" data-text="帮我检测异常交易">帮我检测异常交易</button>
+        <button class="chip" data-text="帮我申请一张虚拟卡">帮我申请一张虚拟卡</button>
+        <button class="chip" data-text="帮我冻结我的卡片">帮我冻结我的卡片</button>
+        <button class="chip" data-text="识别一下我的订阅扣费">识别一下我的订阅扣费</button>
+        <button class="chip" data-text="帮我取消腾讯视频的自动续费">帮我取消腾讯视频的自动续费</button>
+        <button class="chip" data-text="帮妈妈安排生日礼物，预留1000元预算">帮妈妈安排生日礼物，预留1000元预算</button>
       </div>
       <div class="composer">
         <textarea id="input" rows="1" placeholder="输入你的需求，例如：给李四转账200元"></textarea>
@@ -661,7 +666,7 @@
   // 会话改由服务端管理（见下方「会话侧边栏」一节）：页面只记住「当前会话 ID」，
   // 刷新后自动回到同一个会话；一个会话都没有时，在发出首条消息前自动新建。
 
-  const AGENT_LABEL = { R1: '智能转账', R2: '账单分析', common: '通用搜索' };
+  const AGENT_LABEL = { R1: '智能转账', R2: '账单分析', R3: '理财操作', R4: '卡片管理', R5: '订阅管理', R6: '生日联动', common: '通用搜索' };
 
   /**
    * 安全查表：只认对象自身的键，命不中时返回 fallback。
@@ -1677,9 +1682,13 @@
       '你好，我是银行智能助手。你可以用自然语言告诉我需求，例如：\n' +
       '· 转账：给张三转账100元\n' +
       '· 账单：看看我这个月的消费分类\n' +
+      '· 理财：申购稳健增利90天1000元\n' +
+      '· 卡片：帮我冻结我的卡片\n' +
+      '· 订阅：帮我取消腾讯视频的自动续费\n' +
+      '· 生日联动：帮妈妈安排生日礼物，预留1000元预算\n' +
       '· 搜索：今天北京天气怎么样\n\n' +
-      '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 其他 → 通用搜索）为你处理。\n\n' +
-      '左侧可以新建会话或回到历史会话；点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账与账单分析。');
+      '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 理财 → R3 / 卡片 → R4 / 订阅 → R5 / 生日联动 → R6 / 其他 → 通用搜索）为你处理。\n\n' +
+      '左侧可以新建会话或回到历史会话；点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账、账单、理财、卡片、订阅与生日联动。');
   }
 
   /** 渲染历史消息：复用聊天气泡与元信息样式。 */
