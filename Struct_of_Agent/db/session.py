@@ -202,6 +202,13 @@ def head_revision() -> str:
     if not ALEMBIC_INI.exists():
         raise MigrationStateError(f"缺少 Alembic 配置：{ALEMBIC_INI}")
     config = Config(str(ALEMBIC_INI))
+    # ``alembic.ini`` 里的 script_location / prepend_sys_path 是**相对当前工作目录**
+    # 解析的，而服务可能从任意目录启动（例如 web_test/restart_server.ps1 的工作目录
+    # 是 Struct_of_Agent）。不改写就会抛
+    # ``Path doesn't exist: .../migrations``，表现为对话接口 503。
+    # 这里强制指向仓库内的绝对路径，使启动目录不再影响迁移版本校验。
+    config.set_main_option("script_location", str(REPO_ROOT / "migrations"))
+    config.set_main_option("prepend_sys_path", str(REPO_ROOT / "Struct_of_Agent"))
     script = ScriptDirectory.from_config(config)
     head = script.get_current_head()
     if head is None:

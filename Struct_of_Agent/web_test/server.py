@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -115,7 +116,7 @@ R3_DEFAULT_BALANCE_FEN = 10_000_000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-18.postgres-r6"
+API_VERSION = "2026-10-19.chat-stream-fix"
 API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
@@ -453,7 +454,7 @@ def chat(request: ChatRequest) -> dict:
 
 
 @app.post("/api/chat/stream")
-def chat_stream(request: ChatRequest) -> StreamingResponse:
+def chat_stream(request: ChatRequest) -> Any:
     """流式聊天接口：SSE 格式逐段返回结果，多任务场景先完成的先展示。
 
     与 `/api/chat` 的区别在于：多任务时每个子任务完成后立即推送一段，
@@ -463,15 +464,45 @@ def chat_stream(request: ChatRequest) -> StreamingResponse:
         request: 对话请求（message + session_id）。
 
     Returns:
-        SSE 流式响应。
+        SSE 流式响应；调度器初始化失败时返回 503 统一响应包。
+
+    Note:
+        **必须在返回流之前**通过 :func:`get_supervisor` 解析调度器。此前这里直接
+        引用模块级 ``_supervisor``，而它是惰性创建的：页面只调用流式接口时它一直
+        是 ``None``，生成器一启动就抛 ``AttributeError``。由于响应头已经发出
+        （HTTP 200），浏览器只能看到连接被中断，最终显示一句无从下手的
+        「请求失败：network error」。首次请求即走流式是页面的默认路径，因此
+        这个缺陷会让**所有**对话失败。
     """
+    try:
+        supervisor = get_supervisor()
+    except Exception as error:  # noqa: BLE001 - 初始化失败要给出可读提示而不是断流
+        print(f"[web_test] 对话服务初始化失败：{error!r}")
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=503,
+            content={
+                "ok": False,
+                "message": "对话服务暂不可用：初始化失败，请检查数据库连接与服务日志",
+                "error_code": "CHAT_UNAVAILABLE",
+                "data": None,
+            },
+        )
 
     def event_generator():
-        for chunk in _supervisor.chat_stream(request.message, request.session_id):
-            # done 事件：先落库再推给前端，避免客户端断开导致记录丢失
-            if chunk.get("type") == "done":
-                _record_turn(request.session_id, request.message, chunk.get("result", {}))
-            yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        try:
+            for chunk in supervisor.chat_stream(request.message, request.session_id):
+                # done 事件：先落库再推给前端，避免客户端断开导致记录丢失
+                if chunk.get("type") == "done":
+                    _record_turn(request.session_id, request.message, chunk.get("result", {}))
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        except Exception as error:  # noqa: BLE001 - 响应头已发出，只能以 SSE error 事件收尾
+            # 生成器里抛异常会让 Starlette 直接掐断连接，前端表现为 network error；
+            # 改为推一条 error 事件，前端能显示「执行出错：…」，排障信息也留在日志里。
+            print(f"[web_test] 流式对话异常：{error!r}")
+            traceback.print_exc()
+            payload = {"type": "error", "error": str(error) or type(error).__name__}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

@@ -162,6 +162,16 @@ function jsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body }
 }
 
+/** 构造 SSE 响应，模拟页面发消息时真正调用的 `POST /api/chat/stream`。 */
+function sseResponse(events, status = 200) {
+  const text =
+    events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('') + 'data: [DONE]\n\n'
+  return new Response(text, {
+    status,
+    headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+  })
+}
+
 const ok = (message, data) => jsonResponse({ ok: true, message: message || '', error_code: null, data })
 const fail = (message, errorCode, status) =>
   jsonResponse({ ok: false, message, error_code: errorCode, data: null }, status)
@@ -169,6 +179,23 @@ const fail = (message, errorCode, status) =>
 const CHAT_TRACE = {
   session_id: 's', steps: 1, tool_names: ['transfer_by_name'],
   model_mode: 'model', model_name: 'deepseek-flash', agent: 'R1',
+}
+
+/** 一次对话的完整 SSE 事件序列（plan → token → task_done → done）。 */
+function chatStreamEvents(message, trace, reply) {
+  return [
+    { type: 'plan', plan: [{ agent: 'R1', task: message }], router: 'llm' },
+    { type: 'task_start', index: 0, total: 1, agent: 'R1', task: message },
+    { type: 'token', index: 0, content: reply },
+    {
+      type: 'task_done', index: 0, total: 1, agent: 'R1',
+      result: { reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace },
+    },
+    {
+      type: 'done',
+      result: { reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace },
+    },
+  ]
 }
 
 async function stubFetch(url, options = {}) {
@@ -203,11 +230,15 @@ async function stubFetch(url, options = {}) {
     }
     return ok('', { session: { ...session }, messages: (backend.messages[id] || []).slice() })
   }
-  if (url === '/api/chat') {
+  if (url === '/api/chat/stream' || url === '/api/chat') {
     appendMessage(body.session_id, 'user', body.message)
     appendMessage(body.session_id, 'assistant', '好的，已为您处理。', { agent: 'R1', model_mode: 'model', model_name: 'deepseek-flash', tools: ['transfer_by_name'] })
+    const reply = '好的，已为您处理。'
+    if (url === '/api/chat/stream') {
+      return sseResponse(chatStreamEvents(body.message, CHAT_TRACE, reply))
+    }
     return jsonResponse({
-      reply: '好的，已为您处理。', blocked: false, moderation: {}, tasks: [], agent: 'R1', trace: CHAT_TRACE,
+      reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace: CHAT_TRACE,
     })
   }
   throw new Error('未打桩的请求: ' + method + ' ' + url)
@@ -391,7 +422,7 @@ section('发送消息：复用当前会话并自动生成标题')
   click(w, $(w, 'send'))
   await settle(80)
 
-  const chatCall = calls.filter((c) => c.url === '/api/chat').pop()
+  const chatCall = calls.filter((c) => c.url === '/api/chat/stream').pop()
   check('发出了对话请求', !!chatCall)
   check('对话请求复用了当前会话 ID', chatCall && chatCall.body.session_id === sessionId,
     chatCall && chatCall.body)
@@ -416,7 +447,7 @@ section('发送消息：新会话的标题取首条用户消息')
     calls.some((c) => c.url === '/api/sessions' && c.method === 'POST'))
   check('新会话标题取自首条消息', titles(w)[0] === '看看我这个月的消费分类', titles(w))
   check('对话请求带上了新建的会话 ID',
-    calls.filter((c) => c.url === '/api/chat').pop().body.session_id === items(w)[0].dataset.id)
+    calls.filter((c) => c.url === '/api/chat/stream').pop().body.session_id === items(w)[0].dataset.id)
   check('对话区显示该消息', /看看我这个月的消费分类/.test(chatText(w)))
 }
 
@@ -697,7 +728,7 @@ section('竞态：在途对话期间切换会话，回复不能落到别人头�
 
   let releaseChat = null
   const gateFetch = async (url, options) => {
-    if (url === '/api/chat') {
+    if (url === '/api/chat/stream') {
       await new Promise((resolve) => { releaseChat = resolve })
     }
     return stubFetch(url, options)
@@ -784,8 +815,8 @@ section('竞态：新建在途时发送，消息不能被静默丢弃')
   resolvers.splice(0).forEach((resolve) => resolve())
   await settle(80)
 
-  check('发送没有被静默丢弃（/api/chat 被调用）',
-    calls.some((c) => c.url === '/api/chat'), calls.map((c) => c.url).join(','))
+  check('发送没有被静默丢弃（/api/chat/stream 被调用）',
+    calls.some((c) => c.url === '/api/chat/stream'), calls.map((c) => c.url).join(','))
   check('消息出现在对话区', /这条消息不能丢/.test(chatText(w)), chatText(w).slice(0, 80))
   check('新会话被激活', activeId(w) !== null, activeId(w))
 }

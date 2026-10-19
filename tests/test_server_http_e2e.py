@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -161,6 +162,53 @@ def test_chat_uses_the_just_saved_model_over_real_http(
     assert record["authorization"] == f"Bearer {_GOOD_KEY}"
     assert record["path"] == "/v1/chat/completions", "Base URL 与 /chat/completions 拼接错误"
     assert record["body"]["model"] == _MODEL
+
+
+def test_chat_stream_works_on_the_first_request_with_a_saved_model(
+    live_server: httpx.Client, fake_openai: Any
+) -> None:
+    """页面真实路径：保存模型后**第一条**消息走流式接口，必须完整返回。
+
+    回归用户故障：``chat_stream`` 曾直接引用尚未惰性创建的 ``_supervisor``，
+    首个流式请求必然抛 ``AttributeError``，浏览器显示「请求失败：network error」。
+    """
+    state, _base_url = fake_openai
+    saved = live_server.put("/api/settings/llm", json=_llm_payload(fake_openai))
+    assert saved.status_code == 200, saved.text
+    state.reset()
+
+    with live_server.stream(
+        "POST",
+        "/api/chat/stream",
+        json={"message": "你好", "session_id": "e2e-stream-1"},
+    ) as response:
+        assert response.status_code == 200, response.read()
+        body = "".join(response.iter_text())
+
+    events = []
+    for line in body.splitlines():
+        if line.startswith("data: "):
+            raw = line[len("data: ") :]
+            events.append("[DONE]" if raw == "[DONE]" else json.loads(raw))
+
+    assert events, "流式接口返回了空响应体（连接被中断）"
+    assert events[-1] == "[DONE]"
+    types = [event["type"] for event in events if event != "[DONE]"]
+    assert types[:2] == ["plan", "task_start"], types
+    assert types[-1] == "done", types
+
+    done = next(event for event in events if event != "[DONE]" and event["type"] == "done")
+    result = done["result"]
+    assert result["reply"] == "pong"
+    assert result["trace"]["model_mode"] == "model"
+    assert result["trace"]["model_name"] == _MODEL
+
+    # 流式路径同样真的打到了页面配置的上游
+    chat_requests = [
+        record for record in state.requests if record["path"].endswith("/chat/completions")
+    ]
+    assert chat_requests, f"配置的模型未被真正调用：{state.requests!r}"
+    assert chat_requests[0]["authorization"] == f"Bearer {_GOOD_KEY}"
 
 
 # ---------------------------------------------------------------------------

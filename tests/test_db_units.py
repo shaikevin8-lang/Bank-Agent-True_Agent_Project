@@ -799,3 +799,23 @@ def test_to_yuan_rejects_oversized_amount(huge):
     """分金额过大时同样转成 AmountError，调用方只需捕获一种异常。"""
     with pytest.raises(money.AmountError, match="超出"):
         money.to_yuan(huge)
+
+
+# ---------------------------------------------------------------------------
+# 回归：Alembic 迁移脚本定位不能依赖当前工作目录
+# ---------------------------------------------------------------------------
+
+
+def test_head_revision_works_from_any_working_directory(tmp_path, monkeypatch):
+    """从任意工作目录都能解析迁移脚本。
+
+    背景（真实故障）：``web_test/restart_server.ps1`` 以 ``Struct_of_Agent`` 为工作
+    目录启动服务，而 ``alembic.ini`` 的 ``script_location = migrations`` 是相对
+    工作目录解析的，于是 ``head_revision()`` 抛
+    ``Path doesn't exist: .../Struct_of_Agent/migrations``，首个对话请求直接 503。
+    """
+    monkeypatch.chdir(tmp_path)
+
+    head = session.head_revision()
+
+    assert head and re.fullmatch(r"[0-9A-Za-z_]+", head), head

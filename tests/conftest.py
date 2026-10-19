@@ -143,6 +143,11 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
 
+        # 流式请求：按 OpenAI SSE 协议逐段下发，覆盖 Agent.chat_stream 的真实链路
+        if body.get("stream"):
+            self._send_stream(body.get("model", "fake-model"))
+            return
+
         message: dict[str, Any] = {"role": "assistant"}
         if not self.state.omit_content:
             message["content"] = self.state.content
@@ -158,6 +163,46 @@ class _Handler(BaseHTTPRequestHandler):
                 "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
             },
         )
+
+    def _send_stream(self, model: str) -> None:
+        """以 SSE 形式返回一段增量回复（``stream=true`` 时使用）。
+
+        Args:
+            model: 请求体里的模型名，回显在 chunk 中（与真实网关一致）。
+        """
+        chunks: list[dict[str, Any]] = []
+        if not self.state.omit_content:
+            chunks.append(
+                {
+                    "id": "chatcmpl-fake",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": self.state.content},
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+            )
+        chunks.append(
+            {
+                "id": "chatcmpl-fake",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": model,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+        )
+        payload = "".join(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks)
+        data = (payload + "data: [DONE]\n\n").encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
 
     def _send(self, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")

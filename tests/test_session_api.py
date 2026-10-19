@@ -458,7 +458,7 @@ def test_delete_endpoint_removes_the_session(client: TestClient) -> None:
 def test_delete_endpoint_clears_the_agent_context(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """删掉的会话不应在 R1/R2 里留下多轮上下文。"""
+    """删掉的会话不应在 R1~R6 里留下多轮上下文。"""
     recorded: list[str] = []
     for agent in server.get_supervisor().agents.values():
         for attribute in ("store", "conversation_store"):
@@ -473,7 +473,15 @@ def test_delete_endpoint_clears_the_agent_context(
     session_id = client.post("/api/sessions", json={}).json()["data"]["session"]["id"]
     client.delete(f"/api/sessions/{session_id}")
 
-    assert sorted(recorded) == ["BillAgent", "TransferAgent"]
+    # R1~R6 都已实现 clear_session：删除会话必须逐个清理，漏一个就会「复活」历史
+    assert sorted(recorded) == [
+        "BillAgent",
+        "CardAgent",
+        "SubscriptionAgent",
+        "TransferAgent",
+        "WealthAgent",
+        "WorkflowAgent",
+    ]
 
 
 @pytest.mark.parametrize("method", ["get", "delete"])

@@ -161,6 +161,39 @@ function jsonResponse(body, status = 200) {
   }
 }
 
+/**
+ * 构造一条 SSE 响应，模拟 `POST /api/chat/stream`。
+ *
+ * 页面在发消息时走流式接口（`res.body.getReader()` + `TextDecoder`），
+ * 只用 `jsonResponse` 打桩会让聊天链路直接失败。这里用真实 `Response`
+ * 提供可读的 body 流，事件格式与后端一致。
+ */
+function sseResponse(events, status = 200) {
+  const text =
+    events.map((event) => 'data: ' + JSON.stringify(event) + '\n\n').join('') + 'data: [DONE]\n\n'
+  return new Response(text, {
+    status,
+    headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+  })
+}
+
+/** 一次对话的完整 SSE 事件序列（plan → token → task_done → done）。 */
+function chatStreamEvents(message, trace, reply) {
+  return [
+    { type: 'plan', plan: [{ agent: 'R1', task: message }], router: 'llm' },
+    { type: 'task_start', index: 0, total: 1, agent: 'R1', task: message },
+    { type: 'token', index: 0, content: reply },
+    {
+      type: 'task_done', index: 0, total: 1, agent: 'R1',
+      result: { reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace },
+    },
+    {
+      type: 'done',
+      result: { reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace },
+    },
+  ]
+}
+
 async function stubFetch(url, options = {}) {
   const method = options.method || 'GET'
   const body = options.body ? JSON.parse(options.body) : undefined
@@ -218,16 +251,20 @@ async function stubFetch(url, options = {}) {
   }
   const sessionReply = await sessionFallback(url, options)
   if (sessionReply) return sessionReply
-  if (url === '/api/chat') {
+  if (url === '/api/chat/stream' || url === '/api/chat') {
     const session = findStubSession(body && body.session_id)
     const trace = { session_id: 's', steps: 1, tool_names: ['transfer_by_name'], model_mode: 'model', model_name: 'deepseek-flash', agent: 'R1' }
+    const reply = '好的，已为您处理。'
     if (session) {
       touchStubSession(session, 'user', body.message)
-      touchStubSession(session, 'assistant', '好的，已为您处理。', 'R1', trace)
+      touchStubSession(session, 'assistant', reply, 'R1', trace)
+    }
+    // 页面默认走流式接口；保留非流式分支，便于兼容旧调用点
+    if (url === '/api/chat/stream') {
+      return sseResponse(chatStreamEvents(body.message, trace, reply))
     }
     return jsonResponse({
-      reply: '好的，已为您处理。', blocked: false, moderation: {}, tasks: [], agent: 'R1',
-      trace,
+      reply, blocked: false, moderation: {}, tasks: [], agent: 'R1', trace,
     })
   }
   throw new Error('未打桩的请求: ' + method + ' ' + url)
