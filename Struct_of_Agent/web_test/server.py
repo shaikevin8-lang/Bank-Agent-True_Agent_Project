@@ -43,16 +43,17 @@
 ``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
 ``session_id`` 自动补建，因此首条消息会顺带生成标题。
 
-[持久化数据库] R1 / R2 / 会话侧边栏统一使用一个 PostgreSQL（``app`` / ``audit``
+[持久化数据库] R1~R6 与会话侧边栏统一使用一个 PostgreSQL（``app`` / ``audit``
 schema），连接串来自 ``BANK_AGENT_DB_URL``（或 ``DATABASE_URL``）。应用启动只
-校验 Alembic 版本，不自动建表；演示租户/账户用幂等 seed 补齐，重启不会抹掉
-已发生的余额变化。Web、R1、R2 共用 ``app.conversation_session`` /
-``app.conversation_message``。
+校验 Alembic 版本，不自动建表；演示租户/账户与 R3~R6 场景数据用幂等 seed 补齐，
+重启不会抹掉已发生的余额、状态与预留变化。Web、R1~R6 共用
+``app.conversation_session`` / ``app.conversation_message``（按
+``metadata.origin`` 区分来源）。
 
-R3 / R4 / R5 / R6 仍沿用 ``web_test/data/`` 下的本地 SQLite
-（``r3.db`` / ``r4.db`` / ``r5.db`` / ``r6.db``），**服务重启后历史仍在**；
-数据目录可用环境变量 ``BANK_AGENT_DATA_DIR`` 覆盖（测试指向临时目录）。
-演示账户余额只在账户不存在时播种，重启不会抹掉已发生的转账与申赎。
+R3 / R4 / R5 / R6 与 Web / R1 / R2 落到同一个 PostgreSQL：理财子账户、卡片、
+订阅、生日工作流等场景表位于 ``app`` schema，会话消息统一落
+``app.conversation_message``。场景演示数据（理财产品、演示卡、演示订阅、生日
+预算账户）由幂等 seed 补齐，重启不会覆盖演示过程中产生的变更。
 
 启动方式（在项目根目录执行）：
     py web_test/server.py
@@ -83,6 +84,7 @@ from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
 from db.repository import Database
 from db.seed import seed as seed_demo_data
+from db.seed_scenarios import seed as seed_scenario_data
 from db.session import get_database_url, safe_database_url, session_scope
 from R1 import BalanceStore, TransferAgent
 from R1.persistence import ConversationStore as R1ConversationStore
@@ -101,22 +103,18 @@ from web_test.session_store import (
     ChatSessionStore,
     SessionNotFoundError,
     is_valid_session_id,
-    resolve_data_dir,
 )
 
 # 默认演示账户与初始余额（单位：分，¥1000.00），便于转账功能直接演示
 DEFAULT_ACCOUNT_ID = "622200001"
 DEFAULT_BALANCE_FEN = 100000
-# R3 理财演示账户初始余额（单位：分，¥100,000.00）：
-# 覆盖全部演示产品的起购金额（¥1~¥10,000），保证申购/赎回流程可完整演示
-R3_DEFAULT_BALANCE_FEN = 10_000_000
 
 # 后端版本 / 能力握手（版本错配排障用）：
 # 页面 index.html 每次请求都从磁盘读取（FileResponse），但路由是在进程启动时绑定好的。
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-19.chat-stream-fix"
+API_VERSION = "2026-10-27.unified-postgres"
 API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
 
 # 静态页面路径
@@ -149,26 +147,13 @@ def get_database() -> Database:
         database = Database.from_env()
         with session_scope(database.engine) as session:
             seed_demo_data(session)
+            seed_scenario_data(session)
         _database = database
     return _database
 
 
-def _sqlite_url(path: Path) -> str:
-    """把本地文件路径转换为 SQLAlchemy 的 SQLite 连接串。
-
-    仅供尚未迁移到 PostgreSQL 的 R3~R6 场景使用。
-
-    Args:
-        path: 数据库文件路径。
-
-    Returns:
-        形如 ``sqlite:///D:/.../r3.db`` 的连接串。
-    """
-    return f"sqlite:///{path}"
-
-
 def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
-    """构造总调度器：R1/R2 走 PostgreSQL，R3~R6 沿用本地 SQLite。
+    """构造总调度器：R1~R6 全部走统一的 PostgreSQL。
 
     Args:
         database: 共享数据库上下文；缺省使用进程级上下文。
@@ -177,8 +162,6 @@ def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
         已装配 R1~R6 子 Agent 的 SupervisorAgent 实例。
     """
     database = database or get_database()
-    # R3~R6 尚未迁移到 PostgreSQL，仍使用 web_test/data/ 下的本地 SQLite 文件。
-    data_dir = resolve_data_dir()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
 
     # R1：会话 + 任务 + 余额；仅在账户不存在时播种演示余额。
@@ -190,28 +173,21 @@ def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
     r2_store = TransactionStore(database=database)
     r2_conv = R2ConversationStore(database=database)
 
-    # R3：测评 + 产品 + 持仓 + 订单 + 余额 + 会话同库；
-    # 仅在账户不存在时播种演示余额（重启不抹掉已发生的申赎）
-    r3_db = _sqlite_url(data_dir / "r3.db")
-    r3_store = WealthStore(db_url=r3_db)
-    r3_conv = R3ConversationStore(db_url=r3_db)
-    r3_store.ensure_account(DEFAULT_ACCOUNT_ID, R3_DEFAULT_BALANCE_FEN)
+    # R3：测评 + 产品 + 持仓 + 订单 + 理财子账户余额 + 会话同库。
+    r3_store = WealthStore(database=database)
+    r3_conv = R3ConversationStore(database=database)
 
-    # R4：卡片 + 操作回执 + 会话同库；演示卡片在 CardStore 初始化时自动播种
-    r4_db = _sqlite_url(data_dir / "r4.db")
-    r4_store = CardStore(db_url=r4_db)
-    r4_conv = R4ConversationStore(db_url=r4_db)
+    # R4：卡片 + 操作回执 + 会话同库；演示卡由幂等 seed 补齐。
+    r4_store = CardStore(database=database)
+    r4_conv = R4ConversationStore(database=database)
 
-    # R5：订阅/代扣 + 提醒 + 操作回执 + 会话同库；演示订阅在 SubscriptionStore 初始化时自动播种
-    r5_db = _sqlite_url(data_dir / "r5.db")
-    r5_store = SubscriptionStore(db_url=r5_db)
-    r5_conv = R5ConversationStore(db_url=r5_db)
+    # R5：订阅/代扣 + 提醒 + 操作回执 + 会话同库；演示订阅由幂等 seed 补齐。
+    r5_store = SubscriptionStore(database=database)
+    r5_conv = R5ConversationStore(database=database)
 
-    # R6：生日工作流 + 预算预留 + 礼品订单 + 账户余额 + 会话同库；
-    # 预算演示账户余额在 WorkflowStore 初始化时自动播种
-    r6_db = _sqlite_url(data_dir / "r6.db")
-    r6_store = WorkflowStore(db_url=r6_db)
-    r6_conv = R6ConversationStore(db_url=r6_db)
+    # R6：生日工作流 + 预算预留 + 礼品订单 + 会话同库；预算账户由幂等 seed 补齐。
+    r6_store = WorkflowStore(database=database)
+    r6_conv = R6ConversationStore(database=database)
 
     # 传「获取管理器的函数」而不是管理器实例，使 Agent 每次调用时惰性解析，
     # 避免导入期绑定单例、与设置路由解析到的实例不一致（陈旧引用缺陷）。

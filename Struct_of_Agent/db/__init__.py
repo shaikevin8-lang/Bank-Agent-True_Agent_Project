@@ -8,6 +8,7 @@
     - 审计追加、会话消息顺序号等数据库规则（:mod:`db.audit`、:mod:`db.conversation`）
     - 余额原子变更与写入口幂等（:mod:`db.ledger`、:mod:`db.idempotency`）
     - Web/R1/R2 共用仓储（:mod:`db.repository`）
+    - R1 明细与 R3~R6 场景表 ORM（:mod:`db.models_ext`）
     - 任务回执状态映射（:mod:`db.task_status`）
     - 演示 seed / reset / 旧 SQLite 导入（:mod:`db.seed`、:mod:`db.reset`、:mod:`db.sqlite_import`）
     - 运维命令行（:mod:`db.cli`）

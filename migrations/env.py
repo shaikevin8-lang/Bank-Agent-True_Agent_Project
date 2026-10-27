@@ -27,6 +27,7 @@ if str(_STRUCT_ROOT) not in sys.path:
 from db.base import AUDIT_SCHEMA, Base  # noqa: E402  (必须先补 sys.path)
 from db.session import get_database_url, normalize_database_url  # noqa: E402
 from db import models  # noqa: E402,F401  (导入以注册全部表)
+from db import models_ext  # noqa: E402,F401  (注册 R1 明细与 R3~R6 场景表)
 
 config = context.config
 
