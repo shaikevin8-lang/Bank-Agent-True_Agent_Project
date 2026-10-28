@@ -717,10 +717,155 @@
   .hitl-card.state-approved { border-color: var(--ok-border); background: var(--ok-bg); }
   .hitl-card.state-rejected,
   .hitl-card.state-expired { border-color: var(--warn-border); background: var(--warn-bg); }
+
+  /* ==================== 登录 / 注册门禁 ====================
+     未登录时全屏显示；层级压在所有浮层之上（设置面板 50 / 复核抽屉 57 /
+     时钟面板 58 / 自绘确认框 60），保证门禁期间不会漏出主界面。
+     配色一律取上面的 CSS 变量，不引入外部字体 / 图片 / 图标。 */
+  .auth-gate {
+    position: fixed; inset: 0; z-index: 90;
+    display: grid; place-items: center;
+    padding: 24px 16px;
+    background: var(--bg);
+  }
+  /* 同 .settings-overlay：作者样式里的 display:grid 会压过 UA 的 [hidden] */
+  .auth-gate[hidden] { display: none; }
+  .auth-card {
+    width: 100%; max-width: 380px;
+    padding: 26px 24px 22px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); box-shadow: var(--shadow-float);
+  }
+  .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+  .auth-brand .logo {
+    width: 34px; height: 34px; border-radius: 9px; flex: 0 0 auto;
+    background: linear-gradient(135deg, #2563eb, #7c3aed);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 16px;
+  }
+  .auth-brand h2 { font-size: 16px; font-weight: 600; color: var(--text); }
+  .auth-tabs {
+    display: flex; gap: 6px; padding: 4px; margin-bottom: 16px;
+    border: 1px solid var(--border); border-radius: 10px; background: var(--bg);
+  }
+  .auth-tab {
+    flex: 1; padding: 8px 10px; border: 0; border-radius: 8px;
+    font-size: 13px; font-family: inherit; cursor: pointer;
+    background: transparent; color: var(--text-sub);
+  }
+  .auth-tab:hover { color: var(--text); }
+  .auth-tab.active {
+    background: var(--panel); color: var(--brand); font-weight: 600;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+  }
+  .auth-tab:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .auth-field { display: block; margin-bottom: 12px; }
+  .auth-field[hidden] { display: none; }
+  .auth-field > span {
+    display: block; margin-bottom: 5px;
+    font-size: 12px; color: var(--text-sub);
+  }
+  .auth-field input {
+    display: block; width: 100%; padding: 9px 11px;
+    font-size: 13px; font-family: inherit; color: var(--text);
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 9px; outline: none;
+  }
+  .auth-field input:focus {
+    border-color: var(--brand); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  }
+  .auth-error {
+    margin-bottom: 12px; padding: 9px 11px; border-radius: 9px;
+    background: var(--bad-bg); border: 1px solid var(--bad-border); color: var(--bad-text);
+    font-size: 12.5px; line-height: 1.6; word-break: break-word;
+  }
+  .auth-error[hidden] { display: none; }
+  .auth-submit {
+    display: block; width: 100%; padding: 10px 14px; margin-top: 2px;
+    font-size: 13.5px; font-family: inherit; font-weight: 600; cursor: pointer;
+    color: #fff; background: var(--brand); border: 1px solid var(--brand);
+    border-radius: 9px; transition: all .15s;
+  }
+  .auth-submit:hover:not(:disabled) { background: var(--brand-hover); border-color: var(--brand-hover); }
+  .auth-submit:disabled { opacity: .6; cursor: not-allowed; }
+  .auth-hint {
+    margin-top: 12px; font-size: 11.5px; line-height: 1.7; color: var(--text-sub);
+    word-break: break-word;
+  }
+  .auth-hint[hidden] { display: none; }
+  /* 顶栏账号名 / 退出登录：与 #roleSelect、#hitlEntry 同款胶囊小控件 */
+  .auth-user {
+    max-width: 160px; padding: 6px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: 12px; line-height: 1; color: var(--text-sub);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .auth-user[hidden] { display: none; }
+  .auth-logout {
+    padding: 6px 11px; border-radius: 999px; white-space: nowrap;
+    border: 1px solid var(--border); background: var(--panel);
+    font-size: 12px; line-height: 1; font-family: inherit;
+    color: var(--text-sub); cursor: pointer;
+  }
+  .auth-logout:hover:not(:disabled) { border-color: var(--brand); color: var(--brand); }
+  .auth-logout:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .auth-logout:disabled { opacity: .6; cursor: not-allowed; }
+  .auth-logout[hidden] { display: none; }
+  /* 未登录时隐藏主界面：.app{display:flex} 是作者样式，会压过 UA 的 [hidden] 规则 */
+  .app[hidden] { display: none; }
+  /* 窄屏：卡片贴边留白，不再固定 380px */
+  @media (max-width: 640px) {
+    .auth-gate { padding: 16px 10px; }
+    .auth-card { width: 92vw; max-width: none; padding: 22px 18px 18px; }
+  }
 </style>
 </head>
 <body>
-<div class="app" id="app">
+<!-- ==================== 登录 / 注册门禁 ====================
+     默认就显示：不管 /api/auth/me 是 401 还是一直没回答，用户看到的都是这张卡片，
+     而不是白屏。门禁刻意做成不可关闭（没有关闭按钮，也不响应 Esc），
+     只有在 /api/auth/me 或登录接口返回成功后 startApp() 才会把 #app 露出来。 -->
+<div class="auth-gate" id="authGate" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="logo" aria-hidden="true">银</div>
+      <h2 id="authTitle">银行智能 Agent 测试</h2>
+    </div>
+    <!-- 页签用标准的 tablist/tab 语义，键盘 Tab 可直接在「登录 / 注册」之间移动 -->
+    <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+      <button type="button" class="auth-tab active" id="authTabLogin"
+              role="tab" aria-selected="true" aria-controls="authForm">登录</button>
+      <button type="button" class="auth-tab" id="authTabRegister"
+              role="tab" aria-selected="false" aria-controls="authForm">注册</button>
+    </div>
+    <!-- novalidate：校验文案统一由 #authError 在页面里说，不用浏览器自带的浮层提示 -->
+    <form id="authForm" novalidate>
+      <label class="auth-field" for="authUsername">
+        <span>账号名</span>
+        <input type="text" id="authUsername" name="username" autocomplete="username"
+               maxlength="32" placeholder="3–32 个字符，不含空格" spellcheck="false">
+      </label>
+      <label class="auth-field" for="authPassword">
+        <span>密码</span>
+        <input type="password" id="authPassword" name="password" autocomplete="current-password"
+               maxlength="64" placeholder="6–64 个字符">
+      </label>
+      <!-- 确认密码：只在注册模式下出现（切换页签时由 setAuthMode 控制 hidden） -->
+      <label class="auth-field" for="authConfirmPassword" id="authConfirmField" hidden>
+        <span>确认密码</span>
+        <input type="password" id="authConfirmPassword" name="confirm_password" autocomplete="new-password"
+               maxlength="64" placeholder="再输入一次密码">
+      </label>
+      <!-- 出错位：role=alert 让屏幕阅读器即时播报，默认隐藏 -->
+      <div class="auth-error" id="authError" role="alert" hidden></div>
+      <button type="submit" class="auth-submit" id="authSubmit">登录</button>
+      <div class="auth-hint" id="authHint">还没有账号？切换到上方「注册」页签，填账号名与密码即可创建。</div>
+    </form>
+  </div>
+</div>
+
+<!-- 未登录时整块主界面隐藏（样式表里有 .app[hidden]{display:none} 兜住 .app{display:flex}） -->
+<div class="app" id="app" hidden>
   <!-- ==================== 左侧：会话侧边栏 ==================== -->
   <aside class="sidebar" id="sidebar" aria-label="会话侧边栏">
     <div class="sidebar-head">
@@ -779,6 +924,9 @@
       <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
         人工复核<span class="count" id="hitlCount" hidden>0</span>
       </button>
+      <!-- 当前登录账号 + 退出登录：未登录时都隐藏（由 applySessionUser 控制） -->
+      <span class="auth-user" id="authUser" aria-label="当前登录账号" title="当前登录账号" hidden></span>
+      <button type="button" class="auth-logout" id="logoutBtn" title="退出当前账号" hidden>退出登录</button>
       <button class="icon-btn" id="settingsBtn" title="模型接入设置" aria-label="模型接入设置">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round">
@@ -1082,13 +1230,17 @@
   }
 
   /**
-   * 统一调用后端 /api/settings/*，返回响应包（含 ok / message / error_code / data）。
+   * 统一调用后端 /api/*（设置面板 / 会话 / 登录注册共用），返回响应包
+   * （含 ok / message / error_code / data）。
    * 保证不会挂起：AbortController + 计时器兜底，超时后一定在 REQUEST_TIMEOUTS 内返回。
+   * options.timeoutMs：覆盖默认超时（登录注册用固定 8s，不跟请求体里的「超时（秒）」走）。
+   * 请求一律带 credentials:'same-origin'：登录态是 Cookie，跨源也不会误发凭据。
    */
-  async function callApi(path, method, body) {
+  async function callApi(path, method, body, options) {
     const verb = (method || 'GET').toUpperCase();
+    const opts = options || {};
     // 探测类请求（POST /test、PUT 保存）要跟着请求体里的「超时（秒）」放大，见 probeTimeoutMs
-    const timeoutMs = (verb === 'POST' || verb === 'PUT') ? probeTimeoutMs(body) : REQUEST_TIMEOUTS.snapshot;
+    const timeoutMs = opts.timeoutMs || ((verb === 'POST' || verb === 'PUT') ? probeTimeoutMs(body) : REQUEST_TIMEOUTS.snapshot);
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
 
     let timer = null;
@@ -1112,6 +1264,7 @@
             method: verb,
             headers: apiHeaders(body !== undefined),
             body: body === undefined ? undefined : JSON.stringify(body),
+            credentials: 'same-origin',
             signal: controller ? controller.signal : undefined
           });
           return { res: res };
@@ -3616,24 +3769,353 @@
   }
   if (newSessionBtn) newSessionBtn.addEventListener('click', function () { createSession(); });
 
+  /* ==================== 登录 / 注册门禁 ====================
+     启动顺序：bootstrapAuth() 先问一次 GET /api/auth/me ——
+     已登录（200 且 body.ok）就 startApp() 拉起主界面；401 或者网络异常都停在
+     #authGate 让人登录。门禁不可关闭（没有关闭按钮，也不响应 Esc）：
+     不登录就不进主界面，也不发任何业务请求。 */
+
+  const authGateEl = $('authGate');
+  const appEl = $('app');
+  const authFormEl = $('authForm');
+  const authTabLoginEl = $('authTabLogin');
+  const authTabRegisterEl = $('authTabRegister');
+  const authUsernameEl = $('authUsername');
+  const authPasswordEl = $('authPassword');
+  const authConfirmFieldEl = $('authConfirmField');
+  const authConfirmPasswordEl = $('authConfirmPassword');
+  const authErrorEl = $('authError');
+  const authSubmitEl = $('authSubmit');
+  const authHintEl = $('authHint');
+  const authUserEl = $('authUser');
+  const logoutBtnEl = $('logoutBtn');
+
+  /** 本地校验文案：与后端契约（docs/_work/登录注册-前后端契约.md）一致，能本地拦下的错误就不发请求。 */
+  const AUTH_MSG = {
+    USERNAME_REQUIRED: '请输入账号名',
+    USERNAME_INVALID: '账号名需为 3–32 个字符，且不能包含空格',
+    PASSWORD_REQUIRED: '请输入密码',
+    PASSWORD_INVALID: '密码长度需为 6–64 个字符',
+    PASSWORD_MISMATCH: '两次输入的密码不一致',
+    REGISTER_DONE: '注册成功，请使用该账号登录',
+    LOGIN_FAILED: '登录失败，请稍后重试',
+    REGISTER_FAILED: '注册失败，请稍后重试',
+    LOGGED_OUT: '已退出登录，请重新登录。'
+  };
+  /** 登录页签的常驻辅助文案（注册成功 / 退出登录后会临时换成别的提示）。 */
+  const AUTH_HINT_LOGIN = '还没有账号？切换到上方「注册」页签，填账号名与密码即可创建。';
+
+  let authMode = 'login';       // 'login' | 'register'
+  let authBusy = false;         // 提交中：禁用按钮，防重复提交
+  let sessionUser = null;       // 当前登录用户（后端返回的 user 对象）
+  let started = false;          // 主界面只启动一次
+  let startupWired = false;     // 顶栏时钟 / 人工复核的事件绑定只做一次
+
+  /** 账号名：trim 后 3–32 个字符，且不含空白（大小写去重由后端判定）。 */
+  function validateUsername(value) {
+    const name = String(value === undefined || value === null ? '' : value).trim();
+    if (!name) return AUTH_MSG.USERNAME_REQUIRED;
+    if (name.length < 3 || name.length > 32) return AUTH_MSG.USERNAME_INVALID;
+    if (/\s/.test(name)) return AUTH_MSG.USERNAME_INVALID;
+    return '';
+  }
+
+  /** 密码：6–64 个字符；首尾空格算密码的一部分（不 trim），但只由空白组成不行。 */
+  function validatePassword(value) {
+    const pwd = String(value === undefined || value === null ? '' : value);
+    if (!pwd) return AUTH_MSG.PASSWORD_REQUIRED;
+    if (pwd.length < 6 || pwd.length > 64) return AUTH_MSG.PASSWORD_INVALID;
+    if (!pwd.replace(/\s/g, '')) return AUTH_MSG.PASSWORD_INVALID;
+    return '';
+  }
+
+  /** 门禁内的错误提示位（传空即隐藏）。 */
+  function setAuthError(message) {
+    if (!authErrorEl) return;
+    const text = message === undefined || message === null ? '' : String(message);
+    authErrorEl.textContent = text;
+    authErrorEl.hidden = !text;
+  }
+
+  /** 门禁内的辅助提示（注册成功 / 已退出登录等）。 */
+  function setAuthHint(message) {
+    if (!authHintEl) return;
+    const text = message === undefined || message === null ? '' : String(message);
+    authHintEl.textContent = text;
+    authHintEl.hidden = !text;
+  }
+
+  /** 切换「登录 / 注册」页签：只改可见性与按钮文案，不动已填内容。 */
+  function setAuthMode(mode) {
+    authMode = mode === 'register' ? 'register' : 'login';
+    const isRegister = authMode === 'register';
+    if (authTabLoginEl) {
+      authTabLoginEl.classList.toggle('active', !isRegister);
+      authTabLoginEl.setAttribute('aria-selected', isRegister ? 'false' : 'true');
+    }
+    if (authTabRegisterEl) {
+      authTabRegisterEl.classList.toggle('active', isRegister);
+      authTabRegisterEl.setAttribute('aria-selected', isRegister ? 'true' : 'false');
+    }
+    // 确认密码只在注册模式下出现；切走时顺手清空，避免两个页签之间互相干扰
+    if (authConfirmFieldEl) authConfirmFieldEl.hidden = !isRegister;
+    if (authConfirmPasswordEl && !isRegister) authConfirmPasswordEl.value = '';
+    if (authSubmitEl && !authBusy) authSubmitEl.textContent = isRegister ? '注册' : '登录';
+    setAuthHint(isRegister ? '' : AUTH_HINT_LOGIN);
+    setAuthError('');
+    return authMode;
+  }
+
+  /** 提交中：禁用按钮并把文案换成「登录中…」/「注册中…」。 */
+  function setAuthBusy(busy, mode) {
+    authBusy = !!busy;
+    const isRegister = (mode || authMode) === 'register';
+    if (authSubmitEl) {
+      authSubmitEl.disabled = !!busy;
+      authSubmitEl.textContent = busy
+        ? (isRegister ? '注册中…' : '登录中…')
+        : (isRegister ? '注册' : '登录');
+    }
+  }
+
+  /** 展示门禁（同时藏起主界面）。门禁没有关闭入口，只由登录成功 / 退出登录驱动。 */
+  function showAuthGate(mode) {
+    started = false;
+    if (appEl) appEl.hidden = true;
+    if (authGateEl) authGateEl.hidden = false;
+    setAuthMode(mode || 'login');
+    if (authPasswordEl) authPasswordEl.value = '';
+    if (authConfirmPasswordEl) authConfirmPasswordEl.value = '';
+    setAuthBusy(false, authMode);
+    if (authUsernameEl) { try { authUsernameEl.focus(); } catch (err) { /* 忽略 */ } }
+  }
+
+  /** 把当前登录用户落到内存态与顶栏（#authUser 显示账号名，#logoutBtn 显示）。 */
+  function applySessionUser(user) {
+    sessionUser = user && typeof user === 'object' ? user : null;
+    const username = sessionUser && sessionUser.username ? String(sessionUser.username) : '';
+    if (username) currentOperator = username;
+    if (authUserEl) {
+      authUserEl.textContent = username;
+      authUserEl.hidden = !username;
+      if (username) authUserEl.title = '当前登录账号：' + username;
+      else authUserEl.removeAttribute('title');
+    }
+    if (logoutBtnEl) logoutBtnEl.hidden = !username;
+  }
+
+  /** 退出登录后清空聊天区 DOM 与内存态：会话数据不跨账号留在页面上。 */
+  function clearSessionState() {
+    currentSessionId = null;
+    sessions = [];
+    creatingPromise = null;
+    selectionToken += 1;
+    listToken += 1;
+    renamingId = null;
+    renderPending = false;
+    writeStorage(SESSION_KEY, '');
+    clearChat();
+    const listEl = $('sessionList');
+    if (listEl) listEl.textContent = '';
+    if (alertTimer !== null) { clearTimeout(alertTimer); alertTimer = null; }
+    const alertEl = $('sidebarAlert');
+    if (alertEl) { alertEl.hidden = true; alertEl.textContent = ''; }
+    // 浮层一起收掉：换账号后不该看到上一个账号留下的设置 / 时钟 / 复核队列
+    if (settingsOverlay && !settingsOverlay.hidden) closeSettings();
+    closeClockPanel();
+    closeHitlDrawer();
+    // 顶栏身份一起收掉：#authUser 清空隐藏、#logoutBtn 隐藏
+    applySessionUser(null);
+    currentOperator = 'web-user';
+  }
+
+  /** 认证接口统一走 callApi（复用超时兜底与统一信封），固定 8s 超时。 */
+  function requestAuth(path, body) {
+    return callApi(path, 'POST', body, { timeoutMs: REQUEST_TIMEOUTS.snapshot });
+  }
+
   /**
-   * 页面加载：拉会话列表 → 恢复上次的会话（找不到就取最近一个，一个都没有就显示欢迎语）。
-   * 接口不可用时静默降级为欢迎语，不影响对话框本身可用。
+   * 主界面启动（只跑一次）：原来的启动三步原样搬进来。
+   * 退出登录后 started 会被复位，重新登录时再跑一遍。
    */
-  (async function initSessions() {
-    const list = await loadSessions();
-    if (!list) { showWelcome(); return; }
-    const stored = readStorage(SESSION_KEY);
-    const target = findSession(stored) ? stored : (list.length ? list[0].id : '');
-    if (target) await activateSession(target);
-    else showWelcome();
+  function startApp(user) {
+    if (started) return;
+    started = true;
+    applySessionUser(user);
+    if (authGateEl) authGateEl.hidden = true;
+    if (appEl) appEl.hidden = false;
+    setAuthError('');
+    // 顶栏身份 / 演示时钟 / 人工复核：事件绑定只做一次（退出再登录不能重复绑）
+    if (!startupWired) {
+      startupWired = true;
+      initClockAndHitl();
+    }
+    // 拉会话列表 → 恢复上次的会话（找不到就取最近一个，一个都没有就显示欢迎语）。
+    // 接口不可用时静默降级为欢迎语，不影响对话框本身可用。
+    (async function initSessions() {
+      const list = await loadSessions();
+      if (!list) { showWelcome(); return; }
+      const stored = readStorage(SESSION_KEY);
+      const target = findSession(stored) ? stored : (list.length ? list[0].id : '');
+      if (target) await activateSession(target);
+      else showWelcome();
+    })();
+    // 同步当前模型接入模式徽标（后端不可用时静默降级，不影响聊天）
+    refreshModeBadge().catch(function () {});
+  }
+
+  /** 登录提交：本地校验 → POST /api/auth/login → 成功即进主界面。 */
+  async function submitLogin() {
+    if (authBusy) return;
+    const username = authUsernameEl ? String(authUsernameEl.value || '').trim() : '';
+    const password = authPasswordEl ? String(authPasswordEl.value || '') : '';
+    const problem = validateUsername(username) || validatePassword(password);
+    if (problem) { setAuthError(problem); return; }
+    setAuthError('');
+    setAuthBusy(true, 'login');
+    try {
+      const payload = await requestAuth('/api/auth/login', { username: username, password: password });
+      if (payload && payload.ok) {
+        const user = payload.data && payload.data.user ? payload.data.user : { username: username };
+        setAuthHint(AUTH_HINT_LOGIN);
+        startApp(user);
+        return;
+      }
+      // 失败一律展示后端 message（AUTH_BAD_CREDENTIALS / AUTH_RATE_LIMITED …）
+      setAuthError((payload && payload.message) || AUTH_MSG.LOGIN_FAILED);
+    } catch (err) {
+      setAuthError(AUTH_MSG.LOGIN_FAILED);
+    } finally {
+      setAuthBusy(false, authMode);
+    }
+  }
+
+  /** 注册提交：本地校验 → POST /api/auth/register → 成功切回登录页签并预填账号名。 */
+  async function submitRegister() {
+    if (authBusy) return;
+    const username = authUsernameEl ? String(authUsernameEl.value || '').trim() : '';
+    const password = authPasswordEl ? String(authPasswordEl.value || '') : '';
+    const confirm = authConfirmPasswordEl ? String(authConfirmPasswordEl.value || '') : '';
+    const problem = validateUsername(username) || validatePassword(password)
+      || (password !== confirm ? AUTH_MSG.PASSWORD_MISMATCH : '');
+    if (problem) { setAuthError(problem); return; }
+    setAuthError('');
+    setAuthBusy(true, 'register');
+    try {
+      const payload = await requestAuth('/api/auth/register', {
+        username: username, password: password, confirm_password: confirm
+      });
+      if (payload && payload.ok) {
+        // 注册不自动登录：切回登录页签、预填账号名、清空两个密码框
+        setAuthMode('login');
+        if (authUsernameEl) authUsernameEl.value = username;
+        if (authPasswordEl) authPasswordEl.value = '';
+        if (authConfirmPasswordEl) authConfirmPasswordEl.value = '';
+        setAuthError('');
+        setAuthHint(AUTH_MSG.REGISTER_DONE);
+        if (authPasswordEl) { try { authPasswordEl.focus(); } catch (err) { /* 忽略 */ } }
+        return;
+      }
+      setAuthError((payload && payload.message) || AUTH_MSG.REGISTER_FAILED);
+    } catch (err) {
+      setAuthError(AUTH_MSG.REGISTER_FAILED);
+    } finally {
+      setAuthBusy(false, authMode);
+    }
+  }
+
+  /** 退出登录：先告诉后端清 Cookie，再本地清干净并回门禁页（后端失败也照样退出）。 */
+  async function logout() {
+    if (!logoutBtnEl || logoutBtnEl.disabled) return;
+    logoutBtnEl.disabled = true;
+    logoutBtnEl.textContent = '退出中…';
+    try {
+      await requestAuth('/api/auth/logout', {});
+    } catch (err) {
+      /* 网络失败也照样回门禁页：本地状态必须清干净，不能被一次失败的请求卡住 */
+    } finally {
+      logoutBtnEl.disabled = false;
+      logoutBtnEl.textContent = '退出登录';
+    }
+    clearSessionState();
+    showAuthGate('login');
+    setAuthHint(AUTH_MSG.LOGGED_OUT);
+  }
+
+  /** 带超时的 fetch：/api/auth/me 卡住时也要落到门禁页，不能白屏等下去。 */
+  function fetchWithTimeout(path, init, timeoutMs) {
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    const options = Object.assign({}, init);
+    if (controller) options.signal = controller.signal;
+    let timer = null;
+    const timeout = new Promise(function (resolve) {
+      timer = setTimeout(function () {
+        if (controller) { try { controller.abort(); } catch (err) { /* 忽略 */ } }
+        resolve(null);
+      }, timeoutMs);
+    });
+    const request = (async function () {
+      try { return await fetch(path, options); } catch (err) { return null; }
+    })();
+    return Promise.race([request, timeout]).then(function (result) {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      return result;
+    }, function (err) {
+      if (timer !== null) { clearTimeout(timer); timer = null; }
+      return null;
+    });
+  }
+
+  /** 启动检查：已登录直接进主界面，否则（含网络异常 / 超时）一律停在门禁页。 */
+  async function bootstrapAuth() {
+    let payload = null;
+    const res = await fetchWithTimeout('/api/auth/me', {
+      credentials: 'same-origin',
+      headers: apiHeaders(false)
+    }, REQUEST_TIMEOUTS.snapshot);
+    if (res && res.status === 200) {
+      try { payload = await res.json(); } catch (err) { payload = null; }
+    }
+    if (payload && payload.ok) {
+      startApp(payload.data && payload.data.user ? payload.data.user : {});
+      return;
+    }
+    showAuthGate('login');
+  }
+
+  /** 门禁 / 顶栏的事件绑定（只做一次）。门禁刻意不绑定任何关闭逻辑。 */
+  function initAuthUi() {
+    const submit = function (event) {
+      if (event) event.preventDefault();
+      if (authBusy) return;
+      if (authMode === 'register') submitRegister();
+      else submitLogin();
+    };
+    if (authFormEl) {
+      authFormEl.addEventListener('submit', submit);
+      // 回车提交：内嵌 webview / jsdom 不一定触发隐式提交，这里显式接管一次
+      authFormEl.addEventListener('keydown', function (event) {
+        if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey) return;
+        if (event.target && event.target.tagName === 'BUTTON') return;  // 页签按钮自己处理点击
+        submit(event);
+      });
+    }
+    if (authTabLoginEl) {
+      authTabLoginEl.addEventListener('click', function () { if (authMode !== 'login') setAuthMode('login'); });
+    }
+    if (authTabRegisterEl) {
+      authTabRegisterEl.addEventListener('click', function () {
+        if (authMode !== 'register') setAuthMode('register');
+      });
+    }
+    if (logoutBtnEl) logoutBtnEl.addEventListener('click', function () { logout(); });
+  }
+
+  initAuthUi();
+  // 门禁默认就可见（HTML 上没写 hidden），所以 /api/auth/me 还没回来时也不是白屏
+  (function boot() {
+    bootstrapAuth().catch(function () { showAuthGate('login'); });
   })();
-
-  // 页面加载时同步当前模型接入模式徽标（后端不可用时静默降级，不影响聊天）
-  refreshModeBadge().catch(function () {});
-
-  // 顶栏身份 / 演示时钟 / 人工复核队列：初始化事件绑定与轮询（后端未就绪时静默降级）
-  initClockAndHitl();
 </script>
 </body>
 </html>

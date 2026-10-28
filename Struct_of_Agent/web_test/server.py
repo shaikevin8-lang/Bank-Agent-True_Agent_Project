@@ -104,6 +104,7 @@ from R6 import WorkflowAgent, WorkflowStore
 from R6.persistence import ConversationStore as R6ConversationStore
 from supervisor import SupervisorAgent
 from web_test import api_common
+from web_test.api_auth import router as auth_router
 from web_test.api_clock import router as clock_router
 from web_test.api_hitl import router as hitl_router
 from web_test.session_store import (
@@ -121,7 +122,7 @@ DEFAULT_BALANCE_FEN = 100000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-28.clock-hitl-routes"
+API_VERSION = "2026-10-28.login-auth"
 API_FEATURES = (
     "settings.llm",
     "settings.search",
@@ -132,6 +133,8 @@ API_FEATURES = (
     # 演示时钟与人工介入：路由已挂载（B0 骨架），实现由 B1/B2 填充。
     "clock",
     "hitl",
+    # 登录 / 注册：账号注册、登录、登出与当前用户（/api/auth/*）。
+    "auth",
 )
 
 # 静态页面路径
@@ -866,6 +869,8 @@ def clear_search_settings() -> dict:
 # ---------------------------------------------------------------------------
 app.include_router(clock_router)
 app.include_router(hitl_router)
+# 登录/注册路由：账号接口必须先于页面可用，但行为上只是追加 /api/auth/* 路径。
+app.include_router(auth_router)
 
 # 到期结算接线（C1）：让「推进演示时钟」真正结转到期的定时转账与超时的人工案件。
 # install() 只往时钟服务里挂一个回调，import 期不碰数据库（真正的库读写发生在推进
@@ -905,6 +910,22 @@ def _registered_session_routes() -> list[str]:
     return sorted(routes)
 
 
+def _registered_auth_routes() -> list[str]:
+    """列出当前进程真正注册的 ``/api/auth/*`` 路由。
+
+    Returns:
+        形如 ``"POST /api/auth/login"`` 的字符串列表（已排序）。
+    """
+    routes: list[str] = []
+    for route in app.routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/api/auth/"):
+            continue
+        methods = getattr(route, "methods", None) or ()
+        routes.append(f"{'/'.join(sorted(methods))} {path}")
+    return sorted(routes)
+
+
 def _log_startup(port: int = 8000) -> None:
     """打印一行启动自检信息，便于与页面显示的版本对照排障。
 
@@ -915,6 +936,7 @@ def _log_startup(port: int = 8000) -> None:
     """
     routes = _registered_settings_routes()
     session_routes = _registered_session_routes()
+    auth_routes = _registered_auth_routes()
     print(
         f"[web_test] API_VERSION={API_VERSION} | features={','.join(API_FEATURES)} "
         f"| 已注册设置路由({len(routes)}): {' '.join(routes)} "
@@ -927,6 +949,10 @@ def _log_startup(port: int = 8000) -> None:
     print(
         f"[web_test] 已注册会话路由({len(session_routes)}): {' '.join(session_routes)} "
         f"| 数据库: {target}（启动只校验 Alembic 版本，不建表）"
+    )
+    print(
+        f"[web_test] 已注册账号路由({len(auth_routes)}): {' '.join(auth_routes)} "
+        f"| 登录 Cookie: bank_agent_session（HttpOnly, SameSite=lax, 7 天）"
     )
     print(f"[web_test] 若页面提示 404 / BACKEND_OUTDATED，请重启服务：py web_test/server.py（API_VERSION={API_VERSION}）")
 

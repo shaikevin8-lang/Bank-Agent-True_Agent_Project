@@ -203,6 +203,15 @@ async function stubFetch(url, options = {}) {
   const body = options.body ? JSON.parse(options.body) : undefined
   calls.push({ url, method, body })
 
+  // 登录门禁：页面启动先问一次 GET /api/auth/me（未打桩会 throw），这里统一当作已登录
+  if (url === '/api/auth/me') {
+    return ok('', {
+      authenticated: true,
+      user: { username: 'tester', created_at: '2026-01-01T00:00:00', last_login_at: '2026-01-01T00:00:00' },
+      expires_at: '2026-12-31T00:00:00',
+    })
+  }
+
   if (url === '/health/live') return jsonResponse(HEALTH)
   if (url === '/api/settings/llm') return ok('', LLM_SNAPSHOT)
   if (url === '/api/settings/search') return ok('', SEARCH_SNAPSHOT)
@@ -256,7 +265,8 @@ async function loadPage(fetchImpl, beforeParse) {
     url: 'http://127.0.0.1:8000/',
     beforeParse(window) {
       window.fetch = fetchImpl || stubFetch
-      window.confirm = () => true
+      // index.html 刻意不用 window.confirm：二次确认是页面自绘的 .confirm-overlay，
+      // 打桩 window.confirm 不起作用，改由下面的 clickDelete() 点按钮。
       if (beforeParse) beforeParse(window)
     },
   })
@@ -275,6 +285,29 @@ const click = (w, el) => el.dispatchEvent(new w.Event('click', { bubbles: true }
 const dblclick = (w, el) => el.dispatchEvent(new w.Event('dblclick', { bubbles: true }))
 const key = (w, el, k) => el.dispatchEvent(new w.KeyboardEvent('keydown', { key: k, bubbles: true }))
 const chatText = (w) => $ (w, 'chat').textContent
+
+/** 页面自绘的确认框：.confirm-overlay 里 footer 第一个按钮=取消，最后一个=确定。 */
+const confirmUi = (w) => w.document.querySelector('.confirm-overlay')
+const confirmShown = (w) => { const el = confirmUi(w); return !!el && el.hidden === false }
+const confirmText = (w) => { const el = confirmUi(w); return el ? el.textContent : '' }
+function answerConfirm(w, agree) {
+  const el = confirmUi(w)
+  if (!el || el.hidden) return false
+  const buttons = [...el.querySelectorAll('footer button')]
+  const target = agree ? buttons[buttons.length - 1] : buttons[0]
+  if (!target) return false
+  click(w, target)
+  return true
+}
+
+/** 点删除并在自绘确认框里选「确定 / 取消」；返回是否真的弹出了确认框。 */
+async function clickDelete(w, el, agree = true) {
+  click(w, el)
+  await settle()
+  const shown = confirmShown(w) && answerConfirm(w, agree)
+  await settle()
+  return shown
+}
 
 // ---------------------------------------------------------------- 1. 结构
 
@@ -543,9 +576,9 @@ section('删除会话')
   const deleteBtn = items(w).filter((el) => el.dataset.id === second.id)[0]
     .querySelector('[data-act="delete"]')
   check('每个条目都有删除按钮', !!deleteBtn)
-  click(w, deleteBtn)
-  await settle()
+  const shown = await clickDelete(w, deleteBtn)
 
+  check('删除前弹出二次确认', shown)
   check('以 DELETE 调用接口',
     calls.some((c) => c.url === '/api/sessions/' + second.id && c.method === 'DELETE'))
   check('被删除的条目从列表消失', !titles(w).includes('会话乙'), titles(w))
@@ -561,8 +594,7 @@ section('删除当前会话后自动切到下一个')
   const w = dom.window
 
   check('当前是最近活跃的「会话乙」', activeId(w) === second.id, activeId(w))
-  click(w, items(w).filter((el) => el.dataset.id === second.id)[0].querySelector('[data-act="delete"]'))
-  await settle()
+  await clickDelete(w, items(w).filter((el) => el.dataset.id === second.id)[0].querySelector('[data-act="delete"]'))
 
   check('删除当前会话后激活剩下的会话', activeId(w) === first.id, activeId(w))
   check('对话区换成剩下会话的内容', /甲的问题/.test(chatText(w)), chatText(w))
@@ -575,8 +607,7 @@ section('删除最后一个会话后回到欢迎态')
   const dom = await loadPage()
   const w = dom.window
 
-  click(w, items(w)[0].querySelector('[data-act="delete"]'))
-  await settle()
+  await clickDelete(w, items(w)[0].querySelector('[data-act="delete"]'))
 
   check('列表变空并显示空态', items(w).length === 0 && !!$(w, 'sessionEmpty'))
   check('对话区回到欢迎语', /我是银行智能助手/.test(chatText(w)), chatText(w).slice(0, 60))
@@ -589,16 +620,12 @@ section('删除需二次确认；取消则不发请求')
 {
   resetBackend()
   seedSession('别删我', [{ role: 'user', content: '内容' }])
-  let asked = ''
-  const dom = await loadPage(stubFetch, (window) => {
-    window.confirm = (message) => { asked = message; return false }
-  })
+  const dom = await loadPage()
   const w = dom.window
 
-  click(w, items(w)[0].querySelector('[data-act="delete"]'))
-  await settle()
+  const shown = await clickDelete(w, items(w)[0].querySelector('[data-act="delete"]'), false)
 
-  check('弹出了确认框', /别删我/.test(asked), asked)
+  check('弹出了确认框（不是用 window.confirm）', shown && /别删我/.test(confirmText(w)), confirmText(w))
   check('取消时不发 DELETE 请求', !calls.some((c) => c.method === 'DELETE'))
   check('会话仍在列表中', titles(w).includes('别删我'), titles(w))
 }
@@ -853,7 +880,7 @@ section('竞态：迟到的列表快照不能让已删除的会话复活')
   check('第二次列表请求已挂起', !!releaseList)
 
   // 挂起期间删除会话Y，第 3 次列表请求会立刻返回最新快照
-  click(w, items(w).find((el) => el.dataset.id === y.id).querySelector('[data-act="delete"]'))
+  await clickDelete(w, items(w).find((el) => el.dataset.id === y.id).querySelector('[data-act="delete"]'))
   await settle(60)
   check('删除后列表只剩会话X', titles(w).join('|') === '会话X', titles(w))
 
@@ -905,7 +932,7 @@ section('会话操作失败走侧边栏提示，不写进对话记录')
   const dom = await loadPage(failingFetch)
   const w = dom.window
 
-  click(w, items(w)[0].querySelector('[data-act="delete"]'))
+  await clickDelete(w, items(w)[0].querySelector('[data-act="delete"]'))
   await settle(60)
 
   check('失败提示出现在侧边栏', !$(w, 'sidebarAlert').hidden
@@ -922,3 +949,5 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log('全部通过')
+// jsdom 里还挂着页面的演示时钟轮询（setInterval），不显式退出会把进程一直吊着
+process.exit(0)

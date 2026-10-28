@@ -133,6 +133,9 @@ EXPECTED_TABLES: dict[str, set[str]] = {
         "sim_clock",
         "hitl_case",
         "hitl_case_event",
+        # V006：Web 登录/注册
+        "web_user",
+        "web_user_session",
     },
     AUDIT_SCHEMA: {"event", "clock_event"},
 }

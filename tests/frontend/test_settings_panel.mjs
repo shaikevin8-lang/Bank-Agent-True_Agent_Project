@@ -118,6 +118,18 @@ function touchStubSession(session, role, content, agent, trace) {
 /** 会话接口的最小桩；不匹配时返回 null，交给调用方自己的打桩处理。 */
 async function sessionFallback(url, options) {
   const method = (options && options.method) || 'GET'
+  // 登录门禁：页面启动先问一次 GET /api/auth/me，这里统一当作已登录
+  // （放在最前面，好让 loadFreshPage 的自定义桩也能共用这一份）
+  if (url === '/api/auth/me') {
+    return jsonResponse({
+      ok: true, message: '', error_code: null,
+      data: {
+        authenticated: true,
+        user: { username: 'tester', created_at: NOW, last_login_at: NOW },
+        expires_at: '2026-12-31T00:00:00',
+      },
+    })
+  }
   if (url === '/api/sessions' && method === 'GET') {
     return jsonResponse({ ok: true, message: '', error_code: null, data: { sessions: sessionState.sessions.slice() } })
   }
@@ -279,7 +291,8 @@ const dom = new JSDOM(html, {
   url: 'http://127.0.0.1:8000/',
   beforeParse(window) {
     window.fetch = stubFetch
-    window.confirm = () => true
+    // index.html 刻意不用 window.confirm：二次确认是页面自绘的 .confirm-overlay，
+    // 打桩 window.confirm 不起作用，改由 answerConfirm() 点按钮。
   },
 })
 
@@ -292,6 +305,32 @@ await settle()
 
 const $ = (id) => document.getElementById(id)
 const click = (el) => el.dispatchEvent(new window.Event('click', { bubbles: true }))
+
+/**
+ * 页面自绘的二次确认（index.html 刻意不用 window.confirm）：
+ * .confirm-overlay 里 footer 第一个按钮=取消，最后一个=确定。
+ * 打桩 window.confirm 对它无效，必须像用户一样点按钮。
+ */
+const confirmUi = (d = document) => d.querySelector('.confirm-overlay')
+const confirmShown = (d = document) => { const el = confirmUi(d); return !!el && el.hidden === false }
+const confirmText = (d = document) => { const el = confirmUi(d); return el ? el.textContent : '' }
+function answerConfirm(agree, d = document) {
+  const el = confirmUi(d)
+  if (!el || el.hidden) return false
+  const buttons = [...el.querySelectorAll('footer button')]
+  const target = agree ? buttons[buttons.length - 1] : buttons[0]
+  if (!target) return false
+  target.click()
+  return true
+}
+/** 点某个按钮并在弹出的确认框里选「确定 / 取消」；返回是否真的弹出了确认框。 */
+async function clickAndConfirm(el, agree = true) {
+  click(el)
+  await settle()
+  const shown = confirmShown() && answerConfirm(agree)
+  await settle()
+  return shown
+}
 
 const panel = document.querySelector('.settings-panel')
 const modelSection = document.querySelector('.settings-body > section.settings-section')
@@ -532,19 +571,14 @@ const allStorage = Object.keys(window.localStorage).map((k) => window.localStora
 check('localStorage 整体不含 Key', !allStorage.includes('k-1234567890') && !allStorage.includes('sk-user-typed-9999'))
 
 section('清除配置（需二次确认）')
-let confirmAsked = false
-window.confirm = (msg) => { confirmAsked = true; return msg.includes('清除'); }
-click($('llmClear'))
-await settle()
-check('弹出过确认框', confirmAsked)
+const clearShown = await clickAndConfirm($('llmClear'), true)
+check('弹出过确认框', clearShown, confirmText())
 check('以 DELETE 调用 /api/settings/llm', calls.some((c) => c.url === '/api/settings/llm' && c.method === 'DELETE'))
 check('清除后面板徽标显示「未配置模型」', $('llmBadgeText').textContent === '未配置模型', $('llmBadgeText').textContent)
 check('清除后清除按钮重新置灰', $('llmClear').disabled === true)
 
-window.confirm = () => false
 const beforeCancel = calls.length
-click($('llmClear'))
-await settle()
+await clickAndConfirm($('llmClear'), false)
 check('取消确认时不发请求', calls.length === beforeCancel)
 
 section('联网搜索接入（可选）')
@@ -563,9 +597,8 @@ check('搜索保存以 PUT 调用', !!searchPut)
 check('搜索载荷含 max_results', 'max_results' in searchPut.body, Object.keys(searchPut.body))
 check('搜索状态标签变为已配置', /已配置/.test($('searchBadgeText').textContent), $('searchBadgeText').textContent)
 
-window.confirm = () => true
-click($('searchClear'))
-await settle()
+const searchClearShown = await clickAndConfirm($('searchClear'), true)
+check('搜索清除前也弹了二次确认', searchClearShown, confirmText())
 check('搜索清除以 DELETE 调用', calls.some((c) => c.url === '/api/settings/search' && c.method === 'DELETE'))
 check('搜索清除后提示已清除', /清除/.test($('searchMsg').textContent), $('searchMsg').textContent)
 
@@ -624,7 +657,7 @@ async function loadFreshPage(fetchImpl, timeouts) {
     url: 'http://127.0.0.1:8000/',
     beforeParse(window) {
       window.fetch = wrappedFetch;
-      window.confirm = () => true;
+      // 二次确认是页面自绘的 .confirm-overlay，这里同样不掺和 window.confirm
       window.alert = () => { alertCalls.count += 1; };
       if (timeouts) window.REQUEST_TIMEOUTS = Object.assign({}, timeouts);
     },
@@ -888,6 +921,9 @@ section('服务重启为新版后警示条自动消失')
   await settle();
   d.getElementById('llmClear').dispatchEvent(new w.Event('click', { bubbles: true }));
   await settle();
+  // 页面自绘的二次确认：点「确定」才会真正发 DELETE
+  answerConfirm(true, d);
+  await settle();
   check('服务重启为新版后警示条自动隐藏', d.getElementById('staleBackendBanner').hidden === true);
 }
 
@@ -899,3 +935,5 @@ if (failures > 0) {
   process.exit(1)
 }
 console.log('全部通过')
+// jsdom 里还挂着页面的演示时钟轮询（setInterval），不显式退出会把进程一直吊着
+process.exit(0)

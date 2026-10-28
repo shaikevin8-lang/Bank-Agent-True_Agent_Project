@@ -33,6 +33,7 @@ from sqlalchemy import (
     ForeignKey,
     ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -470,6 +471,99 @@ class ClockEvent(Base):
     )
 
 
+class WebUser(Base, TimestampMixin):
+    """Web 登录账号（对应迁移 ``0006_web_user``）。
+
+    与会话侧的 :class:`Principal` 刻意分开：``Principal`` 是演示身份主体，
+    **不保存任何凭据**；本表才是用户自己输入口令的账号，因此只存 PBKDF2 哈希
+    与盐，绝不存明文口令。
+
+    本表**没有** ``tenant_id``，也**不纳入** RLS：登录发生在「还没有身份」
+    之前，此时注入不了租户上下文，套用 ``tenant_isolation`` 会让未登录用户
+    连自己的账号行都读不到。账号之间的隔离由 ``username_lower`` 唯一约束
+    与令牌校验负责。
+
+    Attributes:
+        username: 用户输入的账号名，保留原始大小写（仅展示用）。
+        username_lower: ``username.lower()``，唯一；保证大小写不敏感唯一。
+        password_hash: PBKDF2-HMAC-SHA256 十六进制摘要。
+        password_salt: 盐的十六进制表示。
+        password_iterations: 迭代次数；随行保存，便于将来升级强度后旧行仍可校验。
+        status: ``active`` / ``disabled``；``disabled`` 一律拒绝登录。
+        last_login_at: 最近一次登录成功的真实时间。
+    """
+
+    __tablename__ = "web_user"
+    __table_args__ = (
+        CheckConstraint("status IN ('active', 'disabled')", name="status"),
+        # 迭代次数为 0 或负数会让 pbkdf2 直接抛异常，挡在库层。
+        CheckConstraint("password_iterations > 0", name="password_iterations_positive"),
+        # 大小写不敏感唯一：Alice 与 alice 必须视为同一个账号。
+        UniqueConstraint("username_lower", name="uq_web_user_username_lower"),
+        {"comment": "Web 登录账号；口令只存 PBKDF2 哈希与盐，不存明文"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    username_lower: Mapped[str] = mapped_column(String(64), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    password_salt: Mapped[str] = mapped_column(String(64), nullable=False)
+    password_iterations: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=200000, server_default=text("200000")
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active", server_default=text("'active'"))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WebUserSession(Base):
+    """Web 登录会话（对应迁移 ``0006_web_user``）。
+
+    库里只存 ``sha256(token)`` 的十六进制值，**不存明文令牌**：即使数据库被
+    拖走，攻击者手里的哈希也不能直接当 Cookie 使用。令牌本身只在登录响应里
+    出现一次。
+
+    失效判定有两道：``expires_at``（固定 7 天，不做滑动续期）与 ``revoked_at``
+    （退出登录时软失效，保留痕迹便于排查）。删除账号时本表随外键
+    ``ON DELETE CASCADE`` 一并清理，不留孤儿会话。
+
+    Attributes:
+        token_hash: ``sha256(token)`` 十六进制，唯一。
+        user_agent: 登录时的 UA（截断到 255），仅用于展示与排障。
+        client_host: 登录来源 IP（截断到 64），仅用于展示与排障。
+        expires_at: 过期时刻；``expires_at > now()`` 才有效。
+        revoked_at: 注销时刻；非空即失效。
+    """
+
+    __tablename__ = "web_user_session"
+    __table_args__ = (
+        # 过期时刻必须晚于创建时刻，避免写入「出生即过期」的死会话。
+        CheckConstraint("expires_at > created_at", name="expires_at_after_created"),
+        UniqueConstraint("token_hash", name="uq_web_user_session_token_hash"),
+        Index("ix_web_user_session_user_id", "user_id"),
+        Index("ix_web_user_session_expires_at", "expires_at"),
+        {"comment": "Web 登录会话；只存 sha256 令牌哈希，过期/注销后失效"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("app.web_user.id", name="fk_web_user_session_user_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_host: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 __all__ = [
     "Account",
     "AuditEvent",
@@ -482,4 +576,6 @@ __all__ = [
     "Principal",
     "Task",
     "Tenant",
+    "WebUser",
+    "WebUserSession",
 ]

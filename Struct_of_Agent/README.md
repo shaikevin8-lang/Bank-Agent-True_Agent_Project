@@ -29,6 +29,10 @@
   也可以重命名或删除会话（标题默认取首条消息）。
 - **页面模型接入配置**：可在页面右上角「模型接入设置」中直接**手填** Base URL、
   API Key 与模型名（另可选响应格式与超时），测试连接后即时生效（无需改环境变量、无需重启）。
+- **账号登录 / 注册门禁**：打开页面**先**是登录页，登录成功才进入聊天主界面；注册只需
+  账号名 + 密码 + 确认密码，注册后回登录页登录。顶栏显示当前账号并提供「退出登录」。
+  账号与登录会话存 PostgreSQL 的 `app.web_user` / `app.web_user_session`
+  （详见 [docs/AI_Banking_Agent_登录注册实施说明.md](../docs/AI_Banking_Agent_登录注册实施说明.md)）。
 
 ## 使用前准备
 
@@ -100,9 +104,12 @@ $env:Tavily_API   = "你的 Tavily API Key"
 
 ```powershell
 $env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent'
-python scripts/db.py upgrade     # 建表 / 升级到 head
+python scripts/db.py upgrade     # 建表 / 升级到 head（含账号表 app.web_user）
 python scripts/db.py seed        # 演示租户、账户与合成流水（幂等）
 ```
+
+> 登录 / 注册用到的 `app.web_user`、`app.web_user_session` 由迁移 `0006_web_user` 创建，
+> `upgrade` 会一并升级到 head。升级完记得**重启服务**（新路由在进程启动时绑定）。
 
 在项目根目录运行：
 
@@ -110,7 +117,8 @@ python scripts/db.py seed        # 演示租户、账户与合成流水（幂等
 py web_test/server.py
 ```
 
-启动后浏览器访问 <http://127.0.0.1:8000> 即可在对话框内与银行 Agent 对话。
+启动后浏览器访问 <http://127.0.0.1:8000>，**首次使用需先注册账号**（页面上「注册」页签，
+只需账号名 + 密码 + 确认密码），注册成功后回到登录页用该账号登录，即可在对话框内与银行 Agent 对话。
 支持的子场景及示例：
 
 | 场景 | 示例 |
@@ -129,6 +137,9 @@ py web_test/server.py
 > `SyntaxError: Non-ASCII character ...`。`py` 固定解析到 Python 3。
 > 启动时会打印两行自检信息（`API_VERSION`、已注册的设置/会话路由、脱敏后的数据库地址、
 > 服务地址），可与页面显示的接口版本对照排障。应用启动只校验 Alembic 版本，不自动建表。
+> 本版本的 `API_VERSION` 为 `2026-10-28.login-auth`，`features` 中新增 `auth`
+> （`GET /health/live` 与 `GET /api/version` 同步返回），遇到 `/api/auth/*` 返回 404
+> 请先对比该版本号再重启服务。
 
 ## 会话侧边栏
 
@@ -156,6 +167,29 @@ py web_test/server.py
 > 想重置 R3~R6 演示数据，删掉 `web_test/data/` 下的 `r3.db` ~ `r6.db` 再重启即可。
 
 接口与错误码的完整约定见 [docs/前端会话侧边栏-契约.md](docs/前端会话侧边栏-契约.md)。
+
+## 登录 / 注册
+
+页面**打开先是登录页**，登录成功后才进入聊天主界面；`#app` 未登录时不可见。
+注册只需 **账号名 + 密码 + 确认密码**，注册成功后不自动登录，而是回到登录页签，
+用新账号登录进入主页面。顶栏右侧显示当前账号名，并提供「退出登录」
+（退出会清空当前页面上的聊天内容）。
+
+前端门禁的判定来源是 `GET /api/auth/me`：已登录则直接渲染主界面，未登录则显示门禁。
+
+| 接口 | 说明 |
+| --- | --- |
+| `POST /api/auth/register` | 注册（不自动登录、不下发 Cookie） |
+| `POST /api/auth/login` | 登录，`Set-Cookie: bank_agent_session`（HttpOnly / SameSite=Lax / 7 天） |
+| `POST /api/auth/logout` | 退出登录（幂等，同时删除 Cookie） |
+| `GET /api/auth/me` | 当前登录用户；未登录返回 401 `AUTH_UNAUTHORIZED` |
+
+- 账号名 3–32 个字符、不能含空格，**大小写不敏感唯一**（`Alice` 与 `alice` 视为同一账号）。
+- 密码 6–64 个字符，**首尾空格算密码的一部分**（不做 trim）。
+- 口令以 PBKDF2-HMAC-SHA256（20 万次迭代 + 16 字节随机盐）存库，会话令牌只存 `sha256` 摘要。
+- 账号不存在与密码错误返回**完全相同**的 401 响应，避免账号枚举。
+
+设计与错误码全集见 [docs/AI_Banking_Agent_登录注册实施说明.md](../docs/AI_Banking_Agent_登录注册实施说明.md)。
 
 ## 重启服务
 

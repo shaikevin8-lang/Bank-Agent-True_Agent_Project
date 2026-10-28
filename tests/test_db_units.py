@@ -602,6 +602,9 @@ _EXPECTED_TABLES = {
     "app.sim_clock": "sim_clock",
     "app.hitl_case": "hitl_case",
     "app.hitl_case_event": "hitl_case_event",
+    # V006：Web 登录/注册（登录发生在身份建立之前，故不带 tenant_id，也不纳入 RLS）
+    "app.web_user": "web_user",
+    "app.web_user_session": "web_user_session",
     # 审计（只追加）：V001 的业务事件 + V004 的时钟变更
     "audit.event": "event",
     "audit.clock_event": "clock_event",
@@ -664,8 +667,15 @@ def test_metadata_default_schema_and_naming_convention():
 
 
 # app.tenant 是租户根表：它用自身 id 标识租户，没有（也不需要）tenant_id 列。
+# V006 的 web_user / web_user_session 同理：登录发生在「还没有身份」之前，此刻注入
+# 不了租户上下文，套 tenant_isolation 会让未登录用户连自己的账号行都读不到；账号之间
+# 的隔离由 username_lower 唯一约束与口令校验负责（见 models.WebUser 的说明）。
 # 其余表（含 audit.event）都必须带非空 tenant_id。
-_TENANT_SCOPED_TABLES = [key for key in _EXPECTED_TABLES if key != "app.tenant"]
+_TENANT_SCOPED_TABLES = [
+    key
+    for key in _EXPECTED_TABLES
+    if key not in {"app.tenant", "app.web_user", "app.web_user_session"}
+]
 
 
 @pytest.mark.parametrize("table_key", _TENANT_SCOPED_TABLES)
