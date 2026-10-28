@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -65,6 +65,10 @@ BUSINESS_TZ = ZoneInfo("Asia/Shanghai")
 ORIGIN_WEB = "web"
 ORIGIN_R1 = "r1"
 ORIGIN_R2 = "r2"
+# 会话上下文记忆（supervisor 与所有子 Agent 共享的对话流水 + 滚动摘要）。
+# 与侧边栏展示用的 ``web``、各场景私有的 ``r1``..``r6`` 完全隔离：
+# 只被 ``common.memory`` 读写，不会出现在会话消息列表里。
+ORIGIN_MEMORY = "memory"
 
 # R2 工具写死的 "default" 与 R1 的演示账户是同一笔资金。
 ACCOUNT_ALIASES: dict[str, str] = {
@@ -593,6 +597,119 @@ class SessionRepository:
     def clear_session(self, public_id: str) -> bool:
         """归档会话（与侧边栏删除一致，不物理删除消息）。"""
         return self.delete_session(public_id)
+
+    # ------------------------------------------------------------ 会话上下文记忆
+    #
+    # 记忆与「侧边栏消息」复用同一张 ``app.conversation_message``，靠 metadata
+    # 里的 ``origin`` 区分来源。这样不需要新表 / 新迁移，也天然继承
+    # 「sequence_no 按会话加锁递增」「租户隔离」「审计不物理删除」等既有约束。
+
+    def append_memory_message(
+        self,
+        public_id: str,
+        role: str,
+        content: str,
+        *,
+        origin: str = ORIGIN_MEMORY,
+        metadata: dict[str, Any] | None = None,
+        agent: str | None = None,
+    ) -> int:
+        """追加一条会话记忆消息（不进入侧边栏展示），返回其 ``sequence_no``。
+
+        Args:
+            public_id: 会话 ID（不存在时自动补建会话行）。
+            role: ``user`` / ``assistant`` / ``system``（摘要用 ``system``）。
+            content: 消息正文。
+            origin: 记忆来源标记，缺省 ``"memory"``。
+            metadata: 附加元数据（如 ``{"kind": "summary", "covered_upto": 12}``）。
+            agent: 产生该消息的子 Agent 名称（可选）。
+
+        Returns:
+            新消息的 ``sequence_no``。
+        """
+        with self.db.transaction() as session:
+            record = self._ensure_row(session, public_id)
+            payload: dict[str, Any] = dict(metadata or {})
+            payload["origin"] = origin
+            message = append_conversation_message(
+                session,
+                tenant_id=self.db.tenant_id,
+                session_id=record.id,
+                role=role,
+                content=content,
+                agent=agent,
+                metadata=payload,
+            )
+            session.execute(
+                update(ConversationSession)
+                .where(ConversationSession.id == record.id)
+                .values(status="active")
+            )
+            session.flush()
+            return int(message.sequence_no)
+
+    def list_memory_messages(self, public_id: str, *, origin: str = ORIGIN_MEMORY) -> list[dict[str, Any]]:
+        """按序号升序读取某记忆来源的全部消息（含 ``sequence_no`` 与 ``metadata``）。
+
+        Args:
+            public_id: 会话 ID。
+            origin: 记忆来源标记，缺省 ``"memory"``。
+
+        Returns:
+            消息字典列表；会话不存在时返回空列表。
+        """
+        with self.db.transaction() as session:
+            record = self._row(session, public_id, active_only=False)
+            if record is None:
+                return []
+            rows = (
+                session.execute(
+                    select(ConversationMessage)
+                    .where(
+                        ConversationMessage.session_id == record.id,
+                        self._origin_clause(origin),
+                    )
+                    .order_by(ConversationMessage.sequence_no)
+                )
+                .scalars()
+                .all()
+            )
+            return [
+                {
+                    "sequence_no": int(row.sequence_no),
+                    "role": row.role,
+                    "content": row.content or "",
+                    "metadata": dict(row.message_metadata or {}),
+                    "created_at": to_local_iso(row.created_at),
+                }
+                for row in rows
+            ]
+
+    def delete_memory_messages(self, public_id: str, *, origin: str = ORIGIN_MEMORY) -> int:
+        """物理删除某记忆来源的全部消息，返回删除条数。
+
+        「删除会话」时用于彻底遗忘上下文：会话行本身仍按既有策略归档，
+        但记忆消息不再保留，避免同一 ``session_id`` 复用时旧记忆复活。
+
+        Args:
+            public_id: 会话 ID。
+            origin: 记忆来源标记，缺省 ``"memory"``。
+
+        Returns:
+            被删除的消息条数。
+        """
+        with self.db.transaction() as session:
+            record = self._row(session, public_id, active_only=False)
+            if record is None:
+                return 0
+            result = session.execute(
+                delete(ConversationMessage).where(
+                    ConversationMessage.session_id == record.id,
+                    self._origin_clause(origin),
+                )
+            )
+            session.flush()
+            return int(result.rowcount or 0)
 
 
 class AccountRepository:

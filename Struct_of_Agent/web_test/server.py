@@ -38,8 +38,9 @@
     GET    /api/sessions            会话列表（按最近活跃倒序）
     POST   /api/sessions            新建会话（顺带清理上一个空会话）
     GET    /api/sessions/{id}       单个会话 + 完整对话记录
+    GET    /api/sessions/{id}/memory 该会话的上下文记忆状态（只读诊断）
     PATCH  /api/sessions/{id}       重命名
-    DELETE /api/sessions/{id}       删除（同时清掉 R1~R6 的该会话上下文）
+    DELETE /api/sessions/{id}       删除（同时清掉 R1~R6 与共享记忆的该会话上下文）
 ``POST /api/chat`` 在返回回复的同时把这一轮问答写入会话库；会话不存在时按传入的
 ``session_id`` 自动补建，因此首条消息会顺带生成标题。
 
@@ -80,10 +81,11 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from common.memory import PostgresBackend, SessionMemory
 from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
 from common.text_format import sanitize_reply
-from db.repository import Database
+from db.repository import Database, SessionRepository
 from db.seed import seed as seed_demo_data
 from db.seed_scenarios import seed as seed_scenario_data
 from db.session import get_database_url, safe_database_url, session_scope
@@ -115,8 +117,8 @@ DEFAULT_BALANCE_FEN = 100000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-27.unified-postgres"
-API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "health")
+API_VERSION = "2026-10-28.unified-postgres"
+API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "memory", "health")
 
 # 静态页面路径
 _HTML_PATH = Path(__file__).resolve().parent / "index.html"
@@ -128,6 +130,7 @@ BACKEND_OUTDATED_MESSAGE = "当前后端服务是旧版本，未注册该接口�
 _database: Database | None = None
 _supervisor: SupervisorAgent | None = None
 _session_store: ChatSessionStore | None = None
+_memory: SessionMemory | None = None
 
 
 def get_database() -> Database:
@@ -156,14 +159,23 @@ def get_database() -> Database:
 def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
     """构造总调度器：R1~R6 全部走统一的 PostgreSQL。
 
+    会话上下文记忆（:class:`common.memory.SessionMemory`）与子 Agent 共用同一个
+    PostgreSQL 会话仓储：这里**复用已解出的 ``database``** 构造记忆，避免在构造
+    过程中再次调用 :func:`get_database`（重入 / 拿到另一份上下文），并把实例回写
+    到模块级 ``_memory``，保证 supervisor 持有的记忆与 :func:`get_memory` 返回的
+    是同一个对象。
+
     Args:
         database: 共享数据库上下文；缺省使用进程级上下文。
 
     Returns:
         已装配 R1~R6 子 Agent 的 SupervisorAgent 实例。
     """
+    global _memory
     database = database or get_database()
     model_manager = get_model_manager  # 惰性 provider：每次调用时解析单例
+    memory = _memory or SessionMemory(PostgresBackend(SessionRepository(database)))
+    _memory = memory
 
     # R1：会话 + 任务 + 余额；仅在账户不存在时播种演示余额。
     r1_conv = R1ConversationStore(database=database)
@@ -200,7 +212,7 @@ def _build_supervisor(database: Database | None = None) -> SupervisorAgent:
         "R5": SubscriptionAgent(store=r5_store, conversation_store=r5_conv, model_manager=model_manager),
         "R6": WorkflowAgent(store=r6_store, conversation_store=r6_conv, model_manager=model_manager),
     }
-    return SupervisorAgent(agents=agents, model_manager=model_manager)
+    return SupervisorAgent(agents=agents, model_manager=model_manager, memory=memory)
 
 
 def get_supervisor() -> SupervisorAgent:
@@ -227,6 +239,23 @@ def get_session_store() -> ChatSessionStore:
     if _session_store is None:
         _session_store = ChatSessionStore(database=get_database())
     return _session_store
+
+
+def get_memory() -> SessionMemory:
+    """进程级会话记忆单例（复用同一 PostgreSQL 会话仓储）。
+
+    惰性创建，便于测试把它替换成指向内存后端的替身
+    （``monkeypatch.setattr(server, "_memory", memory)``）。若 :func:`_build_supervisor`
+    已经先构造过记忆，这里直接返回同一个实例，保证「supervisor 写进去的上下文」
+    与「诊断接口读出来的上下文」是同一份。
+
+    Returns:
+        会话上下文记忆门面。
+    """
+    global _memory
+    if _memory is None:
+        _memory = SessionMemory(PostgresBackend(SessionRepository(get_database())))
+    return _memory
 
 
 class ChatRequest(BaseModel):
@@ -539,6 +568,8 @@ def _clear_agent_context(session_id: str) -> None:
     侧边栏删掉的会话不应在子 Agent 里留下"记忆"（否则同一 session_id 再次出现时
     会带着已删除的历史）。R1 的会话仓储在 ``agent.store``，R2/R3/R4/R5/R6 的在
     ``agent.conversation_store``，这里按鸭子类型逐个尝试，清理失败只告警。
+    最后再物理删除共享记忆（``origin="memory"`` 的那批行），否则 supervisor 下一轮
+    仍会把已删除的上下文注入调度器与子 Agent。
 
     Args:
         session_id: 会话 ID。
@@ -553,6 +584,10 @@ def _clear_agent_context(session_id: str) -> None:
                 clear(session_id)
             except Exception as error:  # noqa: BLE001 - 上下文清理失败不影响侧边栏删除
                 print(f"[web_test] 清理会话上下文失败（{type(agent).__name__}.{attribute}）：{error!r}")
+    try:
+        get_memory().clear(session_id)
+    except Exception as error:  # noqa: BLE001 - 记忆清理失败不影响侧边栏删除
+        print(f"[web_test] 清理会话记忆失败（SessionMemory）：{error!r}")
 
 
 # --------------------------------------------------------------------------------------
@@ -607,6 +642,27 @@ def get_session(session_id: str) -> Any:
     return _ok(data={"session": record, "messages": store.list_messages(session_id)})
 
 
+@app.get("/api/sessions/{session_id}/memory")
+def get_session_memory(session_id: str) -> Any:
+    """读取该会话的上下文记忆状态（只读诊断，不触发压缩、不改动任何数据）。
+
+    返回 supervisor 注入 LLM 的那份上下文的快照摘要：token 占用、预算上限、
+    已压缩条数、滚动摘要正文与最近若干条原文。它只读不写，因此可以随时调用；
+    真正的「每轮写回 + 超预算压缩」由 ``SupervisorAgent`` 在对话链路里完成。
+
+    Args:
+        session_id: 会话 ID。
+
+    Returns:
+        统一响应包，``data`` 为记忆诊断信息；会话 ID 非法时 400，会话不存在时 404。
+    """
+    if not is_valid_session_id(session_id):
+        return _fail("会话 ID 不合法", "SESSION_ID_INVALID", 400)
+    if get_session_store().get_session(session_id) is None:
+        return _fail("会话不存在或已被删除", "SESSION_NOT_FOUND", 404)
+    return _ok("已获取会话上下文状态", data=get_memory().describe(session_id))
+
+
 @app.patch("/api/sessions/{session_id}")
 def rename_session(session_id: str, payload: SessionRenameRequest) -> Any:
     """重命名会话；重命名后不再被首条消息自动标题覆盖。
@@ -631,7 +687,7 @@ def rename_session(session_id: str, payload: SessionRenameRequest) -> Any:
 
 @app.delete("/api/sessions/{session_id}")
 def delete_session(session_id: str) -> Any:
-    """删除会话及其对话记录，并清理 R1/R2/R3 中该会话的上下文。
+    """删除会话及其对话记录，并清理 R1~R6 与共享记忆中该会话的上下文。
 
     Args:
         session_id: 会话 ID。

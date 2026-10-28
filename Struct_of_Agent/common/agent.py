@@ -294,8 +294,55 @@ class CommonAgent:
             return DeepSeekChat(self.config)
         return MockChat(routing=DEFAULT_ROUTING)
 
-    def chat_stream(self, user_input: str, session_id: str = "default"):
+    @staticmethod
+    def _prepare_history(history: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+        """清洗总控注入的会话共享上下文（防御性过滤）。
+
+        通用 Agent 的图里没有工具历史节点，若把 role="tool" 或其它的消息混入
+        初始 messages，会破坏 user/assistant 的消息序列（工具消息必须紧跟带
+        tool_calls 的 assistant 消息），因此这里只保留可直接入模的角色。
+
+        Args:
+            history: 总控注入的共享上下文（OpenAI 格式消息列表），可能以一条
+                role="system" 的滚动摘要开头；为 None 或空列表表示首轮。
+
+        Returns:
+            清洗后的消息副本列表：仅保留 role 属于 {"system", "user", "assistant"}
+            且 content 非空的消息；其余（tool/未知角色/空内容/非字典项）一律丢弃。
+        """
+        if not history:
+            return []
+
+        cleaned: list[dict[str, Any]] = []
+        for message in history:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role")
+            if role not in {"system", "user", "assistant"}:
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                if not content.strip():
+                    continue
+            elif not content:  # None / 空列表 / 空字典
+                continue
+            # 只带 role + content：历史里的 tool_calls 等附加字段不进通用 Agent 的图
+            cleaned.append({"role": role, "content": content})
+        return cleaned
+
+    def chat_stream(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ):
         """流式版本：LLM token 实时产出，graph 层无感知。
+
+        Args:
+            user_input: 用户自然语言输入。
+            session_id: 会话 ID（用于图状态线程隔离）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时表示首轮。
 
         Yields:
             ``{"type":"token","content":str}`` / ``{"type":"final","result":dict}``
@@ -303,14 +350,21 @@ class CommonAgent:
         """
         from common.streaming import run_chat_stream
 
-        return run_chat_stream(lambda: self.chat(user_input, session_id))
+        return run_chat_stream(lambda: self.chat(user_input, session_id, history=history))
 
-    def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
+    def chat(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """处理一条用户消息并返回结构化结果。
 
         Args:
             user_input: 用户自然语言输入。
             session_id: 会话 ID（用于图状态线程隔离）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时表示首轮。
 
         Returns:
             结果字典，字段：
@@ -320,8 +374,16 @@ class CommonAgent:
                 tasks:       本轮产生的搜索工具回执列表。
                 trace:       追踪信息（session_id/steps/tool_names）。
         """
+        # 此前这里只喂当前一句（messages 仅一条 user 消息），导致通用对话零记忆：
+        # 「确认撤销」这类依赖上一轮的追问被当成孤立问题回答。现在把总控注入的
+        # 共享上下文（含滚动摘要）放在当前消息之前一起入图。
+        # 关于 MemorySaver：CommonState.messages 是普通通道（无 reducer，覆盖语义），
+        # 显式传入完整 messages 会整体覆盖同 thread_id 上的旧 checkpoint 值，
+        # 不会与旧状态累加堆叠，因此无需额外去重（去重只在 history 内部做角色清洗）。
+        messages = self._prepare_history(history) + [{"role": "user", "content": user_input}]
+
         initial_state: CommonState = {
-            "messages": [{"role": "user", "content": user_input}],
+            "messages": messages,
             "pending_tool_calls": [],
             "moderation": {},
             "task_records": [],

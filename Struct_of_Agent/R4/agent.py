@@ -83,8 +83,19 @@ class CardAgent:
             return DeepSeekChat(self.config)
         return MockChat(routing=DEFAULT_ROUTING)
 
-    def chat_stream(self, user_input: str, session_id: str = "default"):
+    def chat_stream(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ):
         """流式版本：LLM token 实时产出，graph 层无感知。
+
+        Args:
+            user_input: 用户自然语言输入。
+            session_id: 会话 ID（用于历史加载与持久化）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Yields:
             ``{"type":"token","content":str}`` / ``{"type":"final","result":dict}``
@@ -92,14 +103,21 @@ class CardAgent:
         """
         from common.streaming import run_chat_stream
 
-        return run_chat_stream(lambda: self.chat(user_input, session_id))
+        return run_chat_stream(lambda: self.chat(user_input, session_id, history=history))
 
-    def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
+    def chat(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """处理一条用户消息并返回结构化结果。
 
         Args:
             user_input: 用户自然语言输入。
             session_id: 会话 ID（用于历史加载与持久化）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Returns:
             结果字典，字段：
@@ -109,11 +127,14 @@ class CardAgent:
                 tasks:       本轮产生的卡片工具回执列表。
                 trace:       追踪信息（session_id/steps/tool_names）。
         """
-        history = self.conversation_store.load_messages(session_id)
+        # 共享上下文优先：总控维护的会话上下文是唯一权威来源（已含滚动摘要的 system 消息），
+        # 此时不再读本场景私有历史，避免同一轮内容被重复注入两遍；shared 为空才回退私有历史。
+        shared = list(history or [])
+        history_messages = shared if shared else self.conversation_store.load_messages(session_id)
         user_message = {"role": "user", "content": user_input}
 
         initial_state: CardState = {
-            "messages": history + [user_message],
+            "messages": history_messages + [user_message],
             "pending_tool_calls": [],
             "moderation": {},
             "task_records": [],
@@ -125,7 +146,7 @@ class CardAgent:
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
 
         # 持久化本轮消息（用户消息 + 助手/工具消息）
-        self._persist_turn(session_id, user_input, history, result)
+        self._persist_turn(session_id, user_input, history_messages, result)
 
         tasks = list(result.get("task_records", []))
         reply = sanitize_reply(result.get("final_reply") or self._extract_final_reply(result))
@@ -169,7 +190,7 @@ class CardAgent:
         Args:
             session_id: 会话 ID。
             user_input: 用户输入文本。
-            history: 本轮开始前的历史消息。
+            history: 本轮喂给图的历史消息（共享上下文或私有历史，用于定位新增消息起点）。
             result: 图运行结果。
         """
         self.conversation_store.save_message(session_id, "user", user_input)

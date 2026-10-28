@@ -50,35 +50,52 @@ class SubscriptionAgent:
             return DeepSeekChat(self.config)
         return MockChat(routing=DEFAULT_ROUTING)
 
-    def chat_stream(self, user_input: str, session_id: str = "default"):
+    def chat_stream(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ):
         """流式处理一条用户消息（委托 ``common.streaming`` 逐步产出）。
 
         Args:
             user_input: 用户自然语言输入。
             session_id: 会话 ID。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Returns:
             流式事件生成器（``token`` / ``final`` / ``error`` 等事件）。
         """
         from common.streaming import run_chat_stream
 
-        return run_chat_stream(lambda: self.chat(user_input, session_id))
+        return run_chat_stream(lambda: self.chat(user_input, session_id, history=history))
 
-    def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
+    def chat(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """处理一条用户消息：加载历史 → 调用 LangGraph 图 → 持久化本轮 → 组装回执。
 
         Args:
             user_input: 用户自然语言输入。
             session_id: 会话 ID。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Returns:
             统一契约字典，包含 ``reply`` / ``blocked`` / ``moderation`` / ``tasks`` / ``trace``。
         """
-        history = self.conversation_store.load_messages(session_id)
+        # 共享上下文优先：总控维护的会话上下文是唯一权威来源（已含滚动摘要的 system 消息），
+        # 此时不再读本场景私有历史，避免同一轮内容被重复注入两遍；shared 为空才回退私有历史。
+        shared = list(history or [])
+        history_messages = shared if shared else self.conversation_store.load_messages(session_id)
         user_message = {"role": "user", "content": user_input}
 
         initial_state: SubscriptionState = {
-            "messages": history + [user_message],
+            "messages": history_messages + [user_message],
             "pending_tool_calls": [],
             "moderation": {},
             "task_records": [],
@@ -88,7 +105,7 @@ class SubscriptionAgent:
         }
 
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
-        self._persist_turn(session_id, user_input, history, result)
+        self._persist_turn(session_id, user_input, history_messages, result)
 
         tasks = list(result.get("task_records", []))
         reply = sanitize_reply(result.get("final_reply") or self._extract_final_reply(result))
@@ -147,7 +164,7 @@ class SubscriptionAgent:
         Args:
             session_id: 会话 ID。
             user_input: 用户输入原文。
-            history: 进入本轮前的历史消息列表（用于定位新增消息起点）。
+            history: 本轮喂给图的历史消息（共享上下文或私有历史，用于定位新增消息起点）。
             result: 图运行结果（含完整 ``messages`` 列表）。
         """
         self.conversation_store.save_message(session_id, "user", user_input)

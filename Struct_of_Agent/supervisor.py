@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from typing import Any
@@ -30,6 +31,7 @@ from typing import Any
 from common.agent import CommonAgent
 from common.config import load_config
 from common.llm import DeepSeekChat
+from common.memory import SessionMemory, build_llm_summarizer
 from common.model_manager import RuntimeChatModel, trace_info
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
 from common.text_format import ReplyStreamFilter, sanitize_reply
@@ -56,6 +58,10 @@ _ROUTE_PATTERNS: dict[str, list[str]] = {
     "R1": [r"转\s*[0-9一二三四五六七八九十百千万]", r"给\S{1,6}转"],
 }
 
+# 摘要器缓存哨兵：区分「尚未构造」与「构造结果为 None（无可用模型）」
+_SUMMARIZER_UNSET: Any = object()
+
+
 # 各 Agent 能力说明（供 LLM 调度器生成计划时参考）
 _AGENT_CAPABILITIES: dict[str, str] = {
     "R1": "智能转账：按姓名/手机号/历史备注转账、定时转账、AA 收款、余额查询",
@@ -77,6 +83,7 @@ class SupervisorAgent:
         route_keywords: dict[str, list[str]] | None = None,
         common_agent: Any | None = None,
         model_manager: Any | None = None,
+        memory: SessionMemory | None = None,
     ) -> None:
         """初始化总 Agent。
 
@@ -87,12 +94,16 @@ class SupervisorAgent:
             common_agent: 通用搜索 Agent（处理未命中 R1/R2/R3 的输入）；缺省构造 CommonAgent。
             model_manager: 运行时模型配置管理器；注入后缺省子 Agent 与 LLM 调度器
                 均使用可热切换的模型，并在返回结果的 trace 中附带当前模型模式。
+            memory: 会话上下文记忆；注入后本类负责「读上下文 → 注入调度器与子 Agent
+                → 写回本轮 → 超预算自动压缩」。为 ``None`` 时退化为旧的无记忆行为。
         """
         self.model_manager = model_manager
         self.agents = agents if agents is not None else self._default_agents()
         self.route_keywords = route_keywords or _ROUTE_KEYWORDS
         self.common_agent = common_agent or CommonAgent(model_manager=model_manager)
+        self.memory = memory
         self._router_model = self._build_router_model()
+        self._summarizer_cache: Any = _SUMMARIZER_UNSET
 
     def _default_agents(self) -> dict[str, Any]:
         """构造缺省子 Agent 集合（R1/R2/R3）。
@@ -139,14 +150,20 @@ class SupervisorAgent:
             pass
         return None
 
-    def _plan(self, user_input: str) -> list[dict[str, str]] | None:
-        """LLM 意图分析：把用户输入拆分为子任务计划。
+    def _plan(self, user_input: str, history: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
+        """LLM 意图分析：结合会话历史，把用户输入拆分为子任务计划。
 
         让 LLM 输出 JSON 数组，每个元素为 ``{"agent": "R1|R2|R3|common", "task": "..."}``；
         输出无法解析或模型不可用时返回 None，由调用方回退到规则路由。
 
+        修复要点（多轮指代）：调度器现在能看到本会话最近若干轮对话，因此
+        「确认撤销」「就那个」「第一笔」这类**依赖上文的输入**能被正确解析，
+        并被改写成自包含的 ``task`` 下发——这是截图里第二轮被误路由到通用
+        搜索的直接原因（此前只喂当前一句，模型无从判断「撤销」指订阅）。
+
         Args:
             user_input: 用户自然语言输入。
+            history: 本会话历史（精简版，含滚动摘要）；为空表示首轮。
 
         Returns:
             子任务计划列表；不可用时返回 None。
@@ -158,15 +175,21 @@ class SupervisorAgent:
             for name, desc in _AGENT_CAPABILITIES.items()
             if name in self.agents or name == "common"
         )
+        history_block = self._render_history(history)
         prompt = (
             "可用执行模块：\n"
             f"{capabilities}\n"
+            f"{history_block}"
             "要求：\n"
             "1. 只输出 JSON 数组，形如 [{\"agent\": \"R1\", \"task\": \"给张三转账100元\"}]，不要输出任何其它文字；\n"
             "2. 即使只有一个子任务，也必须输出数组；\n"
             "3. task 必须完整保留原文中的关键信息（金额、姓名、时间、产品等）；\n"
-            "4. 无法归入任何场景的请求选择 common。\n"
-            f"用户输入：{user_input}"
+            "4. 无法归入任何场景的请求选择 common；\n"
+            "5. 若当前输入依赖上文（确认/取消/就它/第一笔/验证码/是/好的 等），必须结合"
+            "会话历史把 task 改写为自包含的完整指令：补全被指代的对象（订阅名、金额、"
+            "收款人、卡片、产品等）与已给出的信息（如 6 位验证码），不要反问、不要只说"
+            "「用户确认撤销」。\n"
+            f"用户当前输入：{user_input}"
         )
         try:
             response = self._router_model.chat(
@@ -199,6 +222,133 @@ class SupervisorAgent:
             if name in self.agents or name == "common":
                 plan.append({"agent": name, "task": task})
         return plan or None
+
+    # ------------------------------------------------------------ 会话上下文记忆
+
+    @property
+    def memory_enabled(self) -> bool:
+        """是否启用会话上下文记忆。"""
+        return self.memory is not None and bool(getattr(self.memory.config, "enabled", False))
+
+    @staticmethod
+    def _render_history(history: list[dict[str, Any]] | None) -> str:
+        """把会话历史渲染成调度器 prompt 里的「会话历史」段落。
+
+        Args:
+            history: 精简版历史消息（可能含 ``system`` 摘要）。
+
+        Returns:
+            可直接拼进 prompt 的文本；无历史时为空串。
+        """
+        if not history:
+            return ""
+        lines: list[str] = []
+        for message in history:
+            role = str(message.get("role") or "")
+            content = " ".join(str(message.get("content") or "").split())
+            if not content:
+                continue
+            if role == "system":
+                lines.append(f"【此前对话摘要】{content}")
+            elif role == "user":
+                lines.append(f"用户：{content}")
+            elif role == "assistant":
+                lines.append(f"助手：{content}")
+        if not lines:
+            return ""
+        return "会话历史（按时间先后，供解析指代；无需复述）：\n" + "\n".join(lines) + "\n"
+
+    def _recall(self, session_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """读取本会话上下文。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            ``(注入子 Agent 的历史, 供调度器的精简历史)``；未启用记忆时均为空列表。
+        """
+        if not self.memory_enabled:
+            return [], []
+        try:
+            snapshot = self.memory.load(session_id)
+            return snapshot.prompt_messages(), snapshot.router_history(self.memory.config)
+        except Exception as error:  # noqa: BLE001 - 记忆读取失败不得阻断对话
+            print(f"[supervisor] 读取会话上下文失败：{error!r}")
+            return [], []
+
+    def _summarizer(self) -> Any:
+        """惰性构造摘要器：优先用调度器模型，未配置模型时返回 None（回退规则摘要）。"""
+        if self.memory is None:
+            return None
+        if self._summarizer_cache is _SUMMARIZER_UNSET:
+            try:
+                self._summarizer_cache = build_llm_summarizer(
+                    self._router_model,
+                    max_chars=self.memory.config.summary_max_chars,
+                )
+            except Exception as error:  # noqa: BLE001 - 摘要器不可用则走规则摘要
+                print(f"[supervisor] 构造摘要器失败：{error!r}")
+                self._summarizer_cache = None
+        return self._summarizer_cache
+
+    def _remember(
+        self,
+        session_id: str,
+        user_input: str,
+        reply: str,
+        agent: str | None = None,
+    ) -> dict[str, Any]:
+        """写回本轮问答，并在超出预算时自动压缩上下文。
+
+        Args:
+            session_id: 会话 ID。
+            user_input: 用户原始输入。
+            reply: 本轮最终回复。
+            agent: 命中的子 Agent 名称。
+
+        Returns:
+            trace 中的 ``memory`` 字段；未启用记忆时为空字典。
+        """
+        if not self.memory_enabled:
+            return {}
+        try:
+            self.memory.remember(session_id, user_input, reply, agent=agent)
+            snapshot = self.memory.maintain(session_id, summarizer=self._summarizer())
+        except Exception as error:  # noqa: BLE001 - 记忆写入失败不得影响已生成的回复
+            print(f"[supervisor] 会话记忆写入失败：{error!r}")
+            return {"error": f"{type(error).__name__}: {error}"}
+        return snapshot.to_trace()
+
+    def _call_agent(
+        self,
+        agent: Any,
+        user_input: str,
+        session_id: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """调用子 Agent，并在其支持时注入共享上下文。
+
+        子 Agent 的 ``chat`` 若声明了 ``history`` 关键字（R1~R6、common 均已支持），
+        就传入本会话的统一上下文；否则退回旧签名，保持对自定义/第三方 Agent 的兼容。
+
+        Args:
+            agent: 子 Agent 实例。
+            user_input: 本轮用户输入（可能是调度器改写后的自包含任务）。
+            session_id: 会话 ID。
+            history: 共享上下文消息列表。
+
+        Returns:
+            子 Agent 的统一契约结果字典。
+        """
+        chat = agent.chat
+        if history:
+            try:
+                parameters = inspect.signature(chat).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "history" in parameters:
+                return chat(user_input, session_id, history=history)
+        return chat(user_input, session_id)
 
     # ------------------------------------------------------------ 规则路由（兜底）
 
@@ -242,15 +392,17 @@ class SupervisorAgent:
                 agent: 命中的子 Agent 名称（R1/R2/R3/common/multi）。
                 trace.router: 本次路由方式（"llm" 或 "rule"）。
                 trace.plan:   本次执行的子任务计划。
+                trace.memory: 本轮结束后的上下文占用与压缩状态（启用记忆时）。
         """
-        plan = self._plan(user_input)
+        history, router_history = self._recall(session_id)
+        plan = self._plan(user_input, router_history)
         router_mode = "llm" if plan else "rule"
         if not plan:
             target = self.route(user_input)
             plan = [{"agent": target if target in self.agents else "common", "task": user_input}]
 
         results = [
-            self._dispatch(item["agent"], self._resolve_agent(item["agent"]), item["task"], session_id)
+            self._dispatch(item["agent"], self._resolve_agent(item["agent"]), item["task"], session_id, history)
             for item in plan
         ]
 
@@ -263,6 +415,12 @@ class SupervisorAgent:
         # 再过一次净化。``sanitize_reply`` 幂等，纯文本逐字符不变；trace/plan 等
         # 结构化字段一律不动。
         merged["reply"] = sanitize_reply(merged.get("reply") or "")
+        # 写回本轮问答（超出预算时顺带自动压缩），失败只记录不影响已生成的回复。
+        memory_trace = self._remember(session_id, user_input, merged["reply"], merged.get("agent"))
+        if memory_trace:
+            trace = dict(merged.get("trace") or {})
+            trace["memory"] = memory_trace
+            merged["trace"] = trace
         return merged
 
     def chat_stream(self, user_input: str, session_id: str = "default"):
@@ -289,7 +447,8 @@ class SupervisorAgent:
         Yields:
             事件字典。
         """
-        plan = self._plan(user_input)
+        history, router_history = self._recall(session_id)
+        plan = self._plan(user_input, router_history)
         router_mode = "llm" if plan else "rule"
         if not plan:
             target = self.route(user_input)
@@ -314,14 +473,14 @@ class SupervisorAgent:
             stream_fn = getattr(agent, "chat_stream", None)
             if stream_fn is None:
                 # 该 Agent 无流式能力，回退同步调用
-                result = self._dispatch(item["agent"], agent, item["task"], session_id)
+                result = self._dispatch(item["agent"], agent, item["task"], session_id, history)
                 results.append(result)
             else:
                 task_result: dict[str, Any] | None = None
                 stream_filter = ReplyStreamFilter()
                 filters[index] = stream_filter
                 try:
-                    for ev in stream_fn(item["task"], session_id):
+                    for ev in self._call_agent_stream(agent, item["task"], session_id, history):
                         if ev["type"] == "token":
                             # 只在净化后确有内容时下发；空片段会让前端闪空气泡。
                             piece = stream_filter.feed(ev.get("content") or "")
@@ -359,6 +518,13 @@ class SupervisorAgent:
         merged["trace"] = trace
         # 与 chat() 同一道安全网：落库 / 前端最终气泡用的都是这条 reply。
         merged["reply"] = sanitize_reply(merged.get("reply") or "")
+        # 流式路径同样写回上下文：压缩触发的摘要调用已在 build_llm_summarizer 内部
+        # 抑制 token 下发，因此不会污染本次流。
+        memory_trace = self._remember(session_id, user_input, merged["reply"], merged.get("agent"))
+        if memory_trace:
+            trace = dict(merged.get("trace") or {})
+            trace["memory"] = memory_trace
+            merged["trace"] = trace
         yield {"type": "done", "result": merged}
 
     def _resolve_agent(self, name: str) -> Any:
@@ -410,7 +576,12 @@ class SupervisorAgent:
         }
 
     def _dispatch(
-        self, agent_name: str, agent: Any, user_input: str, session_id: str
+        self,
+        agent_name: str,
+        agent: Any,
+        user_input: str,
+        session_id: str,
+        history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """调用子 Agent 并汇总结果；模型/工具异常统一转为可读回复。
 
@@ -421,17 +592,46 @@ class SupervisorAgent:
         Args:
             agent_name: 目标子 Agent 名称。
             agent: 子 Agent 实例。
-            user_input: 用户自然语言输入。
+            user_input: 用户自然语言输入（调度器改写后的自包含任务）。
             session_id: 会话 ID。
+            history: 本会话共享上下文；子 Agent 支持时注入。
 
         Returns:
             统一契约字典。
         """
         try:
-            result = agent.chat(user_input, session_id)
+            result = self._call_agent(agent, user_input, session_id, history)
         except Exception as error:  # noqa: BLE001 - 顶层兜底，避免 500 直接暴露给用户
             return self._wrap(agent_name, self._failure_result(error))
         return self._wrap(agent_name, result)
+
+    def _call_agent_stream(
+        self,
+        agent: Any,
+        user_input: str,
+        session_id: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> Any:
+        """流式调用子 Agent，并在其支持时注入共享上下文。
+
+        Args:
+            agent: 子 Agent 实例。
+            user_input: 本轮用户输入。
+            session_id: 会话 ID。
+            history: 共享上下文消息列表。
+
+        Returns:
+            子 Agent ``chat_stream`` 返回的事件迭代器。
+        """
+        stream_fn = agent.chat_stream
+        if history:
+            try:
+                parameters = inspect.signature(stream_fn).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            if "history" in parameters:
+                return stream_fn(user_input, session_id, history=history)
+        return stream_fn(user_input, session_id)
 
     def _failure_result(self, error: Exception) -> dict[str, Any]:
         """把子 Agent 抛出的异常转换为统一契约的失败结果。

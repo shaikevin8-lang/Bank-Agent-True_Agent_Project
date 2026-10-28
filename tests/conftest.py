@@ -496,6 +496,10 @@ def pg_clean(runtime_pg_database: RuntimeDatabase, monkeypatch: pytest.MonkeyPat
         server._database = None
         server._supervisor = None
         server._session_store = None
+        # 会话上下文记忆也是进程级单例，且它内部持有同一个 Database：
+        # 不一起置空的话，用例之间会残留「已 dispose 的旧库」上的记忆门面，
+        # 记忆读写全部落空（表面现象是「对话不记忆」，极难归因）。
+        server._memory = None
 
     _reset_server()
     try:

@@ -446,6 +446,8 @@
   /* 气泡下方元信息里的模式徽标：更小一号 */
   .meta .mode-badge { padding: 2px 8px; font-size: 11px; vertical-align: middle; }
   .meta .mode-badge .dot { width: 6px; height: 6px; }
+  /* 气泡下方元信息里的上下文状态提示：比正文更淡的灰色小字 */
+  .meta .memory-hint { color: #8a8f99; }
   .settings-panel > footer {
     display: flex; align-items: center; gap: 9px;
     padding: 14px 20px; border-top: 1px solid var(--border); background: #fcfcfd;
@@ -1212,6 +1214,30 @@
     scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
+  /**
+   * 在 meta 行末尾追加「上下文状态」提示：条数 / tokens，必要时再加自动压缩说明。
+   * 只读后端 trace.memory；字段缺失或 messages 不为正数时不渲染，也不报错。
+   * 全部走 textContent，绝不拼接 innerHTML（后端字符串不可信）。
+   */
+  function appendMemoryHint(metaEl, meta) {
+    const memory = meta && meta.memory;
+    if (!memory || !(memory.messages > 0)) return;
+    // 与前面已有项保持 · 分隔
+    if (metaEl.childNodes.length) metaEl.appendChild(document.createTextNode(' · '));
+    let text = '上下文 ' + memory.messages + ' 条';
+    if (memory.tokens) text += ' · 约 ' + memory.tokens + ' tokens';
+    // 只有本轮真触发了压缩/截断才提示；skipped / disabled / 缺失一律不加
+    if (memory.compaction === 'compacted') {
+      text += ' · 已自动压缩（累计 ' + (memory.compacted_messages || 0) + ' 条）';
+    } else if (memory.compaction === 'truncated') {
+      text += ' · 已截断旧记录';
+    }
+    const hint = document.createElement('span');
+    hint.className = 'memory-hint';
+    hint.textContent = text;
+    metaEl.appendChild(hint);
+  }
+
   function addMessage(role, text, meta) {
     const wrap = document.createElement('div');
     wrap.className = 'message ' + role;
@@ -1252,6 +1278,8 @@
         badge.appendChild(label);
         metaEl.appendChild(badge);
       }
+      // 模型徽标之后追加上下文状态（历史消息没有 memory 时自动跳过）
+      appendMemoryHint(metaEl, meta);
       chatEl.appendChild(metaEl);
     }
 
@@ -1704,7 +1732,9 @@
         agent: message.agent,
         tools: message.tools || [],
         modelMode: message.model_mode,
-        modelName: message.model_name
+        modelName: message.model_name,
+        // 历史消息可能没有 memory（后端未存 trace），为空即不显示提示
+        memory: message.memory
       });
     });
   }
@@ -1822,7 +1852,8 @@
                 agent: result.agent,
                 tools: (result.trace && result.trace.tool_names) || [],
                 modelMode: result.trace && result.trace.model_mode,
-                modelName: result.trace && result.trace.model_name
+                modelName: result.trace && result.trace.model_name,
+                memory: result.trace && result.trace.memory   // 上下文记忆快照，缺失即不显示
               };
               const metaEl = document.createElement('div');
               metaEl.className = 'meta';
@@ -1846,6 +1877,8 @@
                 badge.appendChild(label);
                 metaEl.appendChild(badge);
               }
+              // 模型徽标之后追加上下文状态
+              appendMemoryHint(metaEl, meta);
               currentMsgEl.parentNode.insertBefore(metaEl, currentMsgEl.nextSibling);
               scrollToBottom();
             }

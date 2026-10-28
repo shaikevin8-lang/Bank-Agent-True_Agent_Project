@@ -122,6 +122,15 @@ Write-Host ("      解释器：{0}" -f $PythonExe)
 Write-Host ("      工作目录：{0}" -f $ServerDir)
 Write-Host ("      日志：{0} / {1}" -f $LogFile, $ErrLogFile)
 
+# 环境变量：start_server.vbs 会给子进程注入这些值，但本脚本直接起 python，
+# 子进程只继承当前 shell 的环境。缺了 BANK_AGENT_DB_URL 服务能起、却把所有
+# 会话/记忆接口打成 500（DatabaseConfigError），所以这里补齐（已在环境里则沿用）。
+if (-not $env:BANK_AGENT_DB_URL) {
+    $env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy'
+    Write-Host ('      注入 BANK_AGENT_DB_URL={0}' -f $env:BANK_AGENT_DB_URL)
+}
+if (-not $env:PYTHONIOENCODING) { $env:PYTHONIOENCODING = 'utf-8' }
+if (-not $env:PYTHONUTF8) { $env:PYTHONUTF8 = '1' }
 $proc = Start-Process -FilePath $PythonExe `
     -ArgumentList 'web_test\server.py' `
     -WorkingDirectory $ServerDir `

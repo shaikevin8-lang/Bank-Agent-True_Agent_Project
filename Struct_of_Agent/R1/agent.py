@@ -87,8 +87,19 @@ class TransferAgent:
             return DeepSeekChat(self.config)
         return MockChat(routing=DEFAULT_ROUTING)
 
-    def chat_stream(self, user_input: str, session_id: str = "default"):
+    def chat_stream(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ):
         """流式版本：LLM token 实时产出，graph 层无感知。
+
+        Args:
+            user_input: 用户自然语言输入。
+            session_id: 会话 ID（用于历史加载与持久化）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Yields:
             ``{"type":"token","content":str}`` / ``{"type":"final","result":dict}``
@@ -96,14 +107,21 @@ class TransferAgent:
         """
         from common.streaming import run_chat_stream
 
-        return run_chat_stream(lambda: self.chat(user_input, session_id))
+        return run_chat_stream(lambda: self.chat(user_input, session_id, history=history))
 
-    def chat(self, user_input: str, session_id: str = "default") -> dict[str, Any]:
+    def chat(
+        self,
+        user_input: str,
+        session_id: str = "default",
+        *,
+        history: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """处理一条用户消息并返回结构化结果。
 
         Args:
             user_input: 用户自然语言输入。
             session_id: 会话 ID（用于历史加载与持久化）。
+            history: 由总控注入的会话共享上下文（含历史摘要）；为 None 时回退到本场景私有历史。
 
         Returns:
             结果字典，字段：
@@ -113,11 +131,14 @@ class TransferAgent:
                 tasks:       本轮产生的转账任务回执列表。
                 trace:       追踪信息（session_id、steps、工具调用名）。
         """
-        history = self.store.load_messages(session_id)
+        # 共享上下文优先：总控维护的 history 是唯一权威上下文（含滚动摘要），
+        # 非空时不再读本场景私有历史，避免同一轮内容重复注入两遍。
+        shared = list(history or [])
+        history_messages = shared if shared else self.store.load_messages(session_id)
         user_message = {"role": "user", "content": user_input}
 
         initial_state: TransferState = {
-            "messages": history + [user_message],
+            "messages": history_messages + [user_message],
             "pending_tool_calls": [],
             "moderation": {},
             "task_records": [],
@@ -131,7 +152,7 @@ class TransferAgent:
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
 
         # 持久化本轮消息（用户消息 + 助手/工具消息）
-        self._persist_turn(session_id, user_input, history, result)
+        self._persist_turn(session_id, user_input, history_messages, result)
 
         # 持久化任务回执
         tasks = list(result.get("task_records", []))
@@ -201,7 +222,7 @@ class TransferAgent:
         Args:
             session_id: 会话 ID。
             user_input: 用户输入文本。
-            history: 本轮开始前的历史消息。
+            history: 本轮开始前喂给图的消息历史（共享上下文或私有历史）。
             result: 图运行结果。
         """
         self.store.save_message(session_id, "user", user_input)
