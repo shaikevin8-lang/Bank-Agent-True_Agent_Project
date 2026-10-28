@@ -50,24 +50,60 @@
   /* 两栏布局：左侧会话侧边栏 + 右侧对话区（原 header/main/footer 竖排结构不变） */
   .app { display: flex; height: 100vh; height: 100dvh; }
   .chat-column { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  /* 顶栏与输入区不可被压缩：空间不足时该由中间的消息区滚动，
+     而不是把 header/footer 压扁（否则侧边栏一展开就会「上面拉长、下面挤没」） */
+  .chat-column > header,
+  .chat-column > footer { flex: 0 0 auto; }
 
-  /* 顶部标题栏 */
+  /* 顶部标题栏
+     [必须保留] 本段的 nowrap/ellipsis + 工具组折行是「侧边栏拉出后页面变形」的唯一保障。
+     顶栏原本是单行 flex：标题区既没有宽度下限、也没有 nowrap，而 CJK 可以逐字断行，
+     其 min-content 宽度就是一个字。侧边栏一展开吃掉 264px，主列变窄、内容总宽超出，
+     flex 收缩就把标题区压到「一个字宽」，标题与副标题竖着排下来，顶栏从 66px 长到
+     300px+，把 main 挤扁、把 logo 压成 16px 窄条 —— 整页看起来就被拉长变形了。
+     现在：标题只截断不换行，徽标/按钮不可压缩，空间不够时右侧工具组整组折到第二行。 */
   header {
     display: flex;
     align-items: center;
+    flex-wrap: wrap;      /* 空间不足时让工具组折行，而不是把标题挤成竖排 */
     gap: 10px;
+    row-gap: 8px;
     padding: 14px 22px;
     background: var(--panel);
     border-bottom: 1px solid var(--border);
   }
   header .logo {
     width: 32px; height: 32px; border-radius: 8px;
+    flex: 0 0 auto;       /* 不许被压扁：曾被挤成 16px 宽的窄条 */
     background: linear-gradient(135deg, #2563eb, #7c3aed);
     display: flex; align-items: center; justify-content: center;
     color: #fff; font-weight: 700; font-size: 16px;
   }
-  header h1 { font-size: 16px; font-weight: 600; }
-  header .sub { font-size: 12px; color: var(--text-sub); }
+  /* 标题区：可伸缩但有宽度下限，内容一律省略号截断，绝不逐字换行 */
+  header .brand-text {
+    flex: 1 1 180px;
+    min-width: 132px;
+    overflow: hidden;
+  }
+  header h1 {
+    font-size: 16px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  header .sub {
+    font-size: 12px; color: var(--text-sub);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  /* 右侧工具组：内部元素不可压缩，有富余空间时整组靠右；
+     极窄窗口下整个组内部再折行，避免把顶栏顶出横向滚动条 */
+  header .header-tools {
+    display: flex; align-items: center; flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px; row-gap: 8px;
+    flex: 0 1 auto;
+    min-width: 0;
+    margin-left: auto;
+  }
+  header .header-tools > * { flex: 0 0 auto; }
 
   /* 会话区 */
   main {
@@ -167,15 +203,8 @@
     margin: 0 auto;
     padding: 0 20px;
   }
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .chip {
-    font-size: 12px; color: var(--text-sub);
-    border: 1px solid var(--border);
-    border-radius: 16px; padding: 5px 12px;
-    background: #fff; cursor: pointer;
-    transition: all .15s;
-  }
-  .chip:hover { border-color: var(--brand); color: var(--brand); }
+  /* 输入框上方的示例标签（.chips/.chip）已按需求移除：那张 3 行标签墙占掉约
+     90px 的垂直空间，而同样的示例文案在欢迎语里已有。 */
   .composer {
     display: flex; align-items: flex-end; gap: 10px;
     border: 1px solid var(--border);
@@ -328,8 +357,9 @@
     }
   }
 
-  /* ---------- 顶栏右侧：模式徽标 + 设置按钮 ---------- */
-  header .spacer { flex: 1; }
+  /* ---------- 顶栏右侧：模式徽标 + 设置按钮 ----------
+     右对齐改由 header .header-tools 的 margin-left: auto 承担（原来的
+     空 .spacer 元素会参与折行，已删除；徽标宽度一律 nowrap 不参与压缩） */
   .mode-badge {
     display: inline-flex; align-items: center; gap: 6px;
     font-size: 12px; line-height: 1;
@@ -725,35 +755,38 @@
       </svg>
     </button>
     <div class="logo">银</div>
-    <div>
+    <!-- 标题区：单行截断，宽度有下限（见样式表 header .brand-text 的注释） -->
+    <div class="brand-text">
       <h1>银行智能 Agent 测试</h1>
       <div class="sub">自然语言对话 · 路由到 R1 转账 / R2 账单 / R3 理财 / R4 卡片 / R5 订阅 / R6 生日联动</div>
     </div>
-    <div class="spacer"></div>
-    <span class="mode-badge mode-mock" id="modeBadge" title="当前模型接入模式">
-      <span class="dot"></span><span id="modeBadgeText">读取中…</span>
-    </span>
-    <!-- 演示时钟徽标：常态显示业务时间，点击弹出操作面板 -->
-    <button type="button" class="mode-badge clock-badge" id="clockBadge" aria-haspopup="dialog" aria-label="演示时钟，点击打开面板">
-      <span class="dot"></span><span class="clock-frozen-icon" id="clockFrozenIcon" hidden>⏸</span>
-      <span id="clockBadgeText">读取时钟…</span><span class="clock-offset" id="clockOffset" hidden></span>
-    </button>
-    <!-- 操作身份：只影响按钮可用性，权限以后端 403 为准 -->
-    <select class="role-select" id="roleSelect" aria-label="当前操作身份" title="切换操作身份（权限以后端校验为准）">
-      <option value="user">普通用户</option>
-      <option value="risk_reviewer">复核员</option>
-      <option value="ops_admin">运维</option>
-    </select>
-    <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
-      人工复核<span class="count" id="hitlCount" hidden>0</span>
-    </button>
-    <button class="icon-btn" id="settingsBtn" title="模型接入设置" aria-label="模型接入设置">
+    <!-- 右侧工具组：整组不可压缩，窄窗口下整组折到第二行 -->
+    <div class="header-tools">
+      <span class="mode-badge mode-mock" id="modeBadge" title="当前模型接入模式">
+        <span class="dot"></span><span id="modeBadgeText">读取中…</span>
+      </span>
+      <!-- 演示时钟徽标：常态显示业务时间，点击弹出操作面板 -->
+      <button type="button" class="mode-badge clock-badge" id="clockBadge" aria-haspopup="dialog" aria-label="演示时钟，点击打开面板">
+        <span class="dot"></span><span class="clock-frozen-icon" id="clockFrozenIcon" hidden>⏸</span>
+        <span id="clockBadgeText">读取时钟…</span><span class="clock-offset" id="clockOffset" hidden></span>
+      </button>
+      <!-- 操作身份：只影响按钮可用性，权限以后端 403 为准 -->
+      <select class="role-select" id="roleSelect" aria-label="当前操作身份" title="切换操作身份（权限以后端校验为准）">
+        <option value="user">普通用户</option>
+        <option value="risk_reviewer">复核员</option>
+        <option value="ops_admin">运维</option>
+      </select>
+      <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
+        人工复核<span class="count" id="hitlCount" hidden>0</span>
+      </button>
+      <button class="icon-btn" id="settingsBtn" title="模型接入设置" aria-label="模型接入设置">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="3"></circle>
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-      </svg>
-    </button>
+        </svg>
+      </button>
+    </div>
   </header>
 
   <!-- 旧版后端警示条：/health/live 未返回 api_version 时由 refreshModeBadge() 显示（默认隐藏） -->
@@ -868,18 +901,6 @@
 
   <footer>
     <div class="input-box">
-      <div class="chips" id="chips">
-        <button class="chip" data-text="给张三转账100元">给张三转账100元</button>
-        <button class="chip" data-text="看看我这个月的消费分类">看看我这个月的消费分类</button>
-        <button class="chip" data-text="记录一笔美团外卖午餐消费66元">记录一笔美团外卖午餐消费66元</button>
-        <button class="chip" data-text="今天北京天气怎么样">今天北京天气怎么样</button>
-        <button class="chip" data-text="帮我检测异常交易">帮我检测异常交易</button>
-        <button class="chip" data-text="帮我申请一张虚拟卡">帮我申请一张虚拟卡</button>
-        <button class="chip" data-text="帮我冻结我的卡片">帮我冻结我的卡片</button>
-        <button class="chip" data-text="识别一下我的订阅扣费">识别一下我的订阅扣费</button>
-        <button class="chip" data-text="帮我取消腾讯视频的自动续费">帮我取消腾讯视频的自动续费</button>
-        <button class="chip" data-text="帮妈妈安排生日礼物，预留1000元预算">帮妈妈安排生日礼物，预留1000元预算</button>
-      </div>
       <div class="composer">
         <textarea id="input" rows="1" placeholder="输入你的需求，例如：给李四转账200元"></textarea>
         <button id="send" title="发送">
@@ -3577,10 +3598,6 @@
     }
   });
   inputEl.addEventListener('input', autoResize);
-
-  document.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => send(chip.dataset.text));
-  });
 
   // ---------------------------------------------------------------- 侧边栏初始化
   // <head> 的首帧脚本已经定好了初始状态，这里只同步按钮的 aria-expanded
