@@ -54,6 +54,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Callable, Iterator, Mapping, Protocol
@@ -541,6 +542,26 @@ def _as_uuid(tenant_id: str) -> uuid.UUID:
     return uuid.UUID(str(tenant_id))
 
 
+#: 当前正在推进的租户标识（由 :meth:`ClockService.advance` 在调用回调前后设置）。
+#:
+#: 为什么需要它：``advance`` 是在**提交之前**调用到期结算回调的，此时库里那一行
+#: ``app.sim_clock`` 还是推进前的状态，回调再去读该租户的 :func:`business_now` 只
+#: 能读到**旧**业务时间。回调签名又固定为 ``(business_now)``，无法额外传租户，因此
+#: 用 ``ContextVar`` 把「本次推进的租户」透传出去：结算模块据此知道「传入的
+#: ``business_now`` 是这个租户推进后的业务时间」，其余租户仍按各自业务时间判定
+#: （绝不把推进者的时间套到别的租户上）。
+_advancing_tenant: ContextVar[str | None] = ContextVar("clock_advancing_tenant", default=None)
+
+
+def current_advance_tenant() -> str | None:
+    """返回此刻正在推进的租户标识（不在推进中时为 ``None``）。
+
+    Returns:
+        租户标识字符串；回调之外的调用一律返回 ``None``。
+    """
+    return _advancing_tenant.get()
+
+
 # ---------------------------------------------------------------------------
 # 服务
 # ---------------------------------------------------------------------------
@@ -656,8 +677,13 @@ class ClockService:
     def run_due(self, business_now: datetime) -> list[dict[str, Any]]:
         """执行到期结算回调并汇总摘要。
 
-        当前没有任何领域模块注册回调，因此恒返回空列表——这样时钟能力可以先独立
-        上线，推进时只是「时间变了」，不会误触发业务写。
+        回调由领域模块通过 :meth:`register_due_scan` 注册：生产装配时
+        ``web_test.server`` 会调用 ``common.clock_settlement.install()``，把
+        「定时转账到期执行」与「人工案件 SLA 超时关闭」两类结算接上；**没有注册
+        任何回调时仍返回空列表**（时钟能力可以独立运行，推进时只是「时间变了」，
+        不会误触发业务写）。
+
+        单个回调抛异常只记 warning 并跳过，绝不让结算故障拖垮时钟推进本身。
 
         Args:
             business_now: 推进后的业务时间。
@@ -791,7 +817,13 @@ class ClockService:
             frozen_at_business=None,
             updated_by=actor,
         )
-        triggered = tuple(self.run_due(after.business_now(moment)))
+        # 回调在提交前执行：把「本次推进的租户」透传出去，结算才能用上推进后的
+        # 业务时间（库里那行还是旧值），见 ``_advancing_tenant``。
+        token = _advancing_tenant.set(key)
+        try:
+            triggered = tuple(self.run_due(after.business_now(moment)))
+        finally:
+            _advancing_tenant.reset(token)
         message = f"已推进 {_describe_offset(delta)}，触发 {len(triggered)} 项到期任务" if triggered else (
             f"已推进 {_describe_offset(delta)}" if delta > 0 else f"已回拨 {_describe_offset(-delta)}"
         )
@@ -1175,6 +1207,7 @@ __all__ = [
     "business_now",
     "business_now_iso",
     "business_today",
+    "current_advance_tenant",
     "default_tenant_id",
     "disable",
     "enable",

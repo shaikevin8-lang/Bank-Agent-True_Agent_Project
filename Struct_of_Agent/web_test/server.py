@@ -81,6 +81,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from common import clock_settlement
 from common.memory import PostgresBackend, SessionMemory
 from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
@@ -865,6 +866,11 @@ def clear_search_settings() -> dict:
 # ---------------------------------------------------------------------------
 app.include_router(clock_router)
 app.include_router(hitl_router)
+
+# 到期结算接线（C1）：让「推进演示时钟」真正结转到期的定时转账与超时的人工案件。
+# install() 只往时钟服务里挂一个回调，import 期不碰数据库（真正的库读写发生在推进
+# 时刻），重复调用幂等；即使注册失败也只记 warning，不影响服务启动与既有端点。
+clock_settlement.install()
 
 
 def _registered_settings_routes() -> list[str]:
