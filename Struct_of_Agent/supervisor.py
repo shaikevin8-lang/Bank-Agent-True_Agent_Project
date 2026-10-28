@@ -32,6 +32,7 @@ from common.config import load_config
 from common.llm import DeepSeekChat
 from common.model_manager import RuntimeChatModel, trace_info
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
+from common.text_format import ReplyStreamFilter, sanitize_reply
 from R1 import TransferAgent
 from R2 import BillAgent
 from R3 import WealthAgent
@@ -258,6 +259,10 @@ class SupervisorAgent:
         trace["router"] = router_mode
         trace["plan"] = plan
         merged["trace"] = trace
+        # 安全网：无论哪条分支（单任务透传 / 多任务合并 / 兜底失败），下发给用户前
+        # 再过一次净化。``sanitize_reply`` 幂等，纯文本逐字符不变；trace/plan 等
+        # 结构化字段一律不动。
+        merged["reply"] = sanitize_reply(merged.get("reply") or "")
         return merged
 
     def chat_stream(self, user_input: str, session_id: str = "default"):
@@ -275,6 +280,12 @@ class SupervisorAgent:
             user_input: 用户自然语言输入。
             session_id: 会话 ID。
 
+        Note:
+            所有 ``token`` 片段都经过 :class:`ReplyStreamFilter` 有状态净化，
+            ``task_done`` / ``done`` 里的 ``result["reply"]`` 经过
+            :func:`sanitize_reply` 净化：前端拿到的永远是纯文本，
+            **事件类型名、字段名与顺序语义保持不变**。
+
         Yields:
             事件字典。
         """
@@ -287,6 +298,10 @@ class SupervisorAgent:
         yield {"type": "plan", "plan": plan, "router": router_mode}
 
         results: list[dict[str, Any]] = []
+        # 每个子任务 index 一个流式净化器：模型会把 ``**`` / 围栏 ``` 拆到不同 chunk，
+        # 逐块直发会把半截标记漏给前端，故由 ReplyStreamFilter 持有未完成标记，
+        # 等 flush() 时再收尾。任务结束后立即丢弃该 index 的过滤器。
+        filters: dict[int, ReplyStreamFilter] = {}
         for index, item in enumerate(plan):
             yield {
                 "type": "task_start",
@@ -303,18 +318,32 @@ class SupervisorAgent:
                 results.append(result)
             else:
                 task_result: dict[str, Any] | None = None
-                for ev in stream_fn(item["task"], session_id):
-                    if ev["type"] == "token":
-                        yield {"type": "token", "index": index, "content": ev["content"]}
-                    elif ev["type"] == "final":
-                        task_result = ev["result"]
-                    elif ev["type"] == "error":
-                        task_result = self._failure_result(RuntimeError(ev["error"]))
+                stream_filter = ReplyStreamFilter()
+                filters[index] = stream_filter
+                try:
+                    for ev in stream_fn(item["task"], session_id):
+                        if ev["type"] == "token":
+                            # 只在净化后确有内容时下发；空片段会让前端闪空气泡。
+                            piece = stream_filter.feed(ev.get("content") or "")
+                            if piece:
+                                yield {**ev, "type": "token", "index": index, "content": piece}
+                        elif ev["type"] == "final":
+                            task_result = ev["result"]
+                        elif ev["type"] == "error":
+                            task_result = self._failure_result(RuntimeError(ev["error"]))
+                    tail = stream_filter.flush()
+                finally:
+                    filters.pop(index, None)
+                if tail:
+                    # 收尾尾巴必须在 task_done 之前下发，顺序语义与原来一致。
+                    yield {"type": "token", "index": index, "content": tail}
                 results.append(
                     self._wrap(item["agent"], task_result) if task_result is not None
                     else self._wrap(item["agent"], self._failure_result(RuntimeError("无结果")))
                 )
 
+            # task_done 的 result 只改 reply，其它键（blocked/tasks/trace/agent…）原样保留。
+            results[-1]["reply"] = sanitize_reply(results[-1].get("reply") or "")
             yield {
                 "type": "task_done",
                 "index": index,
@@ -328,6 +357,8 @@ class SupervisorAgent:
         trace["router"] = router_mode
         trace["plan"] = plan
         merged["trace"] = trace
+        # 与 chat() 同一道安全网：落库 / 前端最终气泡用的都是这条 reply。
+        merged["reply"] = sanitize_reply(merged.get("reply") or "")
         yield {"type": "done", "result": merged}
 
     def _resolve_agent(self, name: str) -> Any:
@@ -346,6 +377,14 @@ class SupervisorAgent:
     def _merge_results(self, plan: list[dict[str, str]], results: list[dict[str, Any]]) -> dict[str, Any]:
         """把多个子任务的结果合并为一条统一契约回复。
 
+        回复正文一律是**纯文本**（前端气泡用 ``textContent`` 渲染，不解析
+        Markdown）：每段子回复先过 :func:`sanitize_reply`，段落之间空一行。
+
+        - 只有 1 个子任务时**直接返回该子任务的 reply**，不添加任何前缀，
+          保持用户观感自然（与单任务直接透传路径一致）；
+        - 多子任务时每段以「关于「任务描述」：」自然语言引出，不再使用
+          ``## 标题`` / ``【任务N】`` 这类结构化标记。
+
         Args:
             plan: 子任务计划。
             results: 各子任务的结果字典（与 plan 等长、同序）。
@@ -353,12 +392,16 @@ class SupervisorAgent:
         Returns:
             合并后的统一契约字典（agent 为 "multi"）。
         """
-        sections = [
-            f"【任务{index} · {item['agent']}】{item['task']}\n{result.get('reply', '')}"
-            for index, (item, result) in enumerate(zip(plan, results), start=1)
-        ]
+        replies = [sanitize_reply(result.get("reply") or "") for result in results]
+        if len(replies) == 1:
+            merged_reply = replies[0]
+        else:
+            sections = [
+                f"关于「{item['task']}」：\n{reply}" for item, reply in zip(plan, replies)
+            ]
+            merged_reply = "\n\n".join(sections)
         return {
-            "reply": "\n\n".join(sections),
+            "reply": merged_reply,
             "blocked": any(bool(result.get("blocked")) for result in results),
             "moderation": {},
             "tasks": [task for result in results for task in result.get("tasks", [])],
@@ -405,14 +448,16 @@ class SupervisorAgent:
         # 因此必须把密钥传进 describe_error，让它「先擦除、再截断」——
         # 若先截断再擦除，截断点落在 Key 中间时前缀会存活下来。
         secrets = current_secrets(self.model_manager)
-        detail = describe_error(error, secrets)
+        # 错误详情会同时进入 reply 与 trace.error_detail，两者都会被前端展示：
+        # 这里先净化成纯文本（错误信息里偶尔夹带网关回显的 Markdown / JSON 片段）。
+        detail = sanitize_reply(describe_error(error, secrets))
         hint = "请检查「模型设置」中的 Base URL、API Key 与模型名是否正确。"
         if isinstance(error, RuntimeError) and "API Key" in detail:
             reply = f"当前未配置可用的模型：{detail}"
         else:
             reply = f"模型调用失败，未能完成本次请求：{detail}\n{hint}"
         return {
-            "reply": reply,
+            "reply": sanitize_reply(reply),
             "blocked": False,
             "moderation": {},
             "tasks": [],

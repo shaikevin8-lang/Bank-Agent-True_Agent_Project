@@ -29,6 +29,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from common.prompts import OUTPUT_STYLE_RULE
+
 from ..llm import ChatModel
 from ..persistence import TransactionStore
 
@@ -106,7 +108,10 @@ def _classify_note(model: ChatModel, note: str) -> str:
     fallback = _keyword_classify(note)
     try:
         prompt = (
-            f"请将以下消费备注归类到：{'/'.join(_CATEGORIES)}。只回复类别名，不要解释。\n备注：{note}"
+            f"请将以下消费备注归类到：{'/'.join(_CATEGORIES)}。\n"
+            f"备注：{note}\n"
+            f"{OUTPUT_STYLE_RULE}\n"
+            "本题只需回答一个类别名（从上面列表中挑一个词），不要解释，不要加标点或符号。"
         )
         response = model.chat([{"role": "user", "content": prompt}], None)
         text = (response["choices"][0]["message"].get("content") or "").strip()
@@ -164,7 +169,11 @@ def _llm_judge_summary(model: ChatModel, abnormal: list[dict[str, Any]]) -> str:
         return fallback
     try:
         brief = [{"note": a.get("note"), "reasons": a.get("abnormal_reasons")} for a in abnormal[:5]]
-        prompt = f"以下是被标记的异常交易：{brief}。请用一句话判断这些交易的风险并提醒用户。"
+        prompt = (
+            f"以下是被标记的异常交易：{brief}。"
+            f"请用一句自然口语化的纯文本判断这些交易的风险并提醒用户，不要罗列字段或加标记。\n"
+            f"{OUTPUT_STYLE_RULE}"
+        )
         response = model.chat([{"role": "user", "content": prompt}], None)
         text = (response["choices"][0]["message"].get("content") or "").strip()
         return text or fallback

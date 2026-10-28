@@ -25,7 +25,7 @@ from .persistence import BalanceStore
 from .state import TransferState
 from .tools import TOOL_MAP, TRANSFER_TOOL_NAMES, to_openai_tools
 
-from common.prompts import build_system_prompt
+from common.prompts import OUTPUT_STYLE_RULE, build_system_prompt
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
 _MAX_STEPS = 8
@@ -188,7 +188,8 @@ def _compose_insufficient_reply(model: ChatModel, balance_fen: int, amount_fen: 
     try:
         prompt = (
             f"当前账户余额为 {_fen_to_yuan(balance_fen)} 元，用户尝试转账 {_fen_to_yuan(amount_fen)} 元，"
-            f"余额不足。请用一句话礼貌地提醒用户余额不足。"
+            f"余额不足。请用一句自然口语化的纯文本礼貌地提醒用户余额不足，不要加任何标记或排版。\n"
+            f"{OUTPUT_STYLE_RULE}"
         )
         response = model.chat([{"role": "user", "content": prompt}], None)
         text = (response["choices"][0]["message"].get("content") or "").strip()

@@ -18,6 +18,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.model_manager import RuntimeChatModel, trace_info
+from common.text_format import sanitize_reply
 from db.repository import Database
 
 from .config import DeepSeekConfig, load_config
@@ -137,7 +138,7 @@ class TransferAgent:
         for task in tasks:
             self.store.save_task(session_id, task)
 
-        reply = result.get("final_reply") or self._extract_final_reply(result)
+        reply = sanitize_reply(result.get("final_reply") or self._extract_final_reply(result))
         trace = {
             "session_id": session_id,
             "steps": result.get("steps", 0),

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from common.model_manager import RuntimeChatModel, trace_info
+from common.text_format import sanitize_reply
 
 from .config import DeepSeekConfig, load_config
 from .graph import build_graph
@@ -90,7 +91,7 @@ class SubscriptionAgent:
         self._persist_turn(session_id, user_input, history, result)
 
         tasks = list(result.get("task_records", []))
-        reply = result.get("final_reply") or self._extract_final_reply(result)
+        reply = sanitize_reply(result.get("final_reply") or self._extract_final_reply(result))
         trace = {
             "session_id": session_id,
             "steps": result.get("steps", 0),

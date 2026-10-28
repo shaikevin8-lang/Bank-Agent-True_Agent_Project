@@ -25,6 +25,7 @@ from .middleware.content_moderation import ContentModerationMiddleware
 from .model_manager import RuntimeChatModel, trace_info
 from .prompts import build_system_prompt
 from .tavily_search import tavily_search, to_openai_tool
+from .text_format import sanitize_reply
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
 _MAX_STEPS = 8
@@ -94,7 +95,12 @@ def _moderate_node(state: CommonState, moderator: ContentModerationMiddleware) -
 
     result = moderator.check(latest_user)
     if not result.passed:
-        refusal = {"role": "assistant", "content": f"抱歉，您的输入未通过内容审核：{result.reason}"}
+        # 审核拦截文案同样会直接进聊天气泡：按统一契约先净化（纯文本输入逐字符不变），
+        # 避免审核原因里夹带 Markdown / JSON 外壳漏给用户。
+        refusal = {
+            "role": "assistant",
+            "content": sanitize_reply(f"抱歉，您的输入未通过内容审核：{result.reason}"),
+        }
         messages = state.get("messages", []) + [refusal]
         return {
             "moderation": result.to_dict(),
@@ -327,7 +333,7 @@ class CommonAgent:
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
 
         tasks = list(result.get("task_records", []))
-        reply = result.get("final_reply") or self._extract_final_reply(result)
+        reply = sanitize_reply(result.get("final_reply") or self._extract_final_reply(result))
         trace = {
             "session_id": session_id,
             "steps": result.get("steps", 0),

@@ -30,6 +30,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from common.prompts import OUTPUT_STYLE_RULE
 from common.tavily_search import run_tavily_search
 
 from ..llm import ChatModel
@@ -114,9 +115,11 @@ def _llm_risk_level(model: ChatModel, user_input: str, search_summary: str) -> s
     try:
         prompt = (
             "你是银行理财风险测评专员。请根据用户的自述，并参考以下风险等级评估标准，"
-            "判定用户的风险承受等级。只回复等级代号（R1/R2/R3/R4/R5 之一），不要解释。\n"
+            "判定用户的风险承受等级。\n"
             f"评估标准参考：{search_summary or 'R1保守型/R2稳健型/R3平衡型/R4成长型/R5进取型'}\n"
-            f"用户自述：{user_input}"
+            f"用户自述：{user_input}\n"
+            f"{OUTPUT_STYLE_RULE}\n"
+            "本题只需回答一个等级代号（R1/R2/R3/R4/R5 之一），不要解释，不要加任何标点或符号。"
         )
         response = model.chat([{"role": "user", "content": prompt}], None)
         text = (response["choices"][0]["message"].get("content") or "").strip()

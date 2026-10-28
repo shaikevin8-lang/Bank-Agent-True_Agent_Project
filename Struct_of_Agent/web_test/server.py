@@ -82,6 +82,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
+from common.text_format import sanitize_reply
 from db.repository import Database
 from db.seed import seed as seed_demo_data
 from db.seed_scenarios import seed as seed_scenario_data
@@ -423,8 +424,14 @@ def chat(request: ChatRequest) -> dict:
 
     Returns:
         统一契约字典（reply / blocked / moderation / tasks / trace / agent）。
+
+    Note:
+        这里是最后一道**兜底**净化：``reply`` 在返回客户端与落库前都再过一次
+        :func:`sanitize_reply`，用于防御被替换 / 自定义的 supervisor（例如测试替身
+        或第三方实现直接吐出 Markdown / JSON）。净化器幂等，正常路径下是空操作。
     """
     result = get_supervisor().chat(request.message, request.session_id)
+    result["reply"] = sanitize_reply(result.get("reply") or "")
     _record_turn(request.session_id, request.message, result)
     return result
 
@@ -468,6 +475,10 @@ def chat_stream(request: ChatRequest) -> Any:
     def event_generator():
         try:
             for chunk in supervisor.chat_stream(request.message, request.session_id):
+                # 注意：这里**不做**流式 Markdown 过滤。token 事件的净化由
+                # SupervisorAgent.chat_stream 里的有状态 ReplyStreamFilter 负责
+                # （它要跨 chunk 持有「可能是半截标记」的尾巴）；本层再过滤一遍会
+                # 出现两套状态机互相干扰，导致标记被拆碎或重复吞字。
                 # done 事件：先落库再推给前端，避免客户端断开导致记录丢失
                 if chunk.get("type") == "done":
                     _record_turn(request.session_id, request.message, chunk.get("result", {}))
@@ -510,7 +521,9 @@ def _record_turn(session_id: str, user_message: str, result: dict[str, Any]) -> 
         store.append_message(
             session_id,
             "assistant",
-            str(result.get("reply") or ""),
+            # 落库前兜底净化：历史回看走的是同一条纯文本渲染链路，
+            # 不能把 Markdown 原文存进库再显示出来。
+            str(sanitize_reply(result.get("reply") or "")),
             agent=result.get("agent"),
             model_mode=trace.get("model_mode"),
             model_name=trace.get("model_name"),
