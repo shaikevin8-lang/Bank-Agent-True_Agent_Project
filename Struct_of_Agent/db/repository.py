@@ -56,7 +56,12 @@ from .seed import (
     seed_principal_id,
     seed_tenant_id,
 )
-from .session import assert_schema_current, create_db_engine, create_session_factory
+from .session import (
+    apply_tenant_context,
+    assert_schema_current,
+    create_db_engine,
+    create_session_factory,
+)
 from .session_text import DEFAULT_TITLE, auto_title, normalize_title
 from .task_status import map_receipt_status
 
@@ -249,8 +254,15 @@ class Database:
         return cls(engine)
 
     def session(self) -> Session:
-        """创建一个 ORM 会话（调用方负责提交/关闭）。"""
-        return self._factory()
+        """创建一个 ORM 会话（调用方负责提交/关闭）。
+
+        会话创建即注入事务级 ``app.tenant_id`` GUC：0004 起 FORCE RLS 只放行
+        当前租户的行。GUC 随提交失效，因此一个会话只应承载一个事务（本代码库
+        全部经 :meth:`transaction` 使用，满足该约定）。
+        """
+        session = self._factory()
+        apply_tenant_context(session, self.tenant_id)
+        return session
 
     @contextmanager
     def transaction(self) -> Iterator[Session]:

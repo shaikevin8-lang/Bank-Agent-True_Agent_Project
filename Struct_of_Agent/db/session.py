@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import os
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -146,12 +147,51 @@ def create_session_factory(engine: Engine | None = None) -> sessionmaker[Session
     return sessionmaker(bind=engine or create_db_engine(), expire_on_commit=False, future=True)
 
 
+def apply_tenant_context(session: Session, tenant_id: uuid.UUID) -> None:
+    """在当前事务注入 RLS 租户上下文（``app.tenant_id`` GUC）。
+
+    使用 ``set_config(..., is_local => true)``（等价 ``SET LOCAL``）：作用域
+    仅限当前事务，连接归还连接池后不会残留，避免跨请求串租户。0004 的
+    ``tenant_isolation`` 策略读取该 GUC；未注入时策略比较结果为 NULL，
+    fail-closed 看不到任何业务行。
+
+    Args:
+        session: 当前事务的 ORM 会话。
+        tenant_id: 当前请求归属的租户 UUID。
+    """
+    session.execute(
+        text("SELECT set_config('app.tenant_id', :tenant_id, true)"),
+        {"tenant_id": str(tenant_id)},
+    )
+
+
+def apply_seed_mode(session: Session) -> None:
+    """在当前事务开启 RLS seed 放行开关（``app.seed_mode`` GUC）。
+
+    0004 的 ``seed_import`` 策略在该 GUC 为 ``'on'`` 时放行全部行，供
+    ``python -m db.cli seed`` 等运维入口跨租户幂等补数。同样事务级生效，
+    不会污染连接池里的其他会话。
+
+    Args:
+        session: 当前事务的 ORM 会话。
+    """
+    session.execute(text("SELECT set_config('app.seed_mode', 'on', true)"))
+
+
 @contextmanager
-def session_scope(engine: Engine | None = None) -> Iterator[Session]:
+def session_scope(
+    engine: Engine | None = None,
+    *,
+    tenant_id: uuid.UUID | None = None,
+    seed_mode: bool = False,
+) -> Iterator[Session]:
     """提供一个自动提交/回滚的事务边界。
 
     Args:
         engine: 复用的引擎；缺省新建。
+        tenant_id: 注入 RLS 租户上下文的租户 UUID；缺省不注入（0004 生效后
+            未注入的会话在 FORCE RLS 下访问不到任何业务行）。
+        seed_mode: 是否开启 seed 放行开关；仅 seed/导入等运维场景使用。
 
     Yields:
         ORM 会话。
@@ -159,6 +199,10 @@ def session_scope(engine: Engine | None = None) -> Iterator[Session]:
     factory = create_session_factory(engine)
     session = factory()
     try:
+        if tenant_id is not None:
+            apply_tenant_context(session, tenant_id)
+        if seed_mode:
+            apply_seed_mode(session)
         yield session
         session.commit()
     except Exception:
@@ -261,6 +305,8 @@ __all__ = [
     "DatabaseConfigError",
     "FALLBACK_DB_URL_ENV",
     "MigrationStateError",
+    "apply_seed_mode",
+    "apply_tenant_context",
     "assert_schema_current",
     "create_db_engine",
     "create_session_factory",

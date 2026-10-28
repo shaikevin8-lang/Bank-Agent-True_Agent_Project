@@ -148,11 +148,13 @@ def cmd_reset(args: argparse.Namespace, url: str) -> int:
     engine = create_db_engine(url)
     try:
         assert_schema_current(engine)
-        with session_scope(engine) as session:
+        # 0004 起 FORCE RLS：影响摘要需跨租户统计，走 seed 放行。
+        with session_scope(engine, seed_mode=True) as session:
             before = impact_summary(session)
         print(f"目标：{safe_database_url(url)}（env={environment}）")
         print(f"影响摘要：{before}")
-        with session_scope(engine) as session:
+        # 重置会删除并重建演示数据，全程需要 seed 放行。
+        with session_scope(engine, seed_mode=True) as session:
             result = reset_demo_data(
                 session,
                 confirmation=args.confirm,
@@ -187,7 +189,8 @@ def cmd_import(args: argparse.Namespace, url: str) -> int:
                 return 2
             print(f"旧库目录：{data_dir}")
 
-        with session_scope(engine) as session:
+        # 旧库导入跨租户写入 app 各表并写审计，需要 seed 放行。
+        with session_scope(engine, seed_mode=True) as session:
             report = import_legacy(
                 session,
                 web_sessions=sources.web_sessions,
@@ -230,7 +233,8 @@ def cmd_verify(args: argparse.Namespace, url: str) -> int:
     engine = create_db_engine(url)
     try:
         assert_schema_current(engine)
-        with session_scope(engine) as session:
+        # 只读校验同样受 RLS 约束：未注入租户上下文时读不到任何行。
+        with session_scope(engine, seed_mode=True) as session:
             seed_check = verify_seed(session)
             import_check = verify_import(session)
         print(f"迁移：{migration_status(engine)}")

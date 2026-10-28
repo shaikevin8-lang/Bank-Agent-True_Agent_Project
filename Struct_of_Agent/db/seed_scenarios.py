@@ -9,6 +9,8 @@
 
 全部使用 ``INSERT ... ON CONFLICT DO NOTHING`` + 确定性 UUID：重复执行不会
 产生重复行，也不会覆盖演示过程中产生的余额变化、卡片状态或订阅状态。
+0004 起全表 FORCE RLS：``seed``/``verify`` 入口自行开启事务级
+``app.seed_mode`` 放行开关，调用方无需额外准备。
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from .seed import (
     seed_principal_id,
     seed_tenant_id,
 )
+from .session import apply_seed_mode
 
 # R3 理财子账户初始余额（分，¥100,000.00）：覆盖全部演示产品起购金额。
 WEALTH_INITIAL_BALANCE_MINOR = 10_000_000
@@ -173,6 +176,8 @@ def seed(session: Session) -> dict[str, Any]:
     Returns:
         统计结果，含 ``inserted`` 计数与固定账户 ID。
     """
+    # FORCE RLS 下跨租户写入必须先开 seed 放行开关（事务级，提交后失效）。
+    apply_seed_mode(session)
     tenant_id = seed_tenant_id()
     principal_id = seed_principal_id()
     account_id = seed_account_id()
@@ -317,6 +322,8 @@ def verify(session: Session) -> dict[str, Any]:
     Returns:
         含 ``ok`` 与 ``counts`` 的校验结果。
     """
+    # 未注入租户上下文的会话在 RLS 下读不到行，校验同样需要 seed 放行。
+    apply_seed_mode(session)
     tenant_id = seed_tenant_id()
     principal_id = seed_principal_id()
     account_id = seed_account_id()

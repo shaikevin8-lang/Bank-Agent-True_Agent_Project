@@ -5,6 +5,8 @@
     - 只创建一个合成租户、一个演示用户、演示账户和合成流水。
     - 使用固定业务键与确定性 UUID，重复执行不会产生重复行。
     - 不写入真实账号、手机号、密码、Token 或真实交易数据。
+    - 0004 起全表 FORCE RLS：``seed``/``verify`` 入口自行开启事务级
+      ``app.seed_mode`` 放行开关，调用方无需额外准备。
 
 账户口径与当前代码一致：``web_test/server.py`` 的 ``DEFAULT_ACCOUNT_ID`` 为
 ``622200001``、``DEFAULT_BALANCE_FEN`` 为 ``100000``（¥1000.00）。
@@ -21,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from .models import Account, BankTransaction, Principal, Tenant
+from .session import apply_seed_mode
 
 # 确定性命名空间：改动会让 seed 产生"新"实体，因此必须保持稳定。
 SEED_NAMESPACE = uuid.UUID("6f1f7d2c-2f43-4c1a-9a5b-0d8e6b3a1c44")
@@ -148,6 +151,8 @@ def seed(session: Session) -> dict[str, Any]:
     Returns:
         统计结果，含 ``inserted`` 计数与固定 ID。
     """
+    # FORCE RLS 下跨租户写入必须先开 seed 放行开关（事务级，提交后失效）。
+    apply_seed_mode(session)
     tenant_id = seed_tenant_id()
     principal_id = seed_principal_id()
     account_id = seed_account_id()
@@ -253,6 +258,8 @@ def verify(session: Session) -> dict[str, Any]:
     Returns:
         含 ``ok`` 与 ``counts`` 的校验结果。
     """
+    # 未注入租户上下文的会话在 RLS 下读不到行，校验同样需要 seed 放行。
+    apply_seed_mode(session)
     tenant = session.execute(select(Tenant.id).where(Tenant.slug == TENANT_SLUG)).scalar_one_or_none()
     principal = session.execute(
         select(Principal.id).where(
