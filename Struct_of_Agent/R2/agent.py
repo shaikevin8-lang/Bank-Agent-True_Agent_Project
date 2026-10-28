@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from common import hitl
 from common.model_manager import RuntimeChatModel, trace_info
 from common.text_format import sanitize_reply
 from db.repository import Database
@@ -155,6 +156,8 @@ class BillAgent:
             "final_reply": "",
         }
 
+        # HITL 闸门上下文：会话/租户注入 ContextVar，供工具层 intercept() 读取
+        hitl.set_context(session_id=session_id, tenant_id=hitl.default_tenant_id())
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
 
         # 持久化本轮消息（用户消息 + 助手/工具消息）

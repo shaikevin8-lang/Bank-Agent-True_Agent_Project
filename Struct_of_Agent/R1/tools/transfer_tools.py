@@ -30,6 +30,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from common import clock
+
 # 转账工具名集合，供图编排层识别「产生任务回执」的工具
 TRANSFER_TOOL_NAMES = {
     "smart_transfer",
@@ -156,7 +158,7 @@ def _receipt(
         "currency": "CNY",
         "idempotency_key": _new_id("idem"),
         "risk_level": _risk_level(amount_fen),
-        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "created_at": clock.business_now_iso(),
         "message": message,
     }
     receipt.update(extra)

@@ -9,7 +9,18 @@
 from __future__ import annotations
 
 TASK_STATUSES = frozenset(
-    {"requested", "scheduled", "running", "succeeded", "failed", "cancelled", "unknown"}
+    {
+        "requested",
+        "scheduled",
+        "running",
+        # 高风险写操作被人机协同（HITL）闸门拦下：任务没结束，等人工批准/拒绝后继续。
+        # 它不是工具回执原文，只能由 HITL 服务层写入，故不出现在 RECEIPT_TO_TASK_STATUS。
+        "awaiting_human",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "unknown",
+    }
 )
 
 # 工具回执状态 → 任务状态。

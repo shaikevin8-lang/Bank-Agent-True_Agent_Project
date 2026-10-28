@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from typing import Any
 
 from langchain_core.tools import tool
+
+from common import clock
 
 from ..llm import ChatModel
 from ..persistence import WorkflowStore
@@ -59,7 +60,7 @@ def _now() -> str:
     Returns:
         形如 ``2026-10-18T12:34:56`` 的时间字符串。
     """
-    return datetime.now().isoformat(timespec="seconds")
+    return clock.business_now_iso()
 
 
 def _yuan_to_fen(amount: float | Decimal) -> int:

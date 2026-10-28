@@ -569,6 +569,7 @@ def test_account_ref_aliases_map_to_demo_account():
 # ---------------------------------------------------------------------------
 
 _EXPECTED_TABLES = {
+    # V001：会话、账户、流水（核心 9 表）
     "app.tenant": "tenant",
     "app.principal": "principal",
     "app.conversation_session": "conversation_session",
@@ -578,11 +579,38 @@ _EXPECTED_TABLES = {
     "app.bank_transaction": "bank_transaction",
     "app.bill_report": "bill_report",
     "app.idempotency_key": "idempotency_key",
+    # V003：R1 明细与 R3~R6 场景表
+    "app.payee": "payee",
+    "app.scheduled_transfer": "scheduled_transfer",
+    "app.aa_split": "aa_split",
+    "app.aa_share": "aa_share",
+    "app.risk_assessment": "risk_assessment",
+    "app.wealth_product": "wealth_product",
+    "app.portfolio_holding": "portfolio_holding",
+    "app.wealth_order": "wealth_order",
+    "app.wealth_balance": "wealth_balance",
+    "app.card": "card",
+    "app.card_request": "card_request",
+    "app.subscription": "subscription",
+    "app.subscription_reminder": "subscription_reminder",
+    "app.subscription_request": "subscription_request",
+    "app.workflow": "workflow",
+    "app.gift_order": "gift_order",
+    "app.workflow_budget": "workflow_budget",
+    "app.workflow_request": "workflow_request",
+    # V004：演示时钟与人工介入
+    "app.sim_clock": "sim_clock",
+    "app.hitl_case": "hitl_case",
+    "app.hitl_case_event": "hitl_case_event",
+    # 审计（只追加）：V001 的业务事件 + V004 的时钟变更
     "audit.event": "event",
+    "audit.clock_event": "clock_event",
 }
 
+# audit schema 下的表不止一张（event / clock_event），因此按 schema 前缀判断，
+# 不能只对 audit.event 做特判。
 _EXPECTED_SCHEMAS = {
-    key: ("audit" if key == "audit.event" else "app") for key in _EXPECTED_TABLES
+    key: ("audit" if key.startswith("audit.") else "app") for key in _EXPECTED_TABLES
 }
 
 _CHECK_CONSTRAINTS = [

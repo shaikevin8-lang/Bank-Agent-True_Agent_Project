@@ -25,11 +25,12 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
 from typing import Any
 
 from langchain_core.tools import tool
+
+from common import clock
 
 from ..llm import ChatModel
 from ..persistence import CardStore
@@ -68,7 +69,7 @@ _ACTION_RISK: dict[str, tuple[str, bool]] = {
 
 def _now() -> str:
     """当前时间的 ISO 字符串（秒级）。"""
-    return datetime.now().isoformat(timespec="seconds")
+    return clock.business_now_iso()
 
 
 def _yuan_to_fen(amount: float | Decimal) -> int:

@@ -35,6 +35,7 @@ from .models import (
     Task,
     Tenant,
 )
+from .models_ext import HitlCase, HitlCaseEvent, SimClock
 from .seed import TENANT_SLUG, seed, seed_principal_id, seed_tenant_id
 
 RESET_CONFIRMATION = "RESET-DEMO-DATA"
@@ -43,7 +44,12 @@ FORBIDDEN_ENVIRONMENTS = frozenset({"prod", "production"})
 # 删除顺序：先删引用方，再删被引用方。
 # V002 之后 task 引用 conversation_session，因此 task 必须先于会话删除；
 # 会话消息也引用会话。报告/流水引用账户，必须在账户之前删除。
+# V004 的演示时钟 / 人工案件都引用 tenant，案件的流水又引用案件，因此它们都要
+# 排在 tenant 之前（否则重置会被外键拒绝）。
 DELETE_ORDER = (
+    HitlCaseEvent,
+    HitlCase,
+    SimClock,
     Task,
     ConversationMessage,
     ConversationSession,

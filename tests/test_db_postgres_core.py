@@ -100,6 +100,7 @@ MANAGED_SCHEMAS = frozenset({APP_SCHEMA, AUDIT_SCHEMA})
 
 EXPECTED_TABLES: dict[str, set[str]] = {
     APP_SCHEMA: {
+        # V001
         "tenant",
         "principal",
         "conversation_session",
@@ -109,14 +110,59 @@ EXPECTED_TABLES: dict[str, set[str]] = {
         "bank_transaction",
         "bill_report",
         "idempotency_key",
+        # V003：R1 明细与 R3~R6 场景表
+        "payee",
+        "scheduled_transfer",
+        "aa_split",
+        "aa_share",
+        "risk_assessment",
+        "wealth_product",
+        "portfolio_holding",
+        "wealth_order",
+        "wealth_balance",
+        "card",
+        "card_request",
+        "subscription",
+        "subscription_reminder",
+        "subscription_request",
+        "workflow",
+        "gift_order",
+        "workflow_budget",
+        "workflow_request",
+        # V004：演示时钟与人工介入
+        "sim_clock",
+        "hitl_case",
+        "hitl_case_event",
     },
-    AUDIT_SCHEMA: {"event"},
+    AUDIT_SCHEMA: {"event", "clock_event"},
 }
 
-# 只清 app schema；audit.event 的触发器禁止 TRUNCATE，绝不能出现在这里。
-# 所有被引用的表一次性列出，避免依赖 CASCADE 去处理 audit 之外的意外对象。
+# 只清 app schema；audit.event / audit.clock_event 的触发器禁止 TRUNCATE，
+# 绝不能出现在这里。所有被引用的表一次性列出（顺序无关，同一条 TRUNCATE 语句里
+# 互相引用的表不会被当作非法引用），避免依赖 CASCADE 去处理 audit 之外的意外对象。
 TRUNCATE_APP_SQL = """
 TRUNCATE TABLE
+    app.hitl_case_event,
+    app.hitl_case,
+    app.sim_clock,
+    app.workflow_request,
+    app.gift_order,
+    app.workflow_budget,
+    app.workflow,
+    app.subscription_request,
+    app.subscription_reminder,
+    app.subscription,
+    app.card_request,
+    app.card,
+    app.wealth_balance,
+    app.wealth_order,
+    app.portfolio_holding,
+    app.wealth_product,
+    app.risk_assessment,
+    app.aa_share,
+    app.aa_split,
+    app.scheduled_transfer,
+    app.payee,
     app.conversation_message,
     app.conversation_session,
     app.idempotency_key,

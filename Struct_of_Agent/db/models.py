@@ -207,7 +207,8 @@ class Task(Base, TimestampMixin):
     __tablename__ = "task"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('requested', 'scheduled', 'running', 'succeeded', 'failed', 'cancelled', 'unknown')",
+            "status IN ('requested', 'scheduled', 'running', 'awaiting_human', 'succeeded', "
+            "'failed', 'cancelled', 'unknown')",
             name="status",
         ),
         CheckConstraint("amount_minor IS NULL OR amount_minor >= 0", name="amount_non_negative"),
@@ -421,11 +422,60 @@ class AuditEvent(Base):
     )
 
 
+class ClockEvent(Base):
+    """演示时钟操作审计；只追加，不保存凭据或模型原文。
+
+    与会话侧 ``audit.event`` 分工不同：``audit.event`` 记业务语义事件（谁在什么
+    时候改了什么业务资源），本表专门记**时间轴变更**——``before`` / ``after``
+    同时保存真实时间与业务时间的前后值，因此「演示时把时间往前推了两天」这件事
+    事后可以逐条复算。append-only 由 0004 迁移中的触发器兜底。
+
+    ``business_at`` 是操作发生时的业务时间，``real_at`` 是真实墙钟；两者都必填，
+    否则无法区分「演示时钟自己造成的顺序错乱」与「真实并发」。
+    """
+
+    __tablename__ = "clock_event"
+    __table_args__ = (
+        CheckConstraint(
+            "action IN ('enable', 'disable', 'advance', 'freeze', 'resume', 'reset')",
+            name="action",
+        ),
+        Index("ix_audit_clock_event_tenant_created", "tenant_id", text("created_at DESC")),
+        # 字典必须放在元组最后：它承载 schema 等表级选项。
+        {"schema": AUDIT_SCHEMA, "comment": "只追加演示时钟操作审计；UPDATE/DELETE/TRUNCATE 被触发器拒绝"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    # 刻意不建外键：审计必须比业务行活得久（与 audit.event 同理）。若这里引用
+    # app.tenant，``TRUNCATE app.tenant ... CASCADE`` 与 ``DELETE FROM app.tenant``
+    # 都会连带触碰只追加的审计表——前者会撞上 TRUNCATE 触发器，后者会被外键拒绝，
+    # 演示重置（db.reset）将无法执行。
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    operator: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default=text("''"))
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default=text("''"))
+    before: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    after: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
+    real_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+    business_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+
+
 __all__ = [
     "Account",
     "AuditEvent",
     "BankTransaction",
     "BillReport",
+    "ClockEvent",
     "ConversationMessage",
     "ConversationSession",
     "IdempotencyKey",

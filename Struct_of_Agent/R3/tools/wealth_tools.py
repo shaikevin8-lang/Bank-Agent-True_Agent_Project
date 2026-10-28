@@ -30,6 +30,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from common import clock
+
 from common.prompts import OUTPUT_STYLE_RULE
 from common.tavily_search import run_tavily_search
 
@@ -406,7 +408,7 @@ def build_wealth_tools(model: ChatModel, store: WealthStore) -> list:
             "shares": shares,
             "nav": product["nav"],
             "balance_after_fen": store.get_balance(account_id),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": clock.business_now_iso(),
             "message": f"已申购「{product['name']}」{_fen_to_yuan(amount_fen)} 元，确认份额 {shares} 份（沙箱回执）",
         }
         return store.save_order(order)
@@ -467,7 +469,7 @@ def build_wealth_tools(model: ChatModel, store: WealthStore) -> list:
             "amount_fen": amount_fen,
             "amount_yuan": _fen_to_yuan(amount_fen),
             "balance_after_fen": store.get_balance(account_id),
-            "created_at": datetime.now().isoformat(timespec="seconds"),
+            "created_at": clock.business_now_iso(),
             "message": f"已赎回「{product['name']}」{redeem_shares} 份，到账 {_fen_to_yuan(amount_fen)} 元（沙箱回执）",
         }
         return store.save_order(order)

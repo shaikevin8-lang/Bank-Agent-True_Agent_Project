@@ -20,6 +20,7 @@ from .middleware.content_moderation import ContentModerationMiddleware
 from .state import WorkflowState
 from .tools import to_openai_tools
 
+from common import hitl, hitl_replay
 from common.prompts import build_system_prompt
 
 _MAX_STEPS = 8
@@ -110,7 +111,10 @@ def _tools_node(state: WorkflowState, tool_map: dict[str, Any]) -> dict[str, Any
             arguments = {}
 
         tool = tool_map.get(name)
-        if tool is None:
+        blocked = hitl.intercept(name, arguments) if tool is not None else None
+        if blocked is not None:  # HITL 闸门：命中策略则阻断执行，回执交给 LLM/前端
+            result = blocked
+        elif tool is None:
             result = {"error": f"未知工具：{name}"}
         else:
             try:
@@ -188,6 +192,7 @@ def build_graph(
     """
     tool_schemas = to_openai_tools(tools)
     tool_map = {t.name: t for t in tools}
+    hitl_replay.register_all(tools)  # HITL：登记可重放工具（人工批准后服务端确定性重放）
     checkpointer = checkpointer or MemorySaver()
 
     graph = StateGraph(WorkflowState)

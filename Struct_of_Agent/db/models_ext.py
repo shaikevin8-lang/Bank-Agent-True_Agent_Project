@@ -25,6 +25,7 @@ from decimal import Decimal
 from sqlalchemy import (
     CHAR,
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
@@ -40,10 +41,55 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, utcnow
 
 # 理财产品的风险等级标签（与 R3 工具层一致）。
 RISK_LEVELS = frozenset({"R1", "R2", "R3", "R4", "R5"})
+
+# 人工介入（HITL）枚举：与实施计划 §2.3 / §3 的接口契约一一对应。
+HITL_STATUSES = (
+    "open",
+    "claimed",
+    "approved",
+    "rejected",
+    "info_required",
+    "expired",
+    "cancelled",
+)
+HITL_REASON_CODES = (
+    "high_risk_write",
+    "unknown_result",
+    "missing_info",
+    "policy_conflict",
+    "tool_degraded",
+)
+HITL_RISK_LEVELS = ("green", "yellow", "red")
+HITL_CASE_EVENT_ACTIONS = (
+    "create",
+    "claim",
+    "approve",
+    "reject",
+    "request_info",
+    "cancel",
+    "expire",
+    "resume",
+)
+
+
+def _enum_check(column: str, values: tuple[str, ...]) -> str:
+    """把枚举常量拼成 ``IN (...)`` 形式的 CHECK 条件。
+
+    枚举值只在这里定义一次：ORM 的命名 CHECK 与 0004 迁移里的 DDL 都引用同一份
+    常量，避免「模型允许而数据库拒绝」这类只有线上才暴露的漂移。
+
+    Args:
+        column: 列名。
+        values: 允许的取值元组（顺序即 DDL 中的顺序）。
+
+    Returns:
+        形如 ``status IN ('open', 'claimed')`` 的条件表达式。
+    """
+    return f"{column} IN ({', '.join(repr(value) for value in values)})"
 
 
 class Payee(Base, TimestampMixin):
@@ -409,6 +455,9 @@ class CardRequest(Base, TimestampMixin):
 
     __tablename__ = "card_request"
     __table_args__ = (
+        # 回执编号是幂等键与审计的关联锚点：空编号会让回执无法回溯。
+        CheckConstraint("public_id <> ''", name="public_id_not_empty"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="payload_is_object"),
         UniqueConstraint("public_id", name="uq_card_request_public_id"),
         ForeignKeyConstraint(
             ["tenant_id", "owner_principal_id"],
@@ -527,6 +576,9 @@ class SubscriptionRequest(Base, TimestampMixin):
 
     __tablename__ = "subscription_request"
     __table_args__ = (
+        # 回执编号是幂等键与审计的关联锚点：空编号会让回执无法回溯。
+        CheckConstraint("public_id <> ''", name="public_id_not_empty"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="payload_is_object"),
         UniqueConstraint("public_id", name="uq_subscription_request_public_id"),
         ForeignKeyConstraint(
             ["tenant_id", "owner_principal_id"],
@@ -677,6 +729,9 @@ class WorkflowRequest(Base, TimestampMixin):
 
     __tablename__ = "workflow_request"
     __table_args__ = (
+        # 回执编号是幂等键与审计的关联锚点：空编号会让回执无法回溯。
+        CheckConstraint("public_id <> ''", name="public_id_not_empty"),
+        CheckConstraint("jsonb_typeof(payload) = 'object'", name="payload_is_object"),
         UniqueConstraint("public_id", name="uq_workflow_request_public_id"),
         ForeignKeyConstraint(
             ["tenant_id", "owner_principal_id"],
@@ -710,16 +765,149 @@ class WorkflowRequest(Base, TimestampMixin):
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
 
 
+class SimClock(Base, TimestampMixin):
+    """演示时钟状态（每租户单行，主键即 ``tenant_id``）。
+
+    业务时间由时钟对象统一给出，禁止其它模块直接取 ``datetime.now()``：
+
+    - ``enabled=False`` → 业务时间等于真实时间（默认）；
+    - ``enabled=True`` → ``frozen_at_business`` 非空时返回它，否则
+      ``real_now() + offset_seconds``。
+
+    ``version`` 是乐观锁版本号：推进 / 冻结 / 恢复 / 重置都必须按
+    ``WHERE version = :expected`` 做 CAS 比较后再 +1。演示时钟是全局单例状态，
+    两个并发操作静默互相覆盖会让整场演示的时间线失真，因此不允许裸 UPDATE。
+    """
+
+    __tablename__ = "sim_clock"
+    __table_args__ = (
+        # ±10 年 = 315_360_000 秒；再大只可能是手误（例如把秒当毫秒传）。
+        CheckConstraint("abs(offset_seconds) <= 315360000", name="offset_range"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        ForeignKeyConstraint(["tenant_id"], ["app.tenant.id"], name="fk_sim_clock_tenant"),
+        {"comment": "演示时钟单例行（每租户一行）；offset_seconds 为业务时间偏移"},
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    offset_seconds: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default=text("0"))
+    frozen_at_business: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default=text("''"))
+
+
+class HitlCase(Base, TimestampMixin):
+    """人工介入案件（高风险写操作被闸门拦下后的待决策记录）。
+
+    一行代表一次「已挂起等待人工处理」的写操作提案：``proposal`` 保存工具名、
+    参数与幂等键，``graph_thread_id`` 保留图线程以便批准后恢复。``business_at``
+    是创建时的业务时间，SLA 与超时判定一律基于业务时间（演示时钟推进也能触发
+    超时），``created_at`` 才是真实墙钟。
+
+    ``session_id`` 刻意**不建外键**：Web 会话可以归档甚至在演示中重建，案件却
+    必须活得更久（否则删会话会连带删掉待审批的高风险操作记录）。
+    """
+
+    __tablename__ = "hitl_case"
+    __table_args__ = (
+        CheckConstraint(_enum_check("status", HITL_STATUSES), name="status"),
+        CheckConstraint(_enum_check("reason_code", HITL_REASON_CODES), name="reason_code"),
+        CheckConstraint(_enum_check("risk_level", HITL_RISK_LEVELS), name="risk_level"),
+        CheckConstraint("sla_seconds > 0", name="sla_positive"),
+        CheckConstraint("version >= 1", name="version_positive"),
+        UniqueConstraint("tenant_id", "public_id", name="uq_hitl_case_tenant_id"),
+        # 复合外键的被引用侧：(tenant_id, id) 必须唯一。
+        UniqueConstraint("tenant_id", "id", name="uq_hitl_case_tenant_id_id"),
+        ForeignKeyConstraint(["tenant_id"], ["app.tenant.id"], name="fk_hitl_case_tenant"),
+        Index("ix_hitl_case_queue", "tenant_id", "status", "expires_at"),
+        Index("ix_hitl_case_session_created", "tenant_id", "session_id", text("created_at DESC")),
+        {"comment": "人工介入案件；proposal 存档待执行的高风险写操作"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    public_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open", server_default=text("'open'"))
+    reason_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_text: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
+    risk_level: Mapped[str] = mapped_column(String(8), nullable=False, default="yellow", server_default=text("'yellow'"))
+    proposal: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb"))
+    graph_thread_id: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default=text("''"))
+    assignee: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    decision_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
+    info_request_note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sla_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=900, server_default=text("900"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    business_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+
+
+class HitlCaseEvent(Base, TimestampMixin):
+    """人工案件的操作流水（认领 / 批准 / 拒绝 / 补件 / 取消 / 超时 / 恢复）。
+
+    ``(case_id, seq)`` 唯一，由服务层在案件行锁内递增，保证前端按序渲染同一案件
+    的操作时间线；``real_at`` 是真实墙钟，``business_at`` 是当时的业务时间。
+    """
+
+    __tablename__ = "hitl_case_event"
+    __table_args__ = (
+        CheckConstraint(_enum_check("action", HITL_CASE_EVENT_ACTIONS), name="action"),
+        UniqueConstraint("case_id", "seq", name="uq_hitl_case_event_case_id"),
+        ForeignKeyConstraint(
+            ["tenant_id", "case_id"],
+            ["app.hitl_case.tenant_id", "app.hitl_case.id"],
+            name="fk_hitl_case_event_case",
+        ),
+        Index("ix_hitl_case_event_case_seq", "case_id", "seq"),
+        {"comment": "人工案件操作流水；同一案件内 seq 严格递增"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    case_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    operator: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default=text("''"))
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="", server_default=text("''"))
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default=text("''"))
+    real_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+    business_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utcnow, server_default=text("now()")
+    )
+
+
 __all__ = [
     "AaShare",
     "AaSplit",
+    "HITL_CASE_EVENT_ACTIONS",
+    "HITL_REASON_CODES",
+    "HITL_RISK_LEVELS",
+    "HITL_STATUSES",
     "Card",
     "CardRequest",
     "GiftOrder",
+    "HitlCase",
+    "HitlCaseEvent",
     "Payee",
     "PortfolioHolding",
     "RiskAssessment",
     "ScheduledTransfer",
+    "SimClock",
     "Subscription",
     "SubscriptionReminder",
     "SubscriptionRequest",

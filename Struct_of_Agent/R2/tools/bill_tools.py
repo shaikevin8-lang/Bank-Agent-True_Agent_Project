@@ -29,6 +29,8 @@ from typing import Any
 
 from langchain_core.tools import tool
 
+from common import clock
+
 from common.prompts import OUTPUT_STYLE_RULE
 
 from ..llm import ChatModel
@@ -343,7 +345,7 @@ def build_bill_tools(model: ChatModel, store: TransactionStore) -> list:
             ValueError: month 格式不正确。
         """
         if not month:
-            month = __import__("datetime").datetime.now().strftime("%Y-%m")
+            month = clock.business_now().strftime("%Y-%m")
         if len(month) != 7 or month[4] != "-":
             raise ValueError("month 需为 YYYY-MM 格式，如 2026-10")
         if not refresh:
@@ -380,7 +382,7 @@ def build_bill_tools(model: ChatModel, store: TransactionStore) -> list:
             ValueError: year 格式不正确。
         """
         if not year:
-            year = __import__("datetime").datetime.now().strftime("%Y")
+            year = clock.business_now().strftime("%Y")
         if len(year) != 4 or not year.isdigit():
             raise ValueError("year 需为 YYYY 格式，如 2026")
         if not refresh:

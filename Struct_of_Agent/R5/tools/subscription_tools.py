@@ -17,11 +17,13 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal, ROUND_DOWN
 from typing import Any
 
 from langchain_core.tools import tool
+
+from common import clock
 
 from ..llm import ChatModel
 from ..persistence import SubscriptionStore
@@ -54,7 +56,7 @@ def _now() -> str:
     Returns:
         形如 ``2026-10-18T12:34:56`` 的时间字符串。
     """
-    return datetime.now().isoformat(timespec="seconds")
+    return clock.business_now_iso()
 
 
 def _verify_mfa(mfa_code: str) -> bool:
@@ -313,7 +315,7 @@ def build_subscription_tools(model: ChatModel, store: SubscriptionStore) -> list
             }
         else:
             store.set_subscription_status(subscription_id, "cancelling")
-            effective = (datetime.now() + timedelta(days=7)).date().isoformat()
+            effective = (clock.business_now() + timedelta(days=7)).date().isoformat()
             receipt = {
                 "status": "accepted",
                 "tool": "cancel_subscription",

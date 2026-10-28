@@ -25,6 +25,7 @@ from .persistence import BalanceStore
 from .state import TransferState
 from .tools import TOOL_MAP, TRANSFER_TOOL_NAMES, to_openai_tools
 
+from common import hitl, hitl_replay
 from common.prompts import OUTPUT_STYLE_RULE, build_system_prompt
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
@@ -273,7 +274,10 @@ def _tools_node(state: TransferState) -> dict[str, Any]:
             arguments = {}
 
         tool = TOOL_MAP.get(name)
-        if tool is None:
+        blocked = hitl.intercept(name, arguments) if tool is not None else None
+        if blocked is not None:  # HITL 闸门：命中策略则阻断执行，回执交给 LLM/前端
+            result = blocked
+        elif tool is None:
             result = {"error": f"未知工具：{name}"}
         else:
             try:
@@ -358,6 +362,7 @@ def build_graph(
         编译后的图（CompiledGraph），可调用 ``invoke(state, config)``。
     """
     tool_schemas = to_openai_tools()
+    hitl_replay.register_all(TOOL_MAP.values())  # HITL：登记可重放工具（人工批准后服务端确定性重放）
     checkpointer = checkpointer or MemorySaver()
     balance_store = balance_store or BalanceStore()
 

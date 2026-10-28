@@ -102,6 +102,9 @@ from R5.persistence import ConversationStore as R5ConversationStore
 from R6 import WorkflowAgent, WorkflowStore
 from R6.persistence import ConversationStore as R6ConversationStore
 from supervisor import SupervisorAgent
+from web_test import api_common
+from web_test.api_clock import router as clock_router
+from web_test.api_hitl import router as hitl_router
 from web_test.session_store import (
     ChatSessionStore,
     SessionNotFoundError,
@@ -117,8 +120,18 @@ DEFAULT_BALANCE_FEN = 100000
 # 因此「页面是新版、后端还是旧进程」时，页面上看到的接口会静默 404。
 # 只要 HTTP 接口面（路由、字段、错误码）发生变化，就必须递增 API_VERSION，
 # 让 /health/live、/api/version 与启动日志能立刻暴露版本错配。
-API_VERSION = "2026-10-28.unified-postgres"
-API_FEATURES = ("settings.llm", "settings.search", "sessions", "chat", "memory", "health")
+API_VERSION = "2026-10-28.clock-hitl-routes"
+API_FEATURES = (
+    "settings.llm",
+    "settings.search",
+    "sessions",
+    "chat",
+    "memory",
+    "health",
+    # 演示时钟与人工介入：路由已挂载（B0 骨架），实现由 B1/B2 填充。
+    "clock",
+    "hitl",
+)
 
 # 静态页面路径
 _HTML_PATH = Path(__file__).resolve().parent / "index.html"
@@ -306,6 +319,9 @@ class SearchSettingsRequest(BaseModel):
 def _ok(message: str = "", data: Any = None) -> dict[str, Any]:
     """构造成功响应包（契约第 3 节）。
 
+    实现委托给 :func:`web_test.api_common.ok`，保证既有端点与
+    ``api_clock`` / ``api_hitl`` 的响应包永远同构（只有一份定义）。
+
     Args:
         message: 面向用户的提示。
         data: 业务数据。
@@ -313,7 +329,7 @@ def _ok(message: str = "", data: Any = None) -> dict[str, Any]:
     Returns:
         统一响应包字典。
     """
-    return {"ok": True, "message": message, "error_code": None, "data": data}
+    return api_common.ok(message, data)
 
 
 def _fail(message: str, error_code: str, status_code: int = 400) -> JSONResponse:
@@ -321,6 +337,7 @@ def _fail(message: str, error_code: str, status_code: int = 400) -> JSONResponse
 
     会话接口的失败必须与成功同构（含 ``ok`` / ``error_code``），否则前端只能
     显示「请求失败（HTTP 4xx）」，看不出是「会话已被删除」还是「标题为空」。
+    实现委托给 :func:`web_test.api_common.fail`。
 
     Args:
         message: 面向用户的提示。
@@ -330,10 +347,7 @@ def _fail(message: str, error_code: str, status_code: int = 400) -> JSONResponse
     Returns:
         统一响应包形式的 JSON 响应。
     """
-    return JSONResponse(
-        status_code=status_code,
-        content={"ok": False, "message": message, "error_code": error_code, "data": None},
-    )
+    return api_common.fail(message, error_code, status_code)
 
 
 @app.exception_handler(SettingsError)
@@ -838,6 +852,19 @@ def clear_search_settings() -> dict:
         统一响应包，``data`` 为清除后的配置快照。
     """
     return get_search_manager().clear()
+
+
+# ---------------------------------------------------------------------------
+# 演示时钟 / 人工介入路由（B0 只挂载骨架，端点在 B1/B2 实现前统一返回 501）
+#
+# 挂载点选在既有端点全部定义之后、进程内路由自检函数之前：
+# - 既有端点行为不变（include_router 只追加新路径）；
+# - B1/B2 只需改各自模块，不再回来动 server.py；
+# - 自检函数 _registered_settings_routes/_registered_session_routes 能在
+#   include_router 之后遍历到完整路由表。
+# ---------------------------------------------------------------------------
+app.include_router(clock_router)
+app.include_router(hitl_router)
 
 
 def _registered_settings_routes() -> list[str]:

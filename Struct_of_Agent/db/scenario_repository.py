@@ -28,6 +28,8 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
+from common import clock
+
 from .audit import append_event
 from .idempotency import (
     IdempotencyInProgress,
@@ -381,7 +383,7 @@ class WealthRepository(_ScenarioBase):
         Returns:
             已保存的测评字典。
         """
-        valid = valid_until or (datetime.now() + timedelta(days=365)).isoformat(timespec="seconds")
+        valid = valid_until or (clock.business_now() + timedelta(days=365)).isoformat(timespec="seconds")
         with self.db.transaction() as session:
             account = self._account(session, account_ref, required=True)
             row = RiskAssessment(
@@ -907,7 +909,7 @@ class SubscriptionRepository(_ScenarioBase):
             estimate = datetime.fromisoformat(next_charge_estimate)
         except (TypeError, ValueError):
             return False
-        return (estimate - datetime.now()).days <= 3
+        return (estimate - clock.business_now()).days <= 3
 
     def _subscription_payload(
         self,
