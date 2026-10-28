@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any, Iterable
+from urllib.parse import unquote
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -153,7 +154,7 @@ def resolve_actor(request: Request) -> Actor:
     """
     raw_role = (request.headers.get(HEADER_ROLE) or "").strip().lower()
     role = raw_role if raw_role in ROLES else ROLE_USER
-    raw_operator = (request.headers.get(HEADER_OPERATOR) or "").strip()
+    raw_operator = unquote((request.headers.get(HEADER_OPERATOR) or "").strip())
     operator = (raw_operator or DEFAULT_OPERATOR)[:64]
     return Actor(role=role, operator=operator)
 

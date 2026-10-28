@@ -1222,9 +1222,9 @@
   function isOps() { return currentRole === 'ops_admin'; }
   function isReviewer() { return currentRole === 'risk_reviewer'; }
 
-  /** 所有请求统一带身份头（X-Operator / X-Role）。 */
+  /** 所有请求统一带身份头（X-Operator / X-Role）。X-Operator 需 percent-encode，避免中文用户名触发浏览器「头值非 Latin-1」报错。 */
   function apiHeaders(hasBody) {
-    const headers = { 'X-Operator': currentOperator, 'X-Role': currentRole };
+    const headers = { 'X-Operator': encodeURIComponent(currentOperator), 'X-Role': currentRole };
     if (hasBody) headers['Content-Type'] = 'application/json';
     return headers;
   }
@@ -3592,7 +3592,7 @@
 
       const res = await fetch('/api/chat/stream', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Operator': currentOperator, 'X-Role': currentRole },
+        headers: { 'Content-Type': 'application/json', 'X-Operator': encodeURIComponent(currentOperator), 'X-Role': currentRole },
         body: JSON.stringify({ message: text, session_id: sessionId })
       });
 
