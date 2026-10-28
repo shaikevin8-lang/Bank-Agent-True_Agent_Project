@@ -2,7 +2,7 @@
 ' Nothing to close by accident; the server keeps running after this script exits.
 '
 ' Usage:
-'   double-click this file, or run:  wscript.exe D:\Bank-Agent-legacy\start_server.vbs
+'   double-click this file, or run:  wscript.exe start_server.vbs
 '   (start_local.ps1 does the same thing plus the DB container check)
 '
 ' Stop:  Stop-Process -Id <pid of python.exe running web_test\server.py> -Force
@@ -11,13 +11,13 @@ Option Explicit
 
 Dim root, serverDir, python, logFile, errLogFile, cmd, sh, fso
 
-root = "D:\Bank-Agent-legacy"
+' 以脚本自身所在目录作为项目根目录，避免硬编码本机绝对路径。
+Set fso = CreateObject("Scripting.FileSystemObject")
+root = fso.GetParentFolderName(WScript.ScriptFullName)
 serverDir = root & "\Struct_of_Agent"
 python = root & "\.venv\Scripts\python.exe"
 logFile = serverDir & "\web_test\server.log"
 errLogFile = serverDir & "\web_test\server.err.log"
-
-Set fso = CreateObject("Scripting.FileSystemObject")
 If Not fso.FileExists(python) Then
     WScript.Echo "Python venv not found: " & python
     WScript.Quit 1

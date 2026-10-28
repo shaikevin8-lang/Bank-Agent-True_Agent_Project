@@ -32,7 +32,8 @@ from common.agent import CommonAgent
 from common.config import load_config
 from common.llm import DeepSeekChat
 from common.memory import SessionMemory, build_llm_summarizer
-from common.model_manager import RuntimeChatModel, trace_info
+from common.middleware import ContentModerationMiddleware, LLMReviewer
+from common.model_manager import RuntimeChatModel, resolve_manager, trace_info
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
 from common.text_format import ReplyStreamFilter, sanitize_reply
 from R1 import TransferAgent
@@ -104,6 +105,10 @@ class SupervisorAgent:
         self.memory = memory
         self._router_model = self._build_router_model()
         self._summarizer_cache: Any = _SUMMARIZER_UNSET
+        # 输入门：规则层（词表 + 独立注入检测）始终生效；已配置模型时叠加 LLM 审核增强。
+        self._input_moderator = ContentModerationMiddleware(
+            llm_reviewer=LLMReviewer(model_resolver=self._resolve_review_model)
+        )
 
     def _default_agents(self) -> dict[str, Any]:
         """构造缺省子 Agent 集合（R1/R2/R3）。
@@ -148,6 +153,40 @@ class SupervisorAgent:
                 return DeepSeekChat(config)
         except Exception:  # noqa: BLE001 - 调度器不可用不阻断规则路由
             pass
+        return None
+
+    def _resolve_review_model(self) -> Any | None:
+        """解析输入门 LLM 审核使用的模型；不可用时返回 None（降级到规则层）。
+
+        Returns:
+            实现 ChatModel 协议的模型实例，或 None。
+        """
+        try:
+            manager = resolve_manager(self.model_manager)
+            return manager.resolve() if manager is not None else None
+        except Exception:  # noqa: BLE001 - 审核模型不可用不阻断对话
+            return None
+
+    def _moderate_input(self, user_input: str) -> dict[str, Any] | None:
+        """输入门：对用户输入执行规则层 + LLM 审核，阻断时返回统一契约结果。
+
+        Args:
+            user_input: 用户原始输入。
+
+        Returns:
+            审核未通过时返回阻断结果字典；通过时返回 None。
+        """
+        result = self._input_moderator.check_with_llm(user_input)
+        if not result.passed:
+            reply = sanitize_reply(f"抱歉，您的输入未通过内容审核：{result.reason}")
+            return {
+                "reply": reply,
+                "blocked": True,
+                "moderation": result.to_dict(),
+                "tasks": [],
+                "agent": "input_gate",
+                "trace": {"router": "input_gate", "plan": []},
+            }
         return None
 
     def _plan(self, user_input: str, history: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:
@@ -394,6 +433,9 @@ class SupervisorAgent:
                 trace.plan:   本次执行的子任务计划。
                 trace.memory: 本轮结束后的上下文占用与压缩状态（启用记忆时）。
         """
+        blocked = self._moderate_input(user_input)
+        if blocked is not None:
+            return blocked
         history, router_history = self._recall(session_id)
         plan = self._plan(user_input, router_history)
         router_mode = "llm" if plan else "rule"
@@ -447,6 +489,11 @@ class SupervisorAgent:
         Yields:
             事件字典。
         """
+        blocked = self._moderate_input(user_input)
+        if blocked is not None:
+            yield {"type": "plan", "plan": [], "router": "input_gate"}
+            yield {"type": "done", "result": blocked}
+            return
         history, router_history = self._recall(session_id)
         plan = self._plan(user_input, router_history)
         router_mode = "llm" if plan else "rule"

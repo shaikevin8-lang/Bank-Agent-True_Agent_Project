@@ -8,7 +8,6 @@
 
 import os
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -89,9 +88,8 @@ def test_moderation_block():
     print("[PASS] content moderation")
 
 
-def test_persistence_roundtrip():
-    tmp_dir = tempfile.mkdtemp()
-    store = ConversationStore(db_url=f"sqlite:///{os.path.join(tmp_dir, 'test.db')}")
+def test_persistence_roundtrip(example_pg_url):
+    store = ConversationStore(db_url=example_pg_url)
     store.save_message("s1", "user", "你好")
     store.save_message("s1", "assistant", "你好，有什么可以帮您？")
     assert len(store.load_messages("s1")) == 2
@@ -111,10 +109,16 @@ def main():
         test_split_aa_collection,
         test_search_question,
         test_moderation_block,
-        test_persistence_roundtrip,
     ]
     for test in tests:
         test()
+
+    from Example._pg import configured, reset
+
+    if configured():
+        test_persistence_roundtrip(reset())
+    else:
+        print("[SKIP] 未配置 BANK_AGENT_TEST_DB_URL，跳过持久化测试（pytest 下自动跳过）")
     print(f"\n全部 {len(tests)} 个测试通过。")
 
 

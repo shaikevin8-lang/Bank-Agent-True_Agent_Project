@@ -17,7 +17,12 @@
 from .config import DeepSeekConfig, TavilyConfig, load_config, load_tavily_config
 from .contracts import AgentChatRequest, AgentChatResponse, AgentResult
 from .llm import ChatModel, DeepSeekChat, MockChat
-from .middleware import ContentModerationMiddleware, ModerationResult
+from .middleware import (
+    ContentModerationMiddleware,
+    LLMReviewer,
+    ModerationResult,
+    PromptInjectionDetector,
+)
 from .model_manager import (
     ModelConfigManager,
     RuntimeChatModel,
@@ -54,7 +59,9 @@ __all__ = [
     "DeepSeekChat",
     "MockChat",
     "ContentModerationMiddleware",
+    "LLMReviewer",
     "ModerationResult",
+    "PromptInjectionDetector",
     "AgentChatRequest",
     "AgentChatResponse",
     "AgentResult",
