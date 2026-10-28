@@ -515,7 +515,24 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 | O-6 | §4 任务拆分 | 未列与时钟相关的前端/端到端测试文件名；而 §5 验收要求「前端可见」 | 建议正式登记 `tests/test_sim_clock_due.py`、`tests/test_web_ui_clock_panel.py` |
 | O-7 | §5 测试基线 | 基线写作「532 passed / 2 failed」，但同时说明设了 `BANK_AGENT_TEST_DB_URL` 时是 `3 failed, 689 passed, 1 skipped` | 建议把两条基线都列为门禁（带 PG 变量的全量基线才是真门禁），避免「不设变量跑绿」被当作通过 |
 
+## 12. 实现对齐与已知限制（v1.1 补记）
+
+> 本节记录**代码落地后与本文正文的差异**，以代码为准；便于验收对照与后续补课。
+
+| 编号 | 本文原设计 | 实际实现 | 原因与影响 |
+| --- | --- | --- | --- |
+| I-1 | §3.4「结算幂等使用 `db/idempotency.py` 幂等键 `due:{task_public_id}:{scheduled_at_iso}`」 | 幂等由**状态迁移本身**保证：定时转账判据含 `status='scheduled'`，同事务改 `executed`（`FOR UPDATE`）；人工案件沿用 `hitl.sweep` 状态机（`expired` 不在未决集合） | 效果等价（重复/并发推进只结算一次，有 9 条用例覆盖），且不引入第二套幂等记录；代价是「同一任务改期后再次到期」需重新置 `status='scheduled'` |
+| I-2 | §2.3 结算对象写作 `app.task`（`status` 变更） | 实际结算对象是 `app.scheduled_transfer`（`scheduled → executed`）+ `app.hitl_case`（未决 → `expired`） | `app.task` 在本次范围内无「到期执行」语义；定时转账的行级到期时间才是部分索引 `ix_scheduled_transfer_due` 的载体 |
+| I-3 | §7.2 结算审计同时写 `real_at` / `business_at` 列 | `audit.clock_event` 有双列；`audit.event` 无这两列，故结算审计把两条 ISO 时间写入 `metadata.real_at` / `metadata.business_at` | 不改 `audit.event` 表结构；查询侧需读 `metadata` |
+| I-4 | §3.4 回调只读 `business_now` 参数 | 另加 `clock.current_advance_tenant()`（ContextVar） | `advance` 在 `_commit` **之前**调 `run_due`，且时钟状态有 1 秒 TTL 缓存，回调内读库只能读到**旧**业务时间；不透传「本次推进的租户」则「约在 +1 天、推进 +1 天」永不结算 |
+| I-5 | §6.1「推进时间 → 结算到期任务」隐含任务可由对话创建 | **`app.scheduled_transfer` 目前全仓无写入路径**：R1 `schedule_transfer` 只返回模拟回执（`_new_id("sch")`），不落库 | 演示时 `triggered` 的可见结算来自**人工案件超时**（有真实写入路径）；定时转账到期结算已实现并有用例，但要靠 DB 造行才能演示。**后续缺口**：给 R1 定时转账补持久化入口 |
+
 **修订记录**
+
+| 版本 | 日期 | 说明 |
+| --- | --- | --- |
+| v1.0 | 2026-10-28 | 首版：三态时钟 + `run_due` 结算 + 双审计 + 职责分离 + 9 节完整设计，附 7 条偏差建议 |
+| v1.1 | 2026-10-28 | 补 §12「实现对齐与已知限制」：幂等实现方式、结算对象表、审计双时间线落位、`current_advance_tenant`、定时转账无写入路径的缺口 |
 
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
