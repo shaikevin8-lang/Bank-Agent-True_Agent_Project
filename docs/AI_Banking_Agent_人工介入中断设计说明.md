@@ -2,7 +2,7 @@
 
 **版本**：v1.0  
 **状态**：设计基线（对应实施计划 A1，代码由 B2/C1 落地）  
-**适用项目**：`D:\Bank-Agent-legacy` / `Struct_of_Agent`  
+**适用项目**：`<仓库根>` / `Struct_of_Agent`  
 **核心代码**：`Struct_of_Agent/common/hitl.py`、`Struct_of_Agent/web_test/api_hitl.py`（均**需新增**）  
 **复用既有能力**：`Struct_of_Agent/db/audit.py` 的 `append_event(...)`、`Struct_of_Agent/db/idempotency.py` 的 `begin_operation(...)`/`complete_operation(...)`、`Struct_of_Agent/db/session.py` 的 `session_scope(engine)`、`Struct_of_Agent/web_test/server.py` 的 `_ok`/`_fail` 响应包  
 **配套文档**：`docs/演示时钟与人工介入-实施计划.md`（唯一权威工作契约）、`docs/ADR/ADR-004-人工案件冲突与超时规则.md`、`docs/AI_Banking_Agent_演示时钟设计说明.md`、`docs/AI_Banking_Agent_项目开发总架构文档.md`、`docs/AI_Banking_Agent_数据库设计文档.md`

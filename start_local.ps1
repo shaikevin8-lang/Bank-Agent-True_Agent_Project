@@ -10,6 +10,9 @@
 #
 # 用法：
 #   powershell -ExecutionPolicy Bypass -File .\start_local.ps1
+#
+# 前置条件：必须提供 BANK_AGENT_DB_URL（进程环境变量，或仓库根 .env 中同名键），
+# 缺失则本脚本直接失败退出，不会回落到任何内置默认口令；路径全部由 $PSScriptRoot 推导。
 
 $ErrorActionPreference = 'Stop'
 
@@ -21,6 +24,30 @@ $HealthUrl  = "$BaseUrl/health/live"
 $TimeoutSec = 25
 
 Write-Host '=== 启动银行智能 Agent（web_test 本地服务，端口 8000） ===' -ForegroundColor Cyan
+
+# 0) T0.1/T0.2 对齐检查：连接串必填（env 变量或仓库根 .env），绝不回落到默认口令
+$EnvFile = Join-Path $Root '.env'
+$envFileHasUrl = $false
+if (Test-Path -LiteralPath $EnvFile) {
+    foreach ($line in Get-Content -LiteralPath $EnvFile -Encoding UTF8) {
+        $trimmed = $line.Trim()
+        if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+        $eqPos = $trimmed.IndexOf('=')
+        if ($eqPos -le 0) { continue }
+        if ($trimmed.Substring(0, $eqPos).Trim() -ieq 'BANK_AGENT_DB_URL') {
+            $val = $trimmed.Substring($eqPos + 1).Trim().Trim('"', "'").Trim()
+            if ($val) { $envFileHasUrl = $true }
+            break
+        }
+    }
+}
+if (-not $env:BANK_AGENT_DB_URL -and -not $envFileHasUrl) {
+    Write-Host '缺少必填配置 BANK_AGENT_DB_URL，已中止（不会使用任何内置默认口令）。' -ForegroundColor Red
+    Write-Host '      方式一：Copy-Item .env.example .env ，然后填写 .env 里的 BANK_AGENT_DB_URL=' -ForegroundColor Red
+    Write-Host '      方式二：先设置 $env:BANK_AGENT_DB_URL=''postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/bank_agent_legacy'' 再运行本脚本' -ForegroundColor Red
+    Write-Host ("      期望的 .env 路径：{0}" -f $EnvFile) -ForegroundColor Red
+    exit 1
+}
 
 # 1) 数据库容器
 if (-not (docker ps --filter 'name=^bank-agent-pg$' --format '{{.Names}}')) {

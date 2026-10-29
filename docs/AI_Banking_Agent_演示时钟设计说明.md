@@ -2,7 +2,7 @@
 
 **版本**：v1.0  
 **状态**：设计基线（对应实施计划 A1，代码由 B1/C1 落地）  
-**适用项目**：`D:\Bank-Agent-legacy` / `Struct_of_Agent`  
+**适用项目**：`<仓库根>` / `Struct_of_Agent`  
 **核心代码**：`Struct_of_Agent/common/clock.py`、`Struct_of_Agent/common/clock_store.py`、`Struct_of_Agent/web_test/api_clock.py`（均**需新增**）  
 **配套文档**：`docs/演示时钟与人工介入-实施计划.md`（唯一权威工作契约）、`docs/ADR/ADR-003-演示时钟重启语义.md`、`docs/AI_Banking_Agent_人工介入中断设计说明.md`、`docs/AI_Banking_Agent_项目开发总架构文档.md`、`docs/AI_Banking_Agent_数据库设计文档.md`
 

@@ -2,7 +2,7 @@
 
 > 勘察员只读产出。所有行号均为 `read` / `grep` 实测（不是估计），文件版本 = 本次勘察时的 `HEAD`。
 > 目标文档：`docs\演示时钟与人工介入-实施计划.md`（128 行）。
-> 仓库：`D:\Bank-Agent-legacy`，venv：`.\.venv\Scripts\python.exe`。
+> 仓库：`<仓库根>`，venv：`.\.venv\Scripts\python.exe`。
 > 依赖实测：langgraph **1.2.18**（`from langgraph.types import interrupt, Command` 可用）、sqlalchemy 2.1.6、fastapi 0.162.0、alembic 1.20.1、psycopg 3。
 > 基线：`tests` 全量 **532 passed / 2 failed**（失败为已知的元数据清单过期，见 §6.5）。
 
@@ -694,19 +694,19 @@ process.exit(failures === 0 ? 0 : 1)
 ### 结论
 
 **启动服务（三选一）**
-1. `wscript.exe D:\Bank-Agent-legacy\start_server.vbs` —— 隐藏窗口，自动注入 `BANK_AGENT_DB_URL`（L28）、`PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`，日志写 `Struct_of_Agent\web_test\server.log` / `server.err.log`。
+1. `wscript.exe <仓库根>\start_server.vbs` —— 隐藏窗口，自动注入 `BANK_AGENT_DB_URL`（L28）、`PYTHONIOENCODING=utf-8`、`PYTHONUTF8=1`，日志写 `Struct_of_Agent\web_test\server.log` / `server.err.log`。
 2. `powershell -ExecutionPolicy Bypass -File .\Struct_of_Agent\web_test\restart_server.ps1` —— 只杀命令行匹配 `web_test[\\/]server\.py` 的 python（L46/L56-60，绝不误杀其它 python），补齐 `BANK_AGENT_DB_URL`（L128-131），最后**轮询 `/health/live` 直到 `api_version` 等于源码里的 `API_VERSION`**（L75-77 解析、L146-169 校验）。**改了 `API_VERSION` 之后必须用这个脚本重启，否则新版页面会打到旧进程。**
-3. 前台调试：`cd D:\Bank-Agent-legacy\Struct_of_Agent; $env:BANK_AGENT_DB_URL='postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy'; ..\.venv\Scripts\python.exe web_test\server.py`（`server.py:901-905` 固定 `127.0.0.1:8000`）。
+3. 前台调试：`cd <仓库根>\Struct_of_Agent; $env:BANK_AGENT_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent_legacy'; ..\.venv\Scripts\python.exe web_test\server.py`（`server.py:901-905` 固定 `127.0.0.1:8000`）。
 
 **数据库**
 - 迁移：`.\.venv\Scripts\python.exe scripts\db.py upgrade`（唯一改 schema 入口）、`... db.py check`、`... db.py current`。
 - 演示数据：`... db.py seed`；重置：`... db.py reset --env demo --confirm RESET-DEMO-DATA`（`reset` 必须显式 `--env`，见 `db\cli.py:316-317`）。
-- 连接串：`postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy`（与 `start_server.vbs:28` 一致）。
+- 连接串：`postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent_legacy`（与 `start_server.vbs:28` 一致）。
 
 **跑测试**
 ```powershell
-cd D:\Bank-Agent-legacy
-$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:bank_local@127.0.0.1:5432/postgres'
+cd <仓库根>
+$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
 .\.venv\Scripts\python.exe -m pytest tests -q                       # 全量（基线 532 passed / 2 failed）
 .\.venv\Scripts\python.exe -m pytest tests\test_db_units.py -q     # 只跑元数据断言
 .\.venv\Scripts\python.exe -m pytest tests -q -k "clock or hitl"   # 只跑新功能
@@ -734,7 +734,7 @@ if ($source -match '(?m)^API_VERSION\s*=\s*"([^"]+)"') { $expectedVersion = $Mat
 `start_server.vbs:27-34`
 ```vb
 ' Child process environment: keeps credentials out of the command line and logs.
-sh.Environment("PROCESS")("BANK_AGENT_DB_URL") = "postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy"
+sh.Environment("PROCESS")("BANK_AGENT_DB_URL") = "postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent_legacy"
 sh.Environment("PROCESS")("PYTHONIOENCODING") = "utf-8"
 sh.Environment("PROCESS")("PYTHONUTF8") = "1"
 sh.CurrentDirectory = serverDir

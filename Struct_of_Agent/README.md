@@ -103,7 +103,7 @@ $env:Tavily_API   = "你的 Tavily API Key"
 先准备 PostgreSQL（只需一次）：
 
 ```powershell
-$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent'
+$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent'
 python scripts/db.py upgrade     # 建表 / 升级到 head（含账号表 app.web_user）
 python scripts/db.py seed        # 演示租户、账户与合成流水（幂等）
 ```

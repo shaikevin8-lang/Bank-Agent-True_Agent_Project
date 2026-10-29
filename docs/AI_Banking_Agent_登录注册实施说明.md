@@ -455,7 +455,7 @@ bootstrapAuth()
 
 ## 8. 本地验证步骤
 
-环境：Windows + PowerShell，仓库根目录 `D:\Bank-Agent-legacy`。
+环境：Windows + PowerShell，仓库根目录 `<仓库根>`。
 
 ### 8.1 升级数据库
 
@@ -468,13 +468,13 @@ python scripts/db.py upgrade
 等价的直连写法（不经过脚本）：
 
 ```powershell
-D:\Bank-Agent-legacy\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m alembic -c alembic.ini upgrade head
 ```
 
 数据库连接由 `BANK_AGENT_DB_URL` 决定，本机示例：
 
 ```
-postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy
+postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent_legacy
 ```
 
 （容器 `bank-agent-pg`。）
@@ -619,7 +619,7 @@ if (url === '/api/auth/me') {
 & .\.venv\Scripts\python.exe -m pytest tests\test_auth_store.py -q
 
 # 接口契约测试（需 PostgreSQL：指向可建库的维护库）
-$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:bank_local@127.0.0.1:5432/postgres'
+$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
 & .\.venv\Scripts\python.exe -m pytest tests\test_auth_api.py -q
 
 # 前端（jsdom；依赖已装在 tests/frontend）

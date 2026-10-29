@@ -9,6 +9,10 @@ __pycache__/
 
 # 日志、缓存
 *.log
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
 tmp/
 # pytest 的 tmp_path 兜底目录（默认 %TEMP% 不可写时启用，见 tests/conftest.py）
 .pytest-tmp/
@@ -20,6 +24,10 @@ Struct_of_Agent/web_test/data/
 node_modules/
 tests/frontend/package-lock.json
 
+# 历史残迹目录（D14 防回归：曾出现过的 apps/、packages/ 脚手架残留，绝不再入库）
+apps/
+packages/
+
 # IDE配置
 .idea/
 .vscode/
@@ -27,6 +35,8 @@ tests/frontend/package-lock.json
 # 密钥与本地环境变量（绝不入库；API Key 只走环境变量/页面运行时填写）
 .env
 .env.*
+# 例外：模板文件不含真实密钥，必须能入库（否则会被上面的 .env.* 规则误伤）
+!.env.example
 *.env
 *.key
 *.pem

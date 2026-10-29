@@ -2,7 +2,7 @@
 
 **版本**：v1.0  
 **状态**：当前开发基线  
-**适用项目**：`D:\Bank-Agent-legacy` / `Struct_of_Agent`  
+**适用项目**：`<仓库根>` / `Struct_of_Agent`  
 **核心代码**：`Struct_of_Agent/common/memory.py`（899 行）  
 **配套文档**：`docs/AI_Banking_Agent_项目基座文档.md`、`docs/AI_Banking_Agent_项目开发总架构文档.md`、`docs/AI_Banking_Agent_数据库设计文档.md`
 

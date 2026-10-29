@@ -124,10 +124,34 @@ Write-Host ("      日志：{0} / {1}" -f $LogFile, $ErrLogFile)
 
 # 环境变量：start_server.vbs 会给子进程注入这些值，但本脚本直接起 python，
 # 子进程只继承当前 shell 的环境。缺了 BANK_AGENT_DB_URL 服务能起、却把所有
-# 会话/记忆接口打成 500（DatabaseConfigError），所以这里补齐（已在环境里则沿用）。
+# 会话/记忆接口打成 500（DatabaseConfigError）。
+# 取值优先级：已有环境变量 -> 仓库根 .env 的 BANK_AGENT_DB_URL= -> 直接失败。
+# 绝不回落到内置默认连接串（口令只存在环境变量或 .env 里）。
 if (-not $env:BANK_AGENT_DB_URL) {
-    $env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent_legacy'
-    Write-Host ('      注入 BANK_AGENT_DB_URL={0}' -f $env:BANK_AGENT_DB_URL)
+    $EnvFile = Join-Path $ProjectRoot '.env'
+    $fromEnvFile = $null
+    if (Test-Path -LiteralPath $EnvFile) {
+        foreach ($line in Get-Content -LiteralPath $EnvFile -Encoding UTF8) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+            $eqPos = $trimmed.IndexOf('=')
+            if ($eqPos -le 0) { continue }
+            if ($trimmed.Substring(0, $eqPos).Trim() -ieq 'BANK_AGENT_DB_URL') {
+                $fromEnvFile = $trimmed.Substring($eqPos + 1).Trim().Trim('"', "'").Trim()
+                break
+            }
+        }
+    }
+    if ($fromEnvFile) {
+        $env:BANK_AGENT_DB_URL = $fromEnvFile
+        Write-Host '      已从 .env 读取 BANK_AGENT_DB_URL（内容不打印）。'
+    } else {
+        Write-Host '缺少必填配置 BANK_AGENT_DB_URL，已中止（fail-fast，不使用任何内置默认口令）。' -ForegroundColor Red
+        Write-Host '      方式一：Copy-Item .env.example .env ，然后填写 .env 里的 BANK_AGENT_DB_URL=' -ForegroundColor Red
+        Write-Host '      方式二：先设置 $env:BANK_AGENT_DB_URL=''postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/bank_agent_legacy'' 再运行本脚本' -ForegroundColor Red
+        Write-Host ("      期望的 .env 路径：{0}" -f $EnvFile) -ForegroundColor Red
+        exit 1
+    }
 }
 if (-not $env:PYTHONIOENCODING) { $env:PYTHONIOENCODING = 'utf-8' }
 if (-not $env:PYTHONUTF8) { $env:PYTHONUTF8 = '1' }

@@ -74,7 +74,7 @@
 | `BANK_AGENT_TEST_DB_URL` | 集成测试开关：不设置则 PostgreSQL 测试整体 skip |
 
 ```powershell
-$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:bank_local@127.0.0.1:5432/bank_agent'
+$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent'
 $env:BANK_AGENT_ENV    = 'demo'
 ```
 
@@ -209,7 +209,7 @@ $env:PYTHONIOENCODING='utf-8'
 & .\.venv\Scripts\python.exe -m pytest tests\test_db_units.py -q
 
 # PostgreSQL 集成测试（需要可建库的账号；不设变量则整体 skip）
-$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:bank_local@127.0.0.1:5432/postgres'
+$env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
 & .\.venv\Scripts\python.exe -m pytest tests\test_db_postgres_core.py tests\test_db_postgres_import.py tests\test_db_runtime.py -q
 
 # 全量（含 Web/R1/R2 运行时与会话接口）
