@@ -21,7 +21,7 @@
         2. 索引中不得有 .env / *.env 等真实环境文件（允许模板 .env.example）
         3. 索引中不得有 apps/、packages/ 目录（D14 防回归）
         4. 索引中不得出现硬编码本机绝对项目路径
-        5. *.vbs 与 *.ps1 中不得出现口令字面量 bank_local
+        5. *.vbs 与 *.ps1 中不得出现演示库口令字面量（检索串在代码中拼接，避免本脚本自证命中）
         6. 工作树状态提示（仅提示，不计 FAIL）
 
     对应开发文档：阶段 0 —— T0.4 防回归（提交前卫生检查脚本）。
@@ -164,8 +164,10 @@ try {
     Add-CheckResult -Name '索引文件中无硬编码本机绝对项目路径' -Hits $hardcodedHits
 
     # ---- 检查 5：脚本中的明文口令字面量 ----
-    $secretHits = @(Invoke-GitRead -GitArgs @('grep', '-n', '-I', '-F', '-e', 'bank_local', '--', '*.vbs', '*.ps1'))
-    Add-CheckResult -Name '*.vbs/*.ps1 中无明文口令字面量 bank_local' -Hits $secretHits
+    # 说明：同检查 4，检索串用片段拼接，避免本脚本自身被本项检查命中。
+    $secretNeedle = 'bank' + '_' + 'local'
+    $secretHits = @(Invoke-GitRead -GitArgs @('grep', '-n', '-I', '-F', '-e', $secretNeedle, '--', '*.vbs', '*.ps1'))
+    Add-CheckResult -Name '*.vbs/*.ps1 中无明文口令字面量' -Hits $secretHits
 
     # ---- 检查 6：工作树状态提示（仅提示，不计 FAIL） ----
     $tipPatterns = @(

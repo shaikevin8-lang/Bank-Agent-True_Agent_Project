@@ -45,7 +45,7 @@
 | D09 | 安全设计+自评缺失 | P0 | 无 | 6 |
 | D10 | 答辩 PPT 缺失 | P0 | 无 `.pptx` | 7 |
 | D11 | 演示视频缺失 | P0 | 无 `.mp4` | 7 |
-| D12 | 部署说明不完整 | P0 | 无 `Dockerfile`/`compose`；`start_server.vbs:14` 硬编码 `D:\Bank-Agent-legacy`、`:28` 明文 `bank:bank_local`（已入 git 历史） | 0+8 |
+| D12 | 部署说明不完整 | P0 | 无 `Dockerfile`/`compose`；`start_server.vbs:14` 硬编码本机绝对仓库路径、`:28` 明文演示库口令（已入 git 历史） | 0+8 |
 | D13 | 测试四层结构残缺 | P0 | `tests/{unit,contract,security,integration}` **均不存在**；25 个测试散落根目录 | 5 |
 | D14 | `apps/`、`packages/` 残迹 | P2 | **本次核对已不存在**（工作树与 `git ls-files` 均无）→ 转防回归 | 0 |
 

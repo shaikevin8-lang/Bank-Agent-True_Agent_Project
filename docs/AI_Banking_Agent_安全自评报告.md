@@ -40,7 +40,7 @@
 - **服务端 fail-fast 底座一致**：`Struct_of_Agent/db/session.py` 的 `get_database_url()` 在 `BANK_AGENT_DB_URL`／`DATABASE_URL` 均缺失时抛 `DatabaseConfigError`（"未配置数据库连接…"），并拒绝非 PostgreSQL 方言；脚本层 fail-fast 与之口径相同。
 - **应用不自行读取 `.env`**：全仓库无 `dotenv`／`load_dotenv` 引用，`.env` 仅由上述启动脚本解析后注入为子进程环境变量。故「阶段 8 改走 `.env`」的实际含义是**由容器编排注入环境变量**，而非应用自动加载 `.env` 文件。
 - **防回归脚本已存在并入库**：`scripts/check_repo_hygiene.ps1`（T0.4）共 6 项检查——索引无 `__pycache__`/`*.pyc`/`*.db`/`*.log`/`.pytest_cache`/`.venv`/`node_modules`；索引无 `.env`/`*.env`（放行 `.env.example`）；索引无 `apps/`、`packages/`；无硬编码本机绝对路径；`*.vbs`/`*.ps1` 无明文口令字面量；工作树提示不计 FAIL。
-- **该脚本当前整体 PASS**：实测 `exit=0`，6 项全部 `[OK]`。阶段 0 首跑时曾因 `docs/` 内 10 处 `D:\Bank-Agent-legacy` 绝对路径（设计说明与 `_work` 笔记中的示例命令）导致检查 4 FAIL；现已将这些示例命令改为相对路径或 `<仓库根>` 占位符（不改写任何实现语义），并复跑确认 PASS，开发文档阶段 0 验收要求的「`check_repo_hygiene.ps1` PASS」已达成。
+- **该脚本当前整体 PASS**：实测 `exit=0`，6 项全部 `[OK]`。阶段 0 首跑时曾因 `docs/` 内 10 处本机绝对项目路径（设计说明与 `_work` 笔记中的示例命令）导致检查 4 FAIL；现已将这些示例命令改为相对路径或 `<仓库根>` 占位符（不改写任何实现语义），并复跑确认 PASS，开发文档阶段 0 验收要求的「`check_repo_hygiene.ps1` PASS」已达成。
 
 ## 4. 待阶段 6 补齐
 
