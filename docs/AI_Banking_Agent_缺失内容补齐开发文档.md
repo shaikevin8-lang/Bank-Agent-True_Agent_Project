@@ -126,6 +126,29 @@ graph LR
 
 **验收**：`git grep -n "bank_local" -- "*.vbs" "*.ps1"` 无输出；`git grep -n "D:\\\\Bank-Agent-legacy"` 无输出；`check_repo_hygiene.ps1` PASS；移动仓库到新路径后仍能启动并 `curl /health/live` 通。
 
+**完成状态：✅ 2026-10-29，提交 `f1e9ea7`**
+
+| 任务 | 状态 | 落点 |
+|---|---|---|
+| T0.1 路径去硬编码 | ✅ | `start_server.vbs`（按脚本位置推导仓库根）、`start_local.ps1`、`Struct_of_Agent/web_test/restart_server.ps1` |
+| T0.2 口令外置 + fail-fast | ✅ | `start_server.vbs`（`BANK_AGENT_DB_URL` 缺失 → 打印诊断、`exit 1`、不启动）、`.env.example` |
+| T0.3 口令披露登记 | ✅ | `docs/AI_Banking_Agent_安全自评报告.md`（已知风险 6：演示库本地口令，处置=阶段 8） |
+| T0.4 防回归 | ✅ | `.gitignore`（`apps/`、`packages/`、`.pytest-tmp/`、`*.db`、`.env`…）、`scripts/check_repo_hygiene.ps1`（6 项只读检查） |
+| T0.5 README 骨架 | ✅ | `README.md`（定位、六场景、本地/容器快速开始、目录、测试命令、文档索引、安全边界；阶段 6 定稿） |
+| T0.6 追踪表 | ✅ | 本文附录 D |
+
+**验收实测**
+
+| 验收项 | 命令 | 结果 |
+|---|---|---|
+| 脚本无口令字面量 | `git grep -n "bank_local" -- "*.vbs" "*.ps1"` | 无输出 |
+| 无本机绝对项目路径 | `git grep -n "D:\\Bank-Agent-legacy"` | 无输出（`docs/` 内 10 处示例命令已改为相对路径 / `<仓库根>` 占位） |
+| 卫生检查 | `powershell -File scripts/check_repo_hygiene.ps1` | `exit=0`，6 项全 `[OK]` |
+| 移动路径可启动 | 仓库整体 robocopy 至 `C:\temp\bank-agent-move-test`（排除 `.git`/`.venv`，`.venv` 用 junction 链接），副本内写 `.env`，`wscript start_server.vbs` | `/health/live` → `status=ok`，`api_version=2026-10-28.login-auth`；测试后清理副本并用 `start_local.ps1` 恢复原仓库服务 |
+| fail-fast | 删除 `BANK_AGENT_DB_URL` 且无 `.env` 时 `cscript start_server.vbs` | 打印诊断、未启动服务、`exit=1` |
+
+**遗留（不阻塞阶段 0）**：本机 `.venv` 只有 `python.exe`，未安装 `pip`/`pytest`，故 `pytest tests -q` 未能执行；既有测试文件（`tests/test_auth_store.py`、`tests/test_db_postgres_core.py` 等）本轮未改动，测试目录重构与环境收敛统一在阶段 5 处理。
+
 ---
 
 ### 阶段 1 熔断与安全锁定（D01）｜3 人日
@@ -446,7 +469,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 
 | 阶段 | 内容 | 人日 | 完成 | 提交哈希 |
 |---|---|---|---|---|
-| 0 | 基线清零 | 1 | ☐ | |
+| 0 | 基线清零 | 1 | ✅ | `f1e9ea7` |
 | 1 | 熔断与安全锁定 | 3 | ☐ | |
 | 2 | 受限代码沙箱 | 4 | ☐ | |
 | 3 | DAG 与回退/回滚 | 3 | ☐ | |
