@@ -1,0 +1,71 @@
+{
+  "plan_id": "PL-68ee6430170d",
+  "version": 1,
+  "goal": "查上月餐饮支出，超800就订蛋糕，预算500",
+  "created_at": "2026-10-31T00:25:03+08:00",
+  "replan_count": 0,
+  "origin": "llm",
+  "nodes": [
+    {
+      "node_id": "n1",
+      "agent": "R2",
+      "intent": "查询上个月（2026-09）餐饮类支出合计与明细，返回合计金额与分类占比",
+      "risk_level": "green",
+      "status": "done",
+      "depends_on": [],
+      "params": {
+        "tool": "query_transactions",
+        "category": "餐饮",
+        "period": "last_month",
+        "aggregate": "sum_by_category"
+      },
+      "requires_confirmation": false,
+      "irreversible": false,
+      "compensating_action": null,
+      "idempotency_key": "d01f6972d989e91dbeaa32e90cf445b1",
+      "timeout_s": 30.0,
+      "result_ref": "TX-AGG-202609-R2",
+      "attempts": 1,
+      "error": null,
+      "compensation": null
+    },
+    {
+      "node_id": "n2",
+      "agent": "R6",
+      "intent": "若 n1 返回的餐饮支出合计超过 800 元，则在预算 500 元内为母亲订购蛋糕（收货人：妈妈）",
+      "risk_level": "green",
+      "status": "pending",
+      "depends_on": [
+        "n1"
+      ],
+      "params": {
+        "tool": "place_gift_orders",
+        "trigger": "spending_gt_800",
+        "budget": 500,
+        "currency": "CNY",
+        "recipient": "妈妈",
+        "sku": "生日蛋糕-6寸",
+        "compensation_args": {
+          "order_id": "GIFT-ORD-0007",
+          "reason": "user_cancelled"
+        }
+      },
+      "requires_confirmation": false,
+      "irreversible": false,
+      "compensating_action": "gift.cancel_order",
+      "idempotency_key": "a598a04a2d975a7a74658536ed9e356f",
+      "timeout_s": 30.0,
+      "result_ref": null,
+      "attempts": 0,
+      "error": null,
+      "compensation": null
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1",
+      "to": "n2",
+      "kind": "data"
+    }
+  ]
+}

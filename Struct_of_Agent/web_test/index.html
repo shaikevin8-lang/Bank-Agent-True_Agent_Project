@@ -191,6 +191,123 @@
     font-size: 12px;
     color: var(--text-sub);
   }
+  .stream-task-tag.is-skipped { opacity: .72; }
+
+  /* ---- 阶段 3 · DAG 计划卡片 --------------------------------------
+     plan 事件带 nodes 时才渲染这张卡；只有扁平 plan 列表的旧事件仍走
+     上面的 .stream-plan 提示气泡，两条渲染路径互不影响。 */
+  .plan-card {
+    max-width: 72%;
+    margin-left: 10px;
+    padding: 11px 13px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    border-top-left-radius: 4px;
+    background: var(--panel);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    font-size: 13px;
+  }
+  .plan-card-head {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    font-size: 12.5px; font-weight: 600; color: var(--text);
+  }
+  .plan-card-head .grow { flex: 1 1 auto; min-width: 0; }
+  .plan-card-title { white-space: nowrap; }
+  .plan-card-stat {
+    font-size: 11.5px; font-weight: 400; color: var(--text-sub);
+    font-variant-numeric: tabular-nums;
+  }
+  .plan-badge {
+    display: inline-flex; align-items: center;
+    padding: 0 6px; height: 18px; border-radius: 9px;
+    font-size: 10.5px; font-weight: 500; white-space: nowrap;
+    background: #eef2ff; color: #4338ca;
+  }
+  .plan-badge.warn { background: var(--warn-bg); color: var(--warn-text); }
+
+  .plan-nodes { display: flex; flex-direction: column; gap: 4px; margin-top: 9px; }
+  .plan-node {
+    display: flex; align-items: flex-start; gap: 7px;
+    padding: 6px 7px; border-radius: 9px;
+    background: #fafbfc; border: 1px solid #f1f3f5;
+  }
+  .plan-node-idx {
+    flex: 0 0 auto; min-width: 15px;
+    font-size: 11px; line-height: 18px; color: var(--text-sub);
+    font-variant-numeric: tabular-nums;
+  }
+  /* 风险色点：inset box-shadow 保证浅底上也看得出边界 */
+  .plan-risk {
+    flex: 0 0 auto; width: 8px; height: 8px; margin-top: 6px;
+    border-radius: 50%; background: var(--risk-green);
+    box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.06);
+  }
+  .plan-risk.risk-yellow { background: var(--risk-yellow); }
+  .plan-risk.risk-red { background: var(--risk-red); }
+  .plan-node-main { flex: 1 1 auto; min-width: 0; }
+  .plan-node-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .plan-node-agent { flex: 0 0 auto; font-size: 11.5px; font-weight: 600; }
+  .plan-node-intent {
+    flex: 1 1 auto; min-width: 0;
+    font-size: 12.5px; color: var(--text-sub);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .plan-node-sub {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    margin-top: 2px;
+  }
+  .plan-node-sub:empty { display: none; }
+  .plan-dep { font-size: 11px; color: var(--text-sub); }
+  .plan-node-reason { font-size: 11px; color: var(--risk-red); }
+  .plan-node-comp { font-size: 11px; color: var(--warn-text); }
+  .plan-node-status {
+    flex: 0 0 auto; margin-top: 1px;
+    padding: 0 6px; height: 17px; line-height: 17px; border-radius: 9px;
+    font-size: 10.5px; white-space: nowrap;
+    background: #f1f3f5; color: var(--text-sub);
+  }
+  .plan-node.s-pending .plan-node-status { background: #f1f3f5; color: var(--text-sub); }
+  .plan-node.s-ready .plan-node-status { background: #eff6ff; color: #1d4ed8; }
+  .plan-node.s-running .plan-node-status { background: #eff6ff; color: var(--brand); font-weight: 500; }
+  .plan-node.s-done .plan-node-status { background: var(--ok-bg); color: var(--ok-text); }
+  .plan-node.s-failed .plan-node-status { background: var(--bad-bg); color: var(--bad-text); }
+  .plan-node.s-needs_human .plan-node-status { background: var(--warn-bg); color: var(--warn-text); }
+  .plan-node.s-cancelled .plan-node-status { background: #f1f3f5; color: var(--text-sub); }
+  .plan-node.s-skipped { opacity: .58; background: #f7f8f9; }
+  .plan-node.s-skipped .plan-node-intent {
+    text-decoration: line-through; text-decoration-thickness: 1px;
+  }
+  .plan-node.s-skipped .plan-node-status { background: #eef0f2; color: var(--text-sub); text-decoration: none; }
+  .plan-node.s-failed .plan-node-agent { color: var(--bad-text); }
+
+  .plan-card-foot { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+  .plan-trace-btn {
+    padding: 3px 9px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--panel);
+    font-family: inherit; font-size: 11.5px; color: var(--text-sub);
+    cursor: pointer;
+  }
+  .plan-trace-btn:hover { border-color: var(--brand); color: var(--brand); }
+  .plan-trace-btn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+  .plan-trace {
+    margin-top: 7px; max-height: 220px; overflow: auto;
+    padding: 8px 10px; border-radius: 8px;
+    background: #0f172a; color: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 11px; line-height: 1.55;
+    white-space: pre; text-align: left;
+  }
+  .plan-trace[hidden] { display: none; }
+
+  /* 重规划系统提示行：插在计划卡片上方 */
+  .stream-replan {
+    display: flex; align-items: center; gap: 6px;
+    margin: 6px 0 8px 44px; padding: 5px 10px;
+    border-left: 3px solid var(--warn-border);
+    border-radius: 0 8px 8px 0;
+    background: var(--warn-bg); color: var(--warn-text);
+    font-size: 12px; line-height: 1.5;
+  }
 
   /* 底部输入区 */
   footer {
@@ -1763,6 +1880,392 @@
 
     scrollToBottom();
     return wrap;
+  }
+
+  /* ==================== 阶段 3 · DAG 计划卡片 ====================
+     三个 SSE 事件驱动这张卡，全部本地渲染、不发任何请求：
+       plan            → 建卡（只有带 nodes 才建；旧的扁平 plan 仍走提示气泡）
+       node_status     → 按 plan_id + version 找卡，更新节点状态与进度数字
+       plan_replanned  → 就地升级到新版本，并在卡上方插一条系统提示行
+     「查看轨迹」只把已经累积在 DOM 上的节点状态序列化成 JSON 展开，不查后端。 */
+
+  const PLAN_STATUS_TEXT = {
+    pending: '等待中', ready: '就绪', running: '执行中', done: '已完成',
+    failed: '失败', skipped: '已跳过', needs_human: '待人工', cancelled: '已取消'
+  };
+  const PLAN_RISK_TEXT = { green: '低风险', yellow: '需确认', red: '高风险' };
+  /** key = plan_id#version → 卡片状态对象。版本升级时换 key，旧 key 丢弃。 */
+  const planCards = new Map();
+
+  function planCardKey(planId, version) {
+    return String(planId == null ? '' : planId) + '#' + String(version == null ? 0 : version);
+  }
+
+  function planStatusText(status) {
+    return PLAN_STATUS_TEXT[status] || (status || '未知');
+  }
+
+  function planVersionOf(data, fallback) {
+    if (data && data.version != null) return data.version;
+    return fallback == null ? 0 : fallback;
+  }
+
+  /** 把节点状态写进已存在的那一行；重复下发 reason/compensation 时替换而不是追加。 */
+  function applyPlanNodeState(nodeEl, node) {
+    const status = node.status || 'pending';
+    nodeEl.className = 'plan-node s-' + status;
+
+    const riskEl = nodeEl.querySelector('.plan-risk');
+    if (riskEl) {
+      riskEl.className = 'plan-risk risk-' + (node.risk_level || 'green');
+      riskEl.title = PLAN_RISK_TEXT[node.risk_level] || PLAN_RISK_TEXT.green;
+    }
+
+    const statusEl = nodeEl.querySelector('.plan-node-status');
+    if (statusEl) statusEl.textContent = planStatusText(status);
+
+    const subEl = nodeEl.querySelector('.plan-node-sub');
+    if (!subEl) return;
+
+    const reasonEl = subEl.querySelector('.plan-node-reason');
+    if (node.reason) {
+      if (reasonEl) {
+        reasonEl.textContent = '原因：' + node.reason;
+      } else {
+        const el = document.createElement('span');
+        el.className = 'plan-node-reason';
+        el.textContent = '原因：' + node.reason;
+        subEl.appendChild(el);
+      }
+    } else if (reasonEl && reasonEl.parentNode) {
+      reasonEl.parentNode.removeChild(reasonEl);
+    }
+
+    const compEl = subEl.querySelector('.plan-node-comp');
+    if (node.compensation && node.compensation !== 'none') {
+      const text = '补偿：' + node.compensation;
+      if (compEl) {
+        compEl.textContent = text;
+      } else {
+        const el = document.createElement('span');
+        el.className = 'plan-node-comp';
+        el.textContent = text;
+        subEl.appendChild(el);
+      }
+    } else if (compEl && compEl.parentNode) {
+      compEl.parentNode.removeChild(compEl);
+    }
+  }
+
+  function planProgress(state) {
+    let done = 0, failed = 0, skipped = 0, running = 0;
+    state.nodes.forEach(function (node) {
+      const s = node.status || 'pending';
+      if (s === 'done') done += 1;
+      else if (s === 'failed') failed += 1;
+      else if (s === 'skipped') skipped += 1;
+      else if (s === 'running') running += 1;
+    });
+    return { total: state.nodes.length, done: done, failed: failed, skipped: skipped, running: running };
+  }
+
+  function refreshPlanHeader(state) {
+    const p = planProgress(state);
+    state.titleEl.textContent = '执行计划 · v' + state.version;
+    let text = '共 ' + p.total + ' 个节点 · 进度 ' + p.done + '/' + p.total;
+    if (p.failed) text += ' · 失败 ' + p.failed;
+    if (p.skipped) text += ' · 跳过 ' + p.skipped;
+    state.statEl.textContent = text;
+  }
+
+  /** 轨迹 JSON 只来自本卡累积的节点状态，不向后端要数据。 */
+  function planTraceJson(state) {
+    const nodes = state.nodes.map(function (node) {
+      const item = {
+        node_id: node.node_id,
+        agent: node.agent || '',
+        intent: node.intent || node.task || '',
+        status: node.status || 'pending',
+        risk_level: node.risk_level || 'green',
+        depends_on: (node.depends_on || []).slice()
+      };
+      if (node.reason) item.reason = node.reason;
+      if (node.compensation && node.compensation !== 'none') item.compensation = node.compensation;
+      if (node.wall_ms != null) item.wall_ms = node.wall_ms;
+      return item;
+    });
+    const plan = state.plan || {};
+    const payload = {
+      plan_id: state.planId,
+      version: state.version,
+      origin: plan.origin,
+      goal: plan.goal,
+      replan_count: plan.replan_count,
+      progress: planProgress(state),
+      nodes: nodes
+    };
+    try {
+      return JSON.stringify(payload, null, 2);
+    } catch (err) {
+      return '{"error":"trace unavailable"}';
+    }
+  }
+
+  /** 用（可能是新版本的）计划字典重填卡片内容：头部 + 节点行 + 关联信息。 */
+  function applyPlanToCard(state, data) {
+    const plan = data || {};
+    const nodes = Array.isArray(plan.nodes) ? plan.nodes : [];
+
+    if (plan.plan_id != null) state.planId = plan.plan_id;
+    state.version = planVersionOf(plan, state.version);
+    state.plan = plan;
+
+    // 深拷贝一份节点表：node_status 只改本地副本，不污染事件对象
+    state.nodes = nodes.map(function (node) {
+      const copy = Object.assign({}, node);
+      copy.depends_on = Array.isArray(node.depends_on) ? node.depends_on.slice() : [];
+      copy.status = node.status || 'pending';
+      copy.risk_level = node.risk_level || 'green';
+      return copy;
+    });
+    state.nodeEls = new Map();
+    state.listEl.textContent = '';
+
+    // 确认点：risk_level 非 green，或存在指向该节点的 kind === 'confirm' 边
+    const confirmTargets = new Set();
+    (Array.isArray(plan.edges) ? plan.edges : []).forEach(function (edge) {
+      if (edge && edge.kind === 'confirm' && edge.to) confirmTargets.add(edge.to);
+    });
+
+    state.nodes.forEach(function (node, i) {
+      const row = document.createElement('div');
+      row.className = 'plan-node';
+      if (node.node_id) row.setAttribute('data-node-id', String(node.node_id));
+
+      const idxEl = document.createElement('span');
+      idxEl.className = 'plan-node-idx';
+      idxEl.textContent = String(i + 1);
+      row.appendChild(idxEl);
+
+      const riskEl = document.createElement('span');
+      riskEl.className = 'plan-risk';
+      row.appendChild(riskEl);
+
+      const main = document.createElement('div');
+      main.className = 'plan-node-main';
+
+      const headRow = document.createElement('div');
+      headRow.className = 'plan-node-head';
+      const agentEl = document.createElement('span');
+      agentEl.className = 'plan-node-agent';
+      agentEl.textContent = node.agent || ('节点 ' + (i + 1));
+      headRow.appendChild(agentEl);
+      const intentEl = document.createElement('span');
+      intentEl.className = 'plan-node-intent';
+      intentEl.textContent = node.intent || node.task || '';
+      intentEl.title = intentEl.textContent;
+      headRow.appendChild(intentEl);
+      main.appendChild(headRow);
+
+      const sub = document.createElement('div');
+      sub.className = 'plan-node-sub';
+      if (node.depends_on && node.depends_on.length) {
+        const depEl = document.createElement('span');
+        depEl.className = 'plan-dep';
+        depEl.textContent = '依赖 ' + node.depends_on.join('、');
+        sub.appendChild(depEl);
+      }
+      if (node.risk_level !== 'green' || confirmTargets.has(node.node_id)) {
+        const confirmEl = document.createElement('span');
+        confirmEl.className = 'plan-badge warn';
+        confirmEl.textContent = '需确认';
+        sub.appendChild(confirmEl);
+      }
+      main.appendChild(sub);
+      row.appendChild(main);
+
+      const statusEl = document.createElement('span');
+      statusEl.className = 'plan-node-status';
+      row.appendChild(statusEl);
+
+      applyPlanNodeState(row, node);
+      state.listEl.appendChild(row);
+      if (node.node_id) state.nodeEls.set(String(node.node_id), row);
+    });
+
+    state.seqBadgeEl.hidden = (plan.origin !== 'fallback');
+    refreshPlanHeader(state);
+    if (!state.traceEl.hidden) state.traceEl.textContent = planTraceJson(state);
+  }
+
+  function createPlanCard(data) {
+    const wrap = document.createElement('div');
+    wrap.className = 'message assistant plan-msg';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'avatar';
+    avatar.textContent = '银';
+    wrap.appendChild(avatar);
+
+    const card = document.createElement('div');
+    card.className = 'plan-card';
+    wrap.appendChild(card);
+
+    const head = document.createElement('div');
+    head.className = 'plan-card-head';
+    const titleEl = document.createElement('span');
+    titleEl.className = 'plan-card-title';
+    head.appendChild(titleEl);
+    const statEl = document.createElement('span');
+    statEl.className = 'plan-card-stat';
+    head.appendChild(statEl);
+    const grow = document.createElement('span');
+    grow.className = 'grow';
+    head.appendChild(grow);
+    const seqBadgeEl = document.createElement('span');
+    seqBadgeEl.className = 'plan-badge warn';
+    seqBadgeEl.textContent = '顺序模式';
+    seqBadgeEl.hidden = true;
+    head.appendChild(seqBadgeEl);
+    card.appendChild(head);
+
+    const listEl = document.createElement('div');
+    listEl.className = 'plan-nodes';
+    card.appendChild(listEl);
+
+    const foot = document.createElement('div');
+    foot.className = 'plan-card-foot';
+    const traceBtnEl = document.createElement('button');
+    traceBtnEl.type = 'button';
+    traceBtnEl.className = 'plan-trace-btn';
+    traceBtnEl.textContent = '查看轨迹';
+    foot.appendChild(traceBtnEl);
+    card.appendChild(foot);
+
+    const traceEl = document.createElement('pre');
+    traceEl.className = 'plan-trace';
+    traceEl.hidden = true;
+    card.appendChild(traceEl);
+
+    const state = {
+      planId: data && data.plan_id,
+      version: planVersionOf(data, 0),
+      plan: data || {},
+      nodes: [],
+      nodeEls: new Map(),
+      el: wrap,
+      cardEl: card,
+      listEl: listEl,
+      titleEl: titleEl,
+      statEl: statEl,
+      seqBadgeEl: seqBadgeEl,
+      traceBtnEl: traceBtnEl,
+      traceEl: traceEl
+    };
+
+    traceBtnEl.addEventListener('click', function () {
+      const open = traceEl.hidden;
+      if (open) traceEl.textContent = planTraceJson(state);
+      traceEl.hidden = !open;
+      traceBtnEl.textContent = open ? '收起轨迹' : '查看轨迹';
+      if (open) scrollToBottom();
+    });
+
+    applyPlanToCard(state, data);
+    return state;
+  }
+
+  function registerPlanCard(state) {
+    if (!state) return null;
+    planCards.set(planCardKey(state.planId, state.version), state);
+    return state;
+  }
+
+  function insertHintBeforeCard(state, hint) {
+    if (state && state.el && state.el.parentNode) {
+      state.el.parentNode.insertBefore(hint, state.el);
+    } else {
+      chatEl.appendChild(hint);
+    }
+  }
+
+  /** plan 事件：只有带 nodes 才建卡，返回值无用；旧扁平 plan 走原提示气泡。 */
+  function renderPlanCard(data) {
+    if (!data || !Array.isArray(data.nodes) || !data.nodes.length) return null;
+    const state = createPlanCard(data);
+    registerPlanCard(state);
+    chatEl.appendChild(state.el);
+    scrollToBottom();
+    return state;
+  }
+
+  /** node_status：按 plan_id + version 找卡；找不到（刷新重放 / 旧会话）静默忽略。 */
+  function handleNodeStatus(data) {
+    if (!data) return null;
+    const state = planCards.get(planCardKey(data.plan_id, data.version));
+    if (!state) return null;
+
+    let node = null;
+    for (let i = 0; i < state.nodes.length; i += 1) {
+      if (String(state.nodes[i].node_id) === String(data.node_id)) { node = state.nodes[i]; break; }
+    }
+    // 事件里带 index 但 node_id 对不上时，退回按下标定位
+    if (!node && typeof data.index === 'number' && state.nodes[data.index]) {
+      node = state.nodes[data.index];
+    }
+    if (!node) return null;
+
+    if (data.status) node.status = data.status;
+    if (data.risk_level) node.risk_level = data.risk_level;
+    if (data.intent) node.intent = data.intent;
+    if (data.agent) node.agent = data.agent;
+    if (Array.isArray(data.depends_on)) node.depends_on = data.depends_on.slice();
+    node.reason = data.reason || '';
+    node.compensation = data.compensation || '';
+    if (data.wall_ms != null) node.wall_ms = data.wall_ms;
+
+    const row = state.nodeEls.get(String(node.node_id));
+    if (row) applyPlanNodeState(row, node);
+    refreshPlanHeader(state);
+    if (!state.traceEl.hidden) state.traceEl.textContent = planTraceJson(state);
+    return state;
+  }
+
+  /** plan_replanned：卡上方插提示行，并把同一张卡就地升级到新版本。 */
+  function handlePlanReplanned(data) {
+    if (!data) return null;
+    const plan = data.plan || {};
+    const planId = data.plan_id != null ? data.plan_id : plan.plan_id;
+    const fromVersion = data.from_version;
+    const toVersion = data.to_version != null ? data.to_version : plan.version;
+    const next = Object.assign({}, plan, { plan_id: planId, version: toVersion });
+
+    let state = planCards.get(planCardKey(planId, toVersion));
+    if (!state) {
+      const prev = planCards.get(planCardKey(planId, fromVersion));
+      if (prev) {
+        planCards.delete(planCardKey(planId, fromVersion));
+        state = prev;
+      }
+    }
+    if (Array.isArray(next.nodes) && next.nodes.length) {
+      if (state) {
+        applyPlanToCard(state, next);
+      } else {
+        state = createPlanCard(next);
+        chatEl.appendChild(state.el);
+      }
+      registerPlanCard(state);
+    }
+
+    const hint = document.createElement('div');
+    hint.className = 'stream-replan';
+    hint.textContent = '计划已重规划：v' + (fromVersion == null ? '?' : fromVersion)
+      + ' → v' + (toVersion == null ? '?' : toVersion)
+      + '（原因：' + (data.reason || '未提供') + '）';
+    insertHintBeforeCard(state, hint);
+    scrollToBottom();
+    return state;
   }
 
   function addTyping() {
@@ -3638,11 +4141,21 @@
           // 把子 Agent 启动与 LLM 首 token 延迟（TTFT）也包进「思考中」提示。
           if (data.type === 'plan') {
             planData = data.plan;
-            // 多任务时先提示任务拆分
-            if (planData && planData.length > 1) {
+            // 阶段 3：带 nodes 的 DAG 计划渲染计划卡片（含依赖/风险/状态）；
+            // 只有扁平 plan 列表的旧事件保持原样，仍走下面这条提示气泡。
+            if (Array.isArray(data.nodes) && data.nodes.length) {
+              renderPlanCard(data);
+            } else if (planData && planData.length > 1) {
+              // 多任务时先提示任务拆分
               const planEl = addMessage('assistant', '已为您拆分为 ' + planData.length + ' 个子任务，正在依次执行…', null);
               planEl.classList.add('stream-plan');
             }
+          } else if (data.type === 'node_status') {
+            // 节点状态逐条下发：只更新已存在的卡片，找不到就忽略（刷新后重放）
+            handleNodeStatus(data);
+          } else if (data.type === 'plan_replanned') {
+            // 重规划：卡上方插系统提示行，并把卡片切到新版本
+            handlePlanReplanned(data);
           } else if (data.type === 'task_start') {
             // 每个子任务开始前，如果不是第一个任务且已有气泡，新开一个气泡
             if (data.index > 0 && currentMsgEl) {
@@ -3667,11 +4180,15 @@
               currentBubble = currentMsgEl.querySelector('.bubble');
             }
             // 子任务完成：如果是多任务，在气泡上方加任务标签
-            if (data.total > 1 && currentMsgEl) {
+            // 被级联跳过的节点没有正文气泡，标签单独成行（不额外造空气泡）
+            if (data.total > 1 && (currentMsgEl || data.skipped)) {
               const tag = document.createElement('div');
-              tag.className = 'stream-task-tag';
-              tag.textContent = '任务' + (data.index + 1) + ' · ' + (data.agent || '');
-              currentMsgEl.parentNode.insertBefore(tag, currentMsgEl);
+              tag.className = 'stream-task-tag' + (data.skipped ? ' is-skipped' : '');
+              tag.textContent = data.skipped
+                ? '任务' + (data.index + 1) + (data.agent ? ' · ' + data.agent : '') + ' · 已跳过'
+                : '任务' + (data.index + 1) + ' · ' + (data.agent || '');
+              if (currentMsgEl) currentMsgEl.parentNode.insertBefore(tag, currentMsgEl);
+              else chatEl.appendChild(tag);
             }
           } else if (data.type === 'done') {
             if (typing) { removeTyping(typing); typing = null; }
@@ -4115,6 +4632,229 @@
   // 门禁默认就可见（HTML 上没写 hidden），所以 /api/auth/me 还没回来时也不是白屏
   (function boot() {
     bootstrapAuth().catch(function () { showAuthGate('login'); });
+  })();
+</script>
+<!-- ==================== 写能力熔断（circuit breaker）界面提示 —— 追加块，全部 cb- 前缀 ==================== -->
+<style>
+  /* 锁定横幅：固定顶部、红色系，未熔断时用 [hidden] 完全隐藏（不占位）。
+     注意：作者样式里的 display 会压过 UA 的 [hidden]，所以必须显式写 .cb-banner[hidden]。 */
+  .cb-banner {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 9px 16px; font-size: 13px; line-height: 1.5;
+    background: #b91c1c; color: #fff;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, .18);
+  }
+  .cb-banner[hidden] { display: none; }
+  .cb-banner-text { flex: 1 1 auto; min-width: 0; font-weight: 600; word-break: break-word; }
+  .cb-banner-btn {
+    flex: 0 0 auto; padding: 5px 12px; font-size: 12.5px; font-family: inherit;
+    border-radius: 8px; border: 1px solid rgba(255, 255, 255, .6);
+    background: rgba(255, 255, 255, .16); color: #fff; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  .cb-banner-btn:hover { background: rgba(255, 255, 255, .3); border-color: #fff; }
+  .cb-banner-btn:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+  /* 横幅可见时才给 body 让位：--cb-banner-h 由脚本按实际渲染高度写入，
+     窄屏横幅折行变高也不会盖住顶栏。
+     body 是 border-box + overflow:hidden，所以 .app 的高度必须同时减掉同一数值，
+     否则 .app 的 100dvh 会把底部输入区顶出可视区、再被 overflow:hidden 裁掉。 */
+  body.cb-banner-open { padding-top: var(--cb-banner-h, 44px); }
+  body.cb-banner-open .app {
+    height: calc(100vh - var(--cb-banner-h, 44px));
+    height: calc(100dvh - var(--cb-banner-h, 44px));
+  }
+  /* 移动端侧边栏是 fixed 抽屉（top:0），会被横幅压住；桌面端是流内布局，top 无副作用 */
+  body.cb-banner-open .sidebar { top: var(--cb-banner-h, 44px); }
+  /* 被拦截气泡：红底 / 红边 / 白字，语气是「结果被拦下」而不是异常堆栈 */
+  .message .bubble.msg-blocked,
+  .message.user .bubble.msg-blocked,
+  .bubble.msg-blocked {
+    background: #b91c1c; border: 1px solid #7f1d1d; color: #fff;
+  }
+</style>
+<div class="cb-banner" id="cbBanner" role="status" aria-live="polite" hidden>
+  <span class="cb-banner-text" id="cbBannerText">写操作已暂停</span>
+  <button type="button" class="cb-banner-btn" id="cbStatusBtn">查看状态</button>
+  <button type="button" class="cb-banner-btn" id="cbHitlBtn">转人工审核</button>
+</div>
+<script>
+  /*
+   * 写能力熔断（写操作熔断器）的前端提示：
+   *   1) 轮询 GET /health/capabilities，degraded / writes_enabled=false 时显示顶部红色锁定横幅；
+   *   2) 接口返回 error_code=NOT_READY_001 时，把最近一条助手气泡标成红色阻断样式；
+   *   3) 横幅上的「查看状态」拉原始熔断器 JSON，「转人工审核」复用页面既有的「人工复核」抽屉。
+   * 只读 + 只加类：不改写任何既有函数、不影响原有对话流；请求失败一律静默。
+   */
+  (function () {
+    var HEALTH_URL = '/health/capabilities';
+    var POLL_MS = 15000;            // 15 秒一次
+    var NOT_READY = 'NOT_READY_001';
+    // 与主脚本的 SESSION_KEY 同名（主脚本里是 IIFE 内的 const，外部读不到，只能读 localStorage）
+    var SESSION_KEY = 'bank_agent.active_session';
+
+    var bannerEl = document.getElementById('cbBanner');
+    var bannerTextEl = document.getElementById('cbBannerText');
+    var statusBtn = document.getElementById('cbStatusBtn');
+    var hitlBtn = document.getElementById('cbHitlBtn');
+
+    /** 当前会话 ID：主脚本把「当前会话 ID」持久化在 localStorage，这里读同一个键。 */
+    function currentSessionId() {
+      try { return localStorage.getItem(SESSION_KEY) || ''; } catch (err) { return ''; }
+    }
+
+    /** 拼 query 后缀：拿不到会话 ID 就不带 session_id。 */
+    function withSessionId(path) {
+      var sid = currentSessionId();
+      if (!sid) return path;
+      return path + (path.indexOf('?') < 0 ? '?' : '&') + 'session_id=' + encodeURIComponent(sid);
+    }
+
+    /** 显示 / 隐藏横幅；显示时把实际高度写进 CSS 变量，给 body 让位。 */
+    function setBannerVisible(visible, text) {
+      if (!bannerEl) return;
+      if (visible && text) bannerTextEl.textContent = text;
+      bannerEl.hidden = !visible;
+      if (visible) {
+        // 折行后高度会变，量一次实际高度再落到变量上
+        var h = bannerEl.offsetHeight || 44;
+        document.documentElement.style.setProperty('--cb-banner-h', h + 'px');
+        document.body.classList.add('cb-banner-open');
+      } else {
+        document.body.classList.remove('cb-banner-open');
+      }
+    }
+
+    /** 把熔断明细压成一句补充说明：能力名 + 剩余重试秒数。 */
+    function describeItems(items) {
+      if (!items || !items.length) return '';
+      var parts = [];
+      for (var i = 0; i < items.length && parts.length < 3; i += 1) {
+        var item = items[i] || {};
+        if (item.state !== 'open') continue;
+        var one = String(item.capability || '未命名能力');
+        var retry = Number(item.retry_after);
+        if (isFinite(retry) && retry > 0) one += '（' + Math.ceil(retry) + 's 后重试）';
+        parts.push(one);
+      }
+      if (!parts.length) return '';
+      return '（' + parts.join('、') + (parts.length >= 3 ? ' 等' : '') + '）';
+    }
+
+    /** 根据 /health/capabilities 的 data 决定横幅文案与显隐。 */
+    function applyHealth(data) {
+      if (!data || typeof data !== 'object') { setBannerVisible(false); return; }
+      var shouldShow = data.degraded === true || data.writes_enabled === false;
+      if (!shouldShow) { setBannerVisible(false); return; }
+      var open = Number(data.open || 0);
+      var head;
+      if (open > 0) head = '写操作已暂停：' + open + ' 项能力熔断中';
+      else if (data.writes_enabled === false) head = '写操作已暂停：写能力已停用';
+      else head = '写操作已暂停';
+      setBannerVisible(true, head + describeItems(data.items));
+    }
+
+    /** 取一次健康快照；任何失败（网络 / 非 200 / 非 JSON）都静默，不打扰对话。 */
+    function refreshHealth() {
+      return fetch(HEALTH_URL, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: { 'Accept': 'application/json' }
+      }).then(function (res) {
+        if (!res || !res.ok) return null;
+        return res.clone().json();
+      }).then(function (payload) {
+        if (!payload || typeof payload !== 'object') return null;
+        var data = payload.data || null;
+        applyHealth(data);
+        return data;
+      }).catch(function () { return null; });
+    }
+
+    /** 「查看状态」：新窗口打开熔断器原始 JSON，同时把健康快照打到 console。 */
+    function onStatusClick() {
+      window.open(withSessionId('/api/safety/circuit-breakers'), '_blank');
+      refreshHealth().then(function (data) {
+        try { console.info('[写能力熔断] GET ' + HEALTH_URL, data); } catch (err) { /* 忽略 */ }
+      });
+    }
+
+    /**
+     * 「转人工审核」：优先复用页面已有的「人工复核」抽屉（顶栏 #hitlEntry）。
+     * 主脚本的 openHitlDrawer 在 IIFE 里、外部拿不到，所以用 DOM 点击复用，不改既有代码。
+     * 抽屉没被打开（门禁未通过 / 事件未绑定）时，兜底新窗口打开 /api/hitl/cases。
+     */
+    function onHitlClick() {
+      var entry = document.getElementById('hitlEntry');
+      var overlay = document.getElementById('hitlOverlay');
+      if (entry) {
+        try { entry.click(); } catch (err) { /* 落到下面的兜底 */ }
+      }
+      // 抽屉是同步打开的：下一拍看一眼是否真的可见
+      setTimeout(function () {
+        var opened = !!(overlay && !overlay.hidden);
+        if (!opened) window.open('/api/hitl/cases', '_blank');   /* 兜底：直接看复核案件 JSON */
+      }, 0);
+    }
+
+    /** 最近一条助手气泡（既有 DOM 结构：#chat > .message.assistant > .bubble）。 */
+    function latestAssistantBubble() {
+      var list = document.querySelectorAll('#chat .message.assistant .bubble');
+      if (!list || !list.length) return null;
+      return list[list.length - 1];
+    }
+
+    /** 命中 NOT_READY_001：先亮横幅（不等轮询），再给最新助手气泡加阻断样式。 */
+    function markBlocked() {
+      if (bannerEl && bannerEl.hidden) {
+        setBannerVisible(true, '写操作已暂停：本轮请求被熔断拦截');
+      }
+      var bubble = latestAssistantBubble();
+      if (bubble) {
+        bubble.classList.add('msg-blocked');
+      } else {
+        try { console.warn('[写能力熔断] 命中 ' + NOT_READY + '，但未找到可标记的助手气泡'); } catch (err) { /* 忽略 */ }
+      }
+      // 拿真实数字再刷新一次文案（失败就保留上面的兜底文案）
+      refreshHealth();
+    }
+
+    function isNotReady(payload) {
+      if (!payload || typeof payload !== 'object') return false;
+      if (payload.error_code === NOT_READY) return true;
+      return !!(payload.data && typeof payload.data === 'object' && payload.data.error_code === NOT_READY);
+    }
+
+    /** 只检查 JSON 响应；SSE（text/event-stream）与二进制一律跳过，避免无谓的 body 缓冲。 */
+    function inspectResponse(response) {
+      var ct = '';
+      try {
+        ct = (response.headers && response.headers.get && response.headers.get('content-type')) || '';
+      } catch (err) { ct = ''; }
+      if (ct.indexOf('json') < 0) return;
+      // clone() 后再读：原响应对象原样返回给调用方，对话流不受影响
+      response.clone().json().then(function (payload) {
+        if (isNotReady(payload)) markBlocked();
+      }).catch(function () { /* 解析失败：静默 */ });
+    }
+
+    // ---- 包装 window.fetch（只包一层，保留原引用与全部实参） ----
+    var _origFetch = window.fetch;
+    if (typeof _origFetch === 'function' && !window.__cbFetchWrapped) {
+      window.__cbFetchWrapped = true;
+      window.fetch = async function (...args) {
+        var response = await _origFetch.apply(this, args);
+        try { inspectResponse(response); } catch (err) { /* 检查失败绝不能影响原流程 */ }
+        return response;   // 同一个响应对象原样返回
+      };
+    }
+
+    if (statusBtn) statusBtn.addEventListener('click', onStatusClick);
+    if (hitlBtn) hitlBtn.addEventListener('click', onHitlClick);
+
+    // 页面加载后立刻取一次，之后每 15 秒取一次
+    refreshHealth();
+    setInterval(refreshHealth, POLL_MS);
   })();
 </script>
 </body>

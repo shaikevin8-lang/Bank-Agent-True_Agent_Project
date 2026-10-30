@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 import re
 from typing import Any
 
@@ -34,6 +35,7 @@ from common.llm import DeepSeekChat
 from common.memory import SessionMemory, build_llm_summarizer
 from common.middleware import ContentModerationMiddleware, LLMReviewer
 from common.model_manager import RuntimeChatModel, resolve_manager, trace_info
+from common import plan as plan_dag
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
 from common.text_format import ReplyStreamFilter, sanitize_reply
 from R1 import TransferAgent
@@ -42,6 +44,8 @@ from R3 import WealthAgent
 from R4 import CardAgent
 from R5 import SubscriptionAgent
 from R6 import WorkflowAgent
+
+logger = logging.getLogger(__name__)
 
 # 规则路由关键词表：LLM 调度器不可用时的兜底（R4~R6 追加条目即可扩展）
 _ROUTE_KEYWORDS: dict[str, list[str]] = {
@@ -74,6 +78,56 @@ _AGENT_CAPABILITIES: dict[str, str] = {
     "common": "通用问答：天气、汇率、新闻、百科、寒暄，以及无法归入上述场景的请求",
 }
 
+# 各模块的默认风险分级（D03 计划卡片展示用；真正的门禁在工具层 HITL）。
+_AGENT_RISK: dict[str, str] = {
+    "R1": plan_dag.RISK_YELLOW,
+    "R2": plan_dag.RISK_GREEN,
+    "R3": plan_dag.RISK_YELLOW,
+    "R4": plan_dag.RISK_RED,
+    "R5": plan_dag.RISK_GREEN,
+    "R6": plan_dag.RISK_YELLOW,
+    "common": plan_dag.RISK_GREEN,
+}
+
+
+def _record_moderation_violation(result: Any, session_id: str) -> None:
+    """把注入 / 越权类拦截记为熔断零容忍事件（D01）。
+
+    只对 `prompt_injection` / `privilege_escalation` 两类命中记账：它们
+    意味着写路径正在被主动攻击，按「零容忍」立即开启该会话全部写能力；普通
+    违规内容（如辱骂、其他 blocklist 命中）只做内容拦截，不动业务可用性。
+
+    Args:
+        result: 内容审核结果（`common.middleware.ModerationResult`）。
+        session_id: 会话 ID；作为熔断的 user 维度。
+
+    Returns:
+        `None`。记账失败只写日志，绝不影响本条输入的拦截结论。
+    """
+    category = str(getattr(result, "category", "") or "")
+    reasons = {
+        "prompt_injection": None,
+        "privilege_escalation": None,
+    }
+    if category not in reasons:
+        return
+    try:
+        from common import circuit_breaker, hitl
+
+        reason_code = (
+            circuit_breaker.REASON_PROMPT_INJECTION
+            if category == "prompt_injection"
+            else circuit_breaker.REASON_PRIVILEGE_VIOLATION
+        )
+        circuit_breaker.record_violation(
+            reason_code,
+            tenant_id=hitl.default_tenant_id(),
+            user_id=session_id,
+            detail=f"内容审核拦截：{category}",
+        )
+    except Exception as error:  # noqa: BLE001 - 记账失败不影响拦截结论
+        logger.error("熔断零容忍事件记录失败 category=%s：%s", category, error)
+
 
 class SupervisorAgent:
     """总 Agent：统一入口 + LLM 意图分析/任务拆分 + 多任务编排 + 结果汇总。"""
@@ -103,6 +157,8 @@ class SupervisorAgent:
         self.route_keywords = route_keywords or _ROUTE_KEYWORDS
         self.common_agent = common_agent or CommonAgent(model_manager=model_manager)
         self.memory = memory
+        # D03：会话 → 当前计划版本（重规划保留旧版，恢复按 plan_id+version）。
+        self._plans: dict[str, plan_dag.Plan] = {}
         self._router_model = self._build_router_model()
         self._summarizer_cache: Any = _SUMMARIZER_UNSET
         # 输入门：规则层（词表 + 独立注入检测）始终生效；已配置模型时叠加 LLM 审核增强。
@@ -167,17 +223,19 @@ class SupervisorAgent:
         except Exception:  # noqa: BLE001 - 审核模型不可用不阻断对话
             return None
 
-    def _moderate_input(self, user_input: str) -> dict[str, Any] | None:
+    def _moderate_input(self, user_input: str, session_id: str = "default") -> dict[str, Any] | None:
         """输入门：对用户输入执行规则层 + LLM 审核，阻断时返回统一契约结果。
 
         Args:
             user_input: 用户原始输入。
+            session_id: 会话 ID（注入/越权命中的熔断零容忍事件按此维度记账）。
 
         Returns:
             审核未通过时返回阻断结果字典；通过时返回 None。
         """
         result = self._input_moderator.check_with_llm(user_input)
         if not result.passed:
+            _record_moderation_violation(result, session_id)
             reply = sanitize_reply(f"抱歉，您的输入未通过内容审核：{result.reason}")
             return {
                 "reply": reply,
@@ -261,6 +319,485 @@ class SupervisorAgent:
             if name in self.agents or name == "common":
                 plan.append({"agent": name, "task": task})
         return plan or None
+
+    # ------------------------------------------------------------ DAG 计划（D03）
+
+    def _plan_tasks(
+        self, user_input: str, router_history: list[dict[str, Any]] | None
+    ) -> tuple[list[dict[str, Any]], str]:
+        """取得子任务列表（LLM 优先，失败回退规则路由）。
+
+        Args:
+            user_input: 用户输入。
+            router_history: 调度器可见的历史。
+
+        Returns:
+            ``(任务列表, origin)``，``origin`` 为 ``"llm"`` 或 ``"fallback"``。
+        """
+        tasks = self._plan(user_input, router_history)
+        if tasks:
+            return list(tasks), "llm"
+        target = self.route(user_input)
+        agent = target if target in self.agents else "common"
+        return [{"agent": agent, "task": user_input}], "fallback"
+
+    def _decorate_tasks(self, tasks: list[Any]) -> list[dict[str, Any]]:
+        """补齐节点 ID / 风险分级 / 确认点（仅展示与编排元数据）。
+
+        Args:
+            tasks: 原始任务项（字符串或字典）。
+
+        Returns:
+            补全后的任务项列表。
+        """
+        decorated: list[dict[str, Any]] = []
+        for index, item in enumerate(tasks):
+            raw = {"task": item} if isinstance(item, str) else dict(item)
+            agent = str(raw.get("agent") or "common")
+            raw["agent"] = agent
+            raw["node_id"] = str(raw.get("node_id") or f"n{index + 1}")
+            raw.setdefault("risk_level", _AGENT_RISK.get(agent, plan_dag.RISK_GREEN))
+            raw.setdefault("requires_confirmation", raw["risk_level"] != plan_dag.RISK_GREEN)
+            decorated.append(raw)
+        return decorated
+
+    @staticmethod
+    def _sequential_tasks(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """把带显式依赖的任务改写成纯顺序链（环检测失败时的回退模式）。
+
+        Args:
+            tasks: 已装饰的任务项。
+
+        Returns:
+            去掉 ``depends_on`` 的任务项列表。
+        """
+        fallback: list[dict[str, Any]] = []
+        for item in tasks:
+            copy = dict(item)
+            copy.pop("depends_on", None)
+            copy.pop("edge_kind", None)
+            fallback.append(copy)
+        return fallback
+
+    def build_plan(
+        self,
+        user_input: str,
+        *,
+        session_id: str = "default",
+        router_history: list[dict[str, Any]] | None = None,
+        tasks: list[Any] | None = None,
+    ) -> plan_dag.Plan:
+        """构建（或续写为下一版本的）执行计划。
+
+        建图即校验：有环 → 审计 ``plan.invalid_cycle`` 并回退**顺序模式**；
+        结构非法 → 审计并降级为单节点 ``common`` 计划。同一会话存在**未完成**
+        的旧计划时，本轮视为「用户改约束」，产出 ``version+1`` 的新版本并保留
+        旧版（重规划上限 :data:`plan_dag.MAX_REPLANS`）。
+
+        Args:
+            user_input: 用户输入（作为计划目标）。
+            session_id: 会话 ID（计划按会话保存）。
+            router_history: 调度器可见历史。
+            tasks: 直接指定任务项（测试/API 用）；``None`` 时走 LLM 调度器。
+
+        Returns:
+            计划对象。
+        """
+        if tasks is None:
+            tasks, origin = self._plan_tasks(user_input, router_history)
+        else:
+            tasks, origin = list(tasks), "llm"
+        decorated = self._decorate_tasks(tasks)
+        try:
+            plan = plan_dag.build_plan(decorated, goal=user_input, origin=origin)
+            plan_dag.validate(plan)
+        except plan_dag.PlanCycleError as exc:
+            plan_dag.audit(
+                plan_dag.AUDIT_INVALID_CYCLE,
+                goal=user_input,
+                nodes=list(exc.nodes),
+                detail=str(exc)[:512],
+            )
+            plan = plan_dag.build_plan(
+                self._sequential_tasks(decorated), goal=user_input, origin="fallback"
+            )
+        except plan_dag.PlanValidationError as exc:
+            plan_dag.audit(
+                plan_dag.AUDIT_INVALID_CYCLE, goal=user_input, detail=str(exc)[:512]
+            )
+            plan = plan_dag.build_plan(
+                [{"agent": "common", "task": user_input}], goal=user_input, origin="fallback"
+            )
+
+        previous = self._plans.get(session_id)
+        if (
+            previous is not None
+            and not previous.finished
+            and previous.replan_count < plan_dag.MAX_REPLANS
+        ):
+            try:
+                plan = previous.replanned("user_revised_goal", nodes=plan.nodes)
+            except plan_dag.ReplanLimitError:  # 已达上限：开新计划并转人工
+                logger.warning("会话 %s 重规划超限，转人工并开启新计划", session_id)
+        self._plans[session_id] = plan
+        return plan
+
+    def current_plan(self, session_id: str = "default") -> plan_dag.Plan | None:
+        """取会话当前计划。
+
+        Args:
+            session_id: 会话 ID。
+
+        Returns:
+            计划对象或 ``None``。
+        """
+        return self._plans.get(session_id)
+
+    def replan(
+        self,
+        session_id: str = "default",
+        *,
+        reason: str = "tool_unavailable",
+        tasks: list[Any] | None = None,
+        user_input: str | None = None,
+    ) -> plan_dag.Plan:
+        """显式重规划：产出 ``version+1`` 新版本，旧版本保留。
+
+        Args:
+            session_id: 会话 ID。
+            reason: 重规划原因（进审计）。
+            tasks: 新任务项；``None`` 时沿用当前节点。
+            user_input: 新目标（``None`` 时沿用旧目标）。
+
+        Returns:
+            新版本计划。
+
+        Raises:
+            plan_dag.PlanError: 会话没有计划。
+            plan_dag.ReplanLimitError: 已达重规划上限。
+        """
+        current = self._plans.get(session_id)
+        if current is None:
+            raise plan_dag.PlanError(f"会话 {session_id} 没有可重规划的计划")
+        nodes = None
+        if tasks is not None:
+            rebuilt = plan_dag.build_plan(
+                self._decorate_tasks(tasks), goal=user_input or current.goal
+            )
+            nodes = rebuilt.nodes
+        fresh = current.replanned(reason, nodes=nodes)
+        if user_input:
+            fresh.goal = user_input
+        self._plans[session_id] = fresh
+        return fresh
+
+    def resume_plan(
+        self,
+        session_id: str = "default",
+        *,
+        version: int | None = None,
+        history: list[dict[str, Any]] | None = None,
+    ) -> plan_dag.PlanRunResult:
+        """按 ``plan_id+version`` 从首个非 ``done`` 节点继续（已完成节点不重放）。
+
+        Args:
+            session_id: 会话 ID。
+            version: 期望版本；不匹配直接拒绝。
+            history: 子 Agent 上下文；``None`` 时读会话记忆。
+
+        Returns:
+            执行结果。
+
+        Raises:
+            plan_dag.PlanError: 会话没有计划。
+        """
+        plan = self._plans.get(session_id)
+        if plan is None:
+            raise plan_dag.PlanError(f"会话 {session_id} 没有可恢复的计划")
+        if history is None:
+            history = self._recall(session_id)[0]
+        outcomes: dict[str, dict[str, Any]] = {}
+        executor = plan_dag.PlanExecutor(self._node_runner(session_id, history, outcomes))
+        result = executor.resume(plan, version=version)
+        self._plans[session_id] = result.plan
+        return result
+
+    def rollback_plan(
+        self,
+        session_id: str = "default",
+        *,
+        reason: str = "user_cancelled",
+    ) -> plan_dag.PlanRunResult:
+        """按逆拓扑序补偿本会话计划中已完成的节点。
+
+        Args:
+            session_id: 会话 ID。
+            reason: 回滚原因（进审计）。
+
+        Returns:
+            回滚结果（``rolled_back`` / ``needs_human``）。
+
+        Raises:
+            plan_dag.PlanError: 会话没有计划。
+        """
+        plan = self._plans.get(session_id)
+        if plan is None:
+            raise plan_dag.PlanError(f"会话 {session_id} 没有可回滚的计划")
+        executor = plan_dag.PlanExecutor(
+            lambda node: {"status": "ok"},
+            gate=self._compensation_gate,
+            compensate=self._compensate_node,
+        )
+        result = executor.rollback(plan, reason=reason, tool_of=self._node_tool)
+        self._plans[session_id] = result.plan
+        return result
+
+    @staticmethod
+    def _node_tool(node: plan_dag.PlanNode) -> str | None:
+        """从节点参数里取原写工具名。
+
+        Args:
+            node: 节点。
+
+        Returns:
+            工具名或 ``None``。
+        """
+        params = node.params if isinstance(node.params, dict) else {}
+        tool = params.get("tool")
+        return str(tool) if tool else None
+
+    def _compensation_tool(self, node: plan_dag.PlanNode) -> str | None:
+        """解析节点对应的补偿工具名。
+
+        Args:
+            node: 节点。
+
+        Returns:
+            补偿工具名（无自动化补偿时为 ``None``）。
+        """
+        rule = plan_dag.compensation_for(self._node_tool(node), node.compensating_action)
+        return rule.tool_name if rule else None
+
+    def _plan_gate(self, node: plan_dag.PlanNode) -> dict[str, Any] | None:
+        """执行前的熔断门禁（工具层 HITL 之外的第一道闸）。
+
+        Args:
+            node: 节点。
+
+        Returns:
+            阻断回执或 ``None``。
+        """
+        tool = self._node_tool(node)
+        if not tool:
+            return None
+        try:
+            from common import hitl
+
+            return hitl.breaker_gate(tool)
+        except Exception:  # noqa: BLE001 - 门禁自身异常不阻断编排
+            logger.debug("计划门禁不可用，跳过 tool=%s", tool)
+            return None
+
+    def _compensation_gate(self, node: plan_dag.PlanNode) -> dict[str, Any] | None:
+        """补偿动作的熔断门禁（补偿本身也是写操作）。
+
+        Args:
+            node: 待补偿节点。
+
+        Returns:
+            阻断回执或 ``None``。
+        """
+        tool = self._compensation_tool(node)
+        if not tool:
+            return None
+        try:
+            from common import hitl
+
+            return hitl.breaker_gate(tool)
+        except Exception:  # noqa: BLE001 - 门禁自身异常不阻断补偿判定
+            return None
+
+    def _invoke_tool(self, agent_name: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """直接调用某模块已注册的写工具（补偿用，绕过 LLM）。
+
+        Args:
+            agent_name: 目标模块。
+            tool_name: 工具名。
+            arguments: 工具参数。
+
+        Returns:
+            统一回执字典。
+
+        Raises:
+            RuntimeError: 该模块未注册此工具。
+        """
+        agent = self._resolve_agent(agent_name)
+        for tool in getattr(agent, "_tools", None) or []:
+            if getattr(tool, "name", None) == tool_name:
+                raw = tool.invoke(arguments)
+                return {"status": "ok", "tool": tool_name, "message": str(raw)[:500]}
+        raise RuntimeError(f"模块 {agent_name} 未注册补偿工具 {tool_name}")
+
+    def _compensate_node(self, node: plan_dag.PlanNode) -> dict[str, Any]:
+        """执行单节点补偿（走熔断门禁 + 直接工具调用）。
+
+        Args:
+            node: 待补偿节点。
+
+        Returns:
+            补偿回执。
+
+        Raises:
+            RuntimeError: 无补偿工具或工具不可用（由执行器升级为零容忍失败）。
+        """
+        tool = self._compensation_tool(node)
+        if tool is None:
+            raise RuntimeError("没有可用的自动化补偿工具")
+        params = node.params if isinstance(node.params, dict) else {}
+        arguments = dict(params.get("compensation_args") or {})
+        return self._invoke_tool(node.agent, tool, arguments)
+
+    def _node_runner(
+        self,
+        session_id: str,
+        history: list[dict[str, Any]] | None,
+        outcomes: dict[str, dict[str, Any]],
+    ) -> Any:
+        """构造 DAG 执行器使用的节点执行函数。
+
+        Args:
+            session_id: 会话 ID。
+            history: 子 Agent 上下文。
+            outcomes: 节点结果收集器（原地更新）。
+
+        Returns:
+            可传给 :class:`plan_dag.PlanExecutor` 的 ``runner``。
+        """
+
+        def runner(node: plan_dag.PlanNode) -> dict[str, Any]:
+            result = self._dispatch(
+                node.agent, self._resolve_agent(node.agent), node.intent, session_id, history
+            )
+            outcomes[node.node_id] = result
+            trace = result.get("trace") or {}
+            if result.get("blocked") or trace.get("failed"):
+                return {
+                    "status": "failed",
+                    "error_code": "TASK_FAILED",
+                    "message": str(result.get("reply") or "")[:512],
+                }
+            return {"status": "ok"}
+
+        return runner
+
+    @staticmethod
+    def _node_status_from(result: dict[str, Any]) -> str:
+        """由子 Agent 结果推断节点状态。
+
+        Args:
+            result: 统一契约结果。
+
+        Returns:
+            ``done`` 或 ``failed``。
+        """
+        trace = result.get("trace") or {}
+        if result.get("blocked") or trace.get("failed"):
+            return plan_dag.STATUS_FAILED
+        return plan_dag.STATUS_DONE
+
+    def _skipped_result(self, node: plan_dag.PlanNode) -> dict[str, Any]:
+        """为被级联跳过的节点造一条统一契约结果。
+
+        Args:
+            node: 节点。
+
+        Returns:
+            统一契约结果。
+        """
+        reason = node.error or "dependency_failed"
+        return {
+            "reply": f"（因上游任务未成功，已跳过：{node.intent}）",
+            "blocked": False,
+            "moderation": {},
+            "tasks": [],
+            "agent": node.agent,
+            "trace": {
+                "agent": node.agent,
+                "tools": [],
+                "failed": True,
+                "plan_node": node.node_id,
+                "plan_status": plan_dag.STATUS_SKIPPED,
+                "plan_reason": reason,
+            },
+        }
+
+    def _needs_human_result(self, node: plan_dag.PlanNode) -> dict[str, Any]:
+        """为待人工处理的节点造一条统一契约结果。
+
+        Args:
+            node: 节点。
+
+        Returns:
+            统一契约结果。
+        """
+        detail = node.error or "该步骤需要人工确认后继续"
+        return {
+            "reply": f"（该步骤需要人工处理：{node.intent}——{detail}）",
+            "blocked": True,
+            "moderation": {},
+            "tasks": [],
+            "agent": node.agent,
+            "trace": {
+                "agent": node.agent,
+                "tools": [],
+                "failed": True,
+                "plan_node": node.node_id,
+                "plan_status": node.status,
+                "plan_reason": detail,
+            },
+        }
+
+    def _collect_results(
+        self, plan: plan_dag.Plan, outcomes: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """按节点顺序组装结果列表（与计划等长同序）。
+
+        Args:
+            plan: 计划。
+            outcomes: 节点结果。
+
+        Returns:
+            统一契约结果列表。
+        """
+        results: list[dict[str, Any]] = []
+        for node in plan.nodes:
+            if node.node_id in outcomes:
+                results.append(outcomes[node.node_id])
+            elif node.status == plan_dag.STATUS_SKIPPED:
+                results.append(self._skipped_result(node))
+            elif node.status == plan_dag.STATUS_NEEDS_HUMAN:
+                results.append(self._needs_human_result(node))
+            else:
+                results.append(self._skipped_result(node))
+        return results
+
+    def _plan_trace(self, plan: plan_dag.Plan, status: str) -> dict[str, Any]:
+        """构造 trace 里的 DAG 字段（向后兼容：``plan`` 仍是旧扁平列表）。
+
+        Args:
+            plan: 计划。
+            status: 计划总体状态。
+
+        Returns:
+            trace 片段。
+        """
+        return {
+            "plan": plan.to_legacy_list(),
+            "plan_dag": plan.to_dict(),
+            "plan_status": status,
+            "plan_id": plan.plan_id,
+            "plan_version": plan.version,
+        }
 
     # ------------------------------------------------------------ 会话上下文记忆
 
@@ -433,25 +970,24 @@ class SupervisorAgent:
                 trace.plan:   本次执行的子任务计划。
                 trace.memory: 本轮结束后的上下文占用与压缩状态（启用记忆时）。
         """
-        blocked = self._moderate_input(user_input)
+        blocked = self._moderate_input(user_input, session_id)
         if blocked is not None:
             return blocked
         history, router_history = self._recall(session_id)
-        plan = self._plan(user_input, router_history)
-        router_mode = "llm" if plan else "rule"
-        if not plan:
-            target = self.route(user_input)
-            plan = [{"agent": target if target in self.agents else "common", "task": user_input}]
+        plan = self.build_plan(user_input, session_id=session_id, router_history=router_history)
+        router_mode = "llm" if plan.origin == "llm" else "rule"
 
-        results = [
-            self._dispatch(item["agent"], self._resolve_agent(item["agent"]), item["task"], session_id, history)
-            for item in plan
-        ]
+        # D03：按 DAG 语义执行（拓扑序 / 失败分类 / 级联跳过 / 幂等键防重放）。
+        outcomes: dict[str, dict[str, Any]] = {}
+        executor = plan_dag.PlanExecutor(self._node_runner(session_id, history, outcomes))
+        run = executor.run(plan)
+        plan = run.plan
+        results = self._collect_results(plan, outcomes)
 
-        merged = results[0] if len(results) == 1 else self._merge_results(plan, results)
+        merged = results[0] if len(results) == 1 else self._merge_results(plan.to_legacy_list(), results)
         trace = dict(merged.get("trace") or {})
         trace["router"] = router_mode
-        trace["plan"] = plan
+        trace.update(self._plan_trace(plan, run.status))
         merged["trace"] = trace
         # 安全网：无论哪条分支（单任务透传 / 多任务合并 / 兜底失败），下发给用户前
         # 再过一次净化。``sanitize_reply`` 幂等，纯文本逐字符不变；trace/plan 等
@@ -489,45 +1025,79 @@ class SupervisorAgent:
         Yields:
             事件字典。
         """
-        blocked = self._moderate_input(user_input)
+        blocked = self._moderate_input(user_input, session_id)
         if blocked is not None:
             yield {"type": "plan", "plan": [], "router": "input_gate"}
             yield {"type": "done", "result": blocked}
             return
         history, router_history = self._recall(session_id)
-        plan = self._plan(user_input, router_history)
-        router_mode = "llm" if plan else "rule"
-        if not plan:
-            target = self.route(user_input)
-            plan = [{"agent": target if target in self.agents else "common", "task": user_input}]
+        plan = self.build_plan(user_input, session_id=session_id, router_history=router_history)
+        router_mode = "llm" if plan.origin == "llm" else "rule"
 
-        yield {"type": "plan", "plan": plan, "router": router_mode}
+        # D03：``plan`` 事件保留旧的扁平列表 ``plan``，并新增 nodes/edges/版本字段（只增不改）。
+        yield {
+            "type": "plan",
+            "plan": plan.to_legacy_list(),
+            "router": router_mode,
+            **plan.to_event(),
+        }
 
         results: list[dict[str, Any]] = []
+        outcomes: dict[str, dict[str, Any]] = {}
+        total = len(plan.nodes)
         # 每个子任务 index 一个流式净化器：模型会把 ``**`` / 围栏 ``` 拆到不同 chunk，
         # 逐块直发会把半截标记漏给前端，故由 ReplyStreamFilter 持有未完成标记，
         # 等 flush() 时再收尾。任务结束后立即丢弃该 index 的过滤器。
         filters: dict[int, ReplyStreamFilter] = {}
-        for index, item in enumerate(plan):
+        for index, node_id in enumerate(list(plan.node_ids)):
+            node = plan.node(node_id)
+            if node.status in plan_dag.TERMINAL_STATUSES:
+                continue
+            if any(plan.node(dep).status != plan_dag.STATUS_DONE for dep in node.depends_on):
+                # 上游未成功 → 级联跳过（与批处理路径同一套语义）。
+                node.status = plan_dag.STATUS_SKIPPED
+                node.error = "dependency_failed:" + ",".join(node.depends_on)
+                skipped = self._skipped_result(node)
+                outcomes[node_id] = skipped
+                results.append(skipped)
+                plan_dag.audit(
+                    plan_dag.AUDIT_NODE_SKIPPED,
+                    plan_id=plan.plan_id,
+                    version=plan.version,
+                    node_id=node_id,
+                    reason=node.error,
+                )
+                yield plan_dag.node_status_event(plan, node)
+                yield {
+                    "type": "task_done",
+                    "index": index,
+                    "total": total,
+                    "agent": node.agent,
+                    "result": skipped,
+                    "skipped": True,
+                }
+                continue
+            node.status = plan_dag.STATUS_RUNNING
+            yield plan_dag.node_status_event(plan, node)
             yield {
                 "type": "task_start",
                 "index": index,
-                "total": len(plan),
-                "agent": item["agent"],
-                "task": item["task"],
+                "total": total,
+                "agent": node.agent,
+                "task": node.intent,
             }
-            agent = self._resolve_agent(item["agent"])
+            agent = self._resolve_agent(node.agent)
             stream_fn = getattr(agent, "chat_stream", None)
             if stream_fn is None:
                 # 该 Agent 无流式能力，回退同步调用
-                result = self._dispatch(item["agent"], agent, item["task"], session_id, history)
+                result = self._dispatch(node.agent, agent, node.intent, session_id, history)
                 results.append(result)
             else:
                 task_result: dict[str, Any] | None = None
                 stream_filter = ReplyStreamFilter()
                 filters[index] = stream_filter
                 try:
-                    for ev in self._call_agent_stream(agent, item["task"], session_id, history):
+                    for ev in self._call_agent_stream(agent, node.intent, session_id, history):
                         if ev["type"] == "token":
                             # 只在净化后确有内容时下发；空片段会让前端闪空气泡。
                             piece = stream_filter.feed(ev.get("content") or "")
@@ -544,24 +1114,51 @@ class SupervisorAgent:
                     # 收尾尾巴必须在 task_done 之前下发，顺序语义与原来一致。
                     yield {"type": "token", "index": index, "content": tail}
                 results.append(
-                    self._wrap(item["agent"], task_result) if task_result is not None
-                    else self._wrap(item["agent"], self._failure_result(RuntimeError("无结果")))
+                    self._wrap(node.agent, task_result) if task_result is not None
+                    else self._wrap(node.agent, self._failure_result(RuntimeError("无结果")))
                 )
 
             # task_done 的 result 只改 reply，其它键（blocked/tasks/trace/agent…）原样保留。
             results[-1]["reply"] = sanitize_reply(results[-1].get("reply") or "")
+            outcomes[node_id] = results[-1]
+            node.status = self._node_status_from(results[-1])
+            if node.status == plan_dag.STATUS_FAILED:
+                node.error = str(results[-1].get("reply") or "")[:200] or "task_failed"
+            yield plan_dag.node_status_event(plan, node)
             yield {
                 "type": "task_done",
                 "index": index,
-                "total": len(plan),
-                "agent": item["agent"],
+                "total": total,
+                "agent": node.agent,
                 "result": results[-1],
             }
+            if node.status == plan_dag.STATUS_FAILED:
+                # 下游全部跳过（事件逐条下发，前端可即时置灰）。
+                for ev in plan_dag.cascade_skip(plan, node):
+                    yield ev
+                # 被级联跳过的节点没有 task_start/token，需补一条 ``task_done``
+                # （带 ``skipped: true``）让前端关闭对应进度条，否则进度会卡住。
+                for skipped_node in plan.nodes:
+                    if skipped_node.status != plan_dag.STATUS_SKIPPED:
+                        continue
+                    if skipped_node.node_id in outcomes:
+                        continue
+                    skipped = self._skipped_result(skipped_node)
+                    outcomes[skipped_node.node_id] = skipped
+                    results.append(skipped)
+                    yield {
+                        "type": "task_done",
+                        "index": plan.node_ids.index(skipped_node.node_id),
+                        "total": total,
+                        "agent": skipped_node.agent,
+                        "result": skipped,
+                        "skipped": True,
+                    }
 
-        merged = results[0] if len(results) == 1 else self._merge_results(plan, results)
+        merged = results[0] if len(results) == 1 else self._merge_results(plan.to_legacy_list(), results)
         trace = dict(merged.get("trace") or {})
         trace["router"] = router_mode
-        trace["plan"] = plan
+        trace.update(self._plan_trace(plan, plan_dag.final_status(plan)))
         merged["trace"] = trace
         # 与 chat() 同一道安全网：落库 / 前端最终气泡用的都是这条 reply。
         merged["reply"] = sanitize_reply(merged.get("reply") or "")

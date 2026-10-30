@@ -262,7 +262,7 @@ Plan(plan_id, version, goal, nodes[], edges[], created_at, replan_count<=2, orig
 
 **前端/SSE（向后兼容，只增不改）**：`plan` 事件扩展 `nodes[{node_id,agent,intent,risk_level,status,depends_on}]` + `edges[{from,to,kind}]`；新增 `node_status`、`plan_replanned{from_version,to_version,reason}`；计划卡片展示依赖、风险色、确认点、进度、「查看轨迹」。
 
-**测试**：`tests/unit/test_plan_dag.py`（拓扑/环/级联跳过/重试/重规划上限/幂等复用）、`tests/contract/test_plan_sse.py`（旧字段仍在）、`tests/security/test_compensation_guard.py`（补偿走门禁、不可逆拒绝补偿、补偿失败触发熔断）、`tests/integration/test_scenario_dag_r6.py`（R2 事实→R6 方案→预留→下单→撤单补偿）。
+**测试**：`tests/test_plan_dag.py`（拓扑/环/级联跳过/重试/重规划上限/幂等复用）、`tests/test_plan_sse.py`（旧字段仍在）、`tests/test_compensation_guard.py`（补偿走门禁、不可逆拒绝补偿、补偿失败触发熔断）、`tests/test_scenario_dag_r6.py`（R2 事实→R6 方案→预留→下单→撤单补偿）。测试目录仍为扁平 `tests/`，分层（unit/contract/security/integration）按阶段 5 的 D13 统一迁移，本阶段不预支。
 
 **文档**：DOC-AGENT-001（图 + DAG 模型 + 重规划决策树）、**ADR-007 DAG 回退与补偿语义**、`docs/_work/` 存一份 plan.json + 事件流回放样例。
 
@@ -470,9 +470,9 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 阶段 | 内容 | 人日 | 完成 | 提交哈希 |
 |---|---|---|---|---|
 | 0 | 基线清零 | 1 | ✅ | `f1e9ea7` |
-| 1 | 熔断与安全锁定 | 3 | ☐ | |
-| 2 | 受限代码沙箱 | 4 | ☐ | |
-| 3 | DAG 与回退/回滚 | 3 | ☐ | |
+| 1 | 熔断与安全锁定 | 3 | ✅ | `工作区未提交` |
+| 2 | 受限代码沙箱 | 4 | ✅ | `工作区未提交` |
+| 3 | DAG 与回退/回滚 | 3 | ✅ | `aecd852` |
 | 4 | MFA 凭据化 + 注入五层 | 2 | ☐ | |
 | 5 | 测试体系 | 3 | ☐ | |
 | 6 | 交付材料 + README | 3 | ☐ | |
@@ -481,3 +481,157 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 9 | 终验与提交 | 1 | ☐ | |
 
 **变更记录**：v1.0 2026-10-29 首版（14 项诊断 → 10 阶段）｜v1.1 2026-10-29 勘误 12 处（端口/错误码/端点/前缀/网络架构/行号/文档缺口/配置语义/资源限制/模型一致性/计数/演示码来源）并全文精简。
+
+## 附录 E. 阶段 1 实施完成清单（2026-10-29）
+
+阶段 1 全部交付项已落地，逐条对照如下（**均可在工作区复核**）。
+
+### E.1 代码
+
+| 文件 | 性质 | 内容 |
+|---|---|---|
+| `Struct_of_Agent/common/circuit_breaker.py` | 新增 | 熔断核心：三态状态机（closed/open/half_open）、参数（3 次 / 300 s 窗口 / 60→120→240→480→900 s 退避 / 半开 1 次试探 / 5 s 缓存）、`require_closed`、`record_failure`、`record_success`、`record_violation`、`reset`、`snapshot`、`summary`、`guard_write_tool`、`MemoryStore` / `SqlStore`（乐观锁 + 审计事件） |
+| `Struct_of_Agent/common/hitl.py` | 修改 | `intercept()` 首位插入 `breaker_gate()`（熔断先于策略判定，被挡下不建案）；新增 `observe_tool_result()`（工具结果回报，`unknown=True` 只记待核不计数）；`__all__` 同步 |
+| `Struct_of_Agent/R1..R6/graph.py` | 修改 | 六个域的 `_tools_node` 在工具返回后回报成败 |
+| `Struct_of_Agent/supervisor.py` | 修改 | `_moderate_input()` 命中注入/越权类拦截时调 `record_violation(capability=None)`，一次把 6 项写能力置 open |
+| `Struct_of_Agent/web_test/api_circuit_breaker.py` | 新增 | 六端点：`GET /health/capabilities`、`GET /api/safety/circuit-breakers`、`POST /api/safety/circuit-breakers/{capability}/reset` 及其 `/api/v1/safety/circuit-breaker/*` 契约别名（含 403 `session_required` / 403 `operator_required` / 400 `reason_required` / 400 `unknown_capability` / 409 `version_conflict` / 503 `circuit_unavailable`） |
+| `Struct_of_Agent/web_test/server.py` | 修改 | 注册 safety 路由 |
+| `Struct_of_Agent/web_test/index.html` | 修改 | 熔断横幅（15 s 轮询 `/health/capabilities`、`查看状态` / `转人工审核`）+ `NOT_READY_001` 时助手气泡标红 + body 高度补偿，纯追加 9 134 字符 |
+| `migrations/versions/0007_circuit_breaker.py` | 新增 | `app.circuit_breaker_state`（复合主键、乐观锁 version、6 条 CHECK、RLS FORCE、tenant 隔离）/ `app.circuit_breaker_event`（只追加 + DELETE/UPDATE 触发器拒绝） |
+| `tests/test_circuit_breaker_units.py` / `_guard.py` / `_api.py` / `test_circuit_persistence.py` | 新增 | 61 用例（28 + 12 + 17 + 4），无 PG 走内存存储；PG 用例按 `BANK_AGENT_TEST_DB_URL` skip |
+| `tests/conftest.py` | 修改 | 测试期把熔断存储切到内存实现（产品代码的 `BANK_AGENT_CIRCUIT_BREAKER_STORE=memory` 开关），并每用例重置存储/缓存 |
+
+### E.2 验证
+
+- `python -m pytest tests -q`：**819 passed, 180 skipped**，唯一失败为历史用例 `test_clock_units.py::test_business_time_is_naive_local`（把基准日期写死为 2026-10-28，业务时区换算后落到 2026-10-29，与本次改动无关）。
+- `alembic current` = `0007_circuit_breaker (head)`；联调后 `app.circuit_breaker_state` 无残留行，`app.circuit_breaker_event` 保留 25 条联调审计事件（表按设计只追加，`DELETE` 被触发器拒绝，属预期）。
+- 真实库 + TestClient 实测：`GET /health/capabilities` → 200 `{enabled:true, writes_enabled:true, degraded:false}`；`GET /api/safety/circuit-breakers` 无 session → 403 `session_required`；带 ops_admin 头 → 200。
+
+### E.3 与注入/越权防护的关系（检查结论）
+
+注入拦截、越权判定、HITL 建案这些**既有能力未被改动语义**，阶段 1 只做三件事：①在 `intercept()` 最前面加一道熔断闸门（被熔断挡下时**不建案**）；②把「注入/越权类拦截」与「审计写失败」「工具结果无法判定」接成零容忍信号，一次即锁；③补 `/health/capabilities` 与 operator 复位端点，让熔断状态可见、可人为解除。因此拿到 key 之类的危险请求仍由既有拦截拦下（阶段 1 未削弱），且现在会额外触发一次全写能力暂停。
+
+### E.4 已知边界（有意为之，非遗留缺陷）
+
+1. `record_consumption`（R2 记账）不属 6 项写能力白名单，不进熔断——它不改资金流向。
+2. 只读工具恒放行，熔断期间查询/对账不受影响。
+3. 前端 `fetch` 包装刻意跳过 SSE，若 `NOT_READY_001` 只出现在 `/api/chat/stream` 的流式事件里，气泡不会标红，但 15 s 轮询仍会把横幅拉起来。
+4. `reset()` 的 `expected_version` 校验在 `user_id` 为空（租户级视角）时，理论上可能取到同租户其它主体的版本行而误判 409；带 session 的复位路径不受影响。
+
+## 附录 F. 阶段 2 实施完成清单（2026-10-30）
+
+阶段 2（受限代码沙箱）全部交付项已落地，逐条对照如下（**均可在工作区复核**）。
+
+### F.1 交付物清单
+
+| 交付项 | 落点 | 状态 |
+|---|---|---|
+| 沙箱服务（三层隔离） | `docker/code-sandbox/{app.py,runner.py,ast_guard.py,Dockerfile,requirements.txt}` | ✅ |
+| 编排与内网 | `docker-compose.yml`（service `code-sandbox`、`sandbox_net` `internal: true`、不发布端口） | ✅ |
+| 应用侧适配器 | `Struct_of_Agent/common/code_compute.py` | ✅ |
+| 健康度能力位 | `GET /health/capabilities.code_compute_enabled`（`web_test/api_circuit_breaker.py`） | ✅ |
+| R2 沙箱工具 | `Struct_of_Agent/R2/tools/sandbox_tools.py`（`category_monthly_statistics`，已接入 `R2/agent.py`） | ✅ |
+| 逃逸用例 | `tests/test_sandbox_escape.py`（49 例，负向 43） | ✅ |
+| 契约用例 | `tests/test_code_compute.py`（20 例） | ✅ |
+| 隔离实证 | `tests/test_sandbox_isolation.py`（6 例，`integration` 标记 + 无 docker 自动跳过） | ✅ |
+| 校验脚本 | `scripts/verify_code_sandbox.ps1`（stdout 仅 JSON） | ✅ |
+| ADR-006 | `docs/ADR/ADR-006-受限代码沙箱与降级策略.md` | ✅ |
+| DOC-CONTRACT-001 | `docs/AI_Banking_Agent_接口契约文档.md`（v0.1，本阶段覆盖代码计算契约） | ✅ |
+| DOC-TEST-001 | `docs/AI_Banking_Agent_测试文档.md`（v0.1，红队 30 条 + 契约矩阵 16 条 + 隔离 9 条） | ✅ |
+| 安全文档对照表 | `docs/AI_Banking_Agent_安全自评报告.md` §8（文末追加，§1–§7 未改） | ✅ |
+| 接口冻结记录 | `docs/_work/阶段2-代码沙箱-接口冻结.md`（并行开发唯一契约来源） | ✅ |
+
+### F.2 三层隔离实测
+
+| 层 | 手段 | 实测证据 |
+|---|---|---|
+| 静态 AST | 节点/名称/属性/调用四类白名单，源码 ≤8 KB、节点 ≤2000、嵌套 ≤3 | `import os`→`R10_IMPORT`、`__import__`/`open`/`getattr`→`R05`、`().__class__.__bases__[0].__subclasses__()`→`R06`、`x.format()`→`R06`、超长→`R02`、超深→`R04`；拒绝一律 `status=rejected` + `error_code=VALIDATION_001` + 规则号 |
+| 进程 | `RLIMIT_CPU=5`、`RLIMIT_AS=256MB`、`RLIMIT_FSIZE=64KB`、`RLIMIT_NOFILE=32`、`RLIMIT_NPROC=1`，墙钟 5 s 超时 SIGKILL | `while True`→`timeout`/`UNKNOWN_RESULT_001`；内存炸弹（`mem_mb=64`）→`INTERNAL_001 内存超限（64MB）`；输出洪水→`truncated=true` 且 stdout 恰为 `output_bytes` |
+| 容器 | `read_only`、`user 65534`、`cap_drop [ALL]`、`no-new-privileges`、tmpfs `/tmp:size=8m,noexec,nosuid`、`cpus 0.5`、`mem_limit 256m`、`pids_limit 32`、`environment: []` | `docker inspect`：`readonly=true`、`nanocpus=0.5`、`mem=256MB`、`pids=32`、`portbindings={}`；容器内 `touch /probe`→Read-only、外网 `urlopen`→`URLError`、`os.environ` 仅 9 个镜像自带键 |
+
+网络：`sandbox_net` 为 `internal: true`（无默认网关、无出口 NAT），容器不发布宿主端口；`network_mode: none` 仅保留为离线负向对照臂（ADR-006 §4）。
+
+### F.3 验收实测
+
+- `scripts/verify_code_sandbox.ps1 -KeepUp` → `{"passed":14,"failed":0,"skipped":[],"docker":true}`（不带 `-KeepUp` 时 `passed=15`，含 `compose-down`）；`docker` 不可用时输出 `{"passed":0,"failed":0,"skipped":["docker-unavailable"],"docker":false}` 且 exit 0。
+- 容器内 `GET /selfcheck` → `{"network":false,"credentials":0,"mounts":[]}`（与文档期望值完全一致）。
+- `python -m pytest tests -q -m "not pg and not integration"` → **889 passed, 180 skipped, 6 deselected**。其中 `tests/test_sandbox_escape.py + tests/test_code_compute.py` = 69 passed；`tests/test_sandbox_isolation.py`（真实构建 + 启动容器）= 6 passed。
+- R2「按商户类别算月均」端到端：沙箱返回 `{餐饮: {total 300000 分, monthly_avg 150000}, 交通: {60000, 30000}, overall_avg 180000, month_count 2}`，与手算 `(120000+180000)/2=150000`、`(20000+40000)/2=30000`、`360000/2=180000` **逐项一致**，且回执 `label="沙箱计算"`、`degraded=false`（该标签随工具回执进入会话消息，页面据此展示）。
+- 降级路径：沙箱不可达或熔断开启 → `label="标准统计"`、`degraded=true`、`result=None`、提示「自定义统计暂不可用，已切换标准统计」，**不做本地复算冒充沙箱结果**。
+
+### F.4 本阶段顺带修掉的两处基础设施问题
+
+1. `tests/conftest.py::_isolated_circuit_breaker` 原先只 `reset_engine()`+`clear_cache()`，内存存储的熔断行会跨用例累积（熔断窗口 900 s），现已追加 `get_store().clear()`，真正做到用例间隔离。
+2. `tests/test_clock_units.py` 有两条把基准日期写死为 `2026-10-28` 的用例（阶段 1 附录 E 记录的唯一失败项），随着真实日期推进必然变红；现改为以 `clock.business_now()` 为基准的相对断言，语义不变。
+
+### F.5 已知边界（有意为之）
+
+1. 容器不发布宿主端口，**Windows 本地直连演示需临时 `docker run -p 8022:8022`**（仅开发用）；正式演示走 compose 内网 `http://code-sandbox:8022`。
+2. 沙箱只做纯计算，结果标注「沙箱计算/试算」，**不得作为金融事实**；资金写操作仍走业务写沙箱 8020/8021。
+3. `ast_guard` 对 `ast.Attribute` 形式的调用不做调用白名单校验（以放行 `datetime.datetime(...)`、`d.year`），仅靠禁用属性集合约束，属 ADR-006 §3.1 记录的可接受取舍。
+4. 幂等为进程内 LRU（256 条），沙箱重启后不保留——只用于抵御重复提交，不做跨重启去重。
+
+## 附录 G. 阶段 3 实施完成清单（2026-10-31）
+
+阶段 3（DAG 规划与回退/回滚）全部交付项已落地，逐条对照如下（**均可在工作区复核**）。
+
+### G.1 交付物清单
+
+| 交付项 | 落点 | 状态 |
+|---|---|---|
+| 计划数据模型与执行器 | `Struct_of_Agent/common/plan.py`（新增，1745 行）：`Edge`/`PlanNode`/`Plan`、`build_plan`、环检测 `detect_cycle`、`topological_order`/`ready_nodes`、`classify_failure`、`cascade_skip`、`Compensation`/`COMPENSATIONS`、`PlanExecutor`（`run`/`resume`/`pause`/`rollback`） | ✅ |
+| 编排集成 | `Struct_of_Agent/supervisor.py`（修改）：`build_plan`/`current_plan`/`replan`/`resume_plan`/`rollback_plan` + `_node_runner`/`_plan_gate`/`_compensation_gate`/`_compensate_node`/`_invoke_tool`；`chat()` 改走 `PlanExecutor`，`chat_stream()` 下发 `plan`/`node_status`/`plan_replanned` | ✅ |
+| SSE 契约（只增不改） | 同文件 `chat_stream()`：`plan` 事件保留旧 `plan:[{agent,task}]` 并追加 `plan.to_event()`（`plan_id`/`version`/`origin`/`nodes`/`edges`/`counts`）；`task_start`/`task_done`/`token`/`done` 旧字段一律不变 | ✅ |
+| 前端计划卡片 | `Struct_of_Agent/web_test/index.html`（修改，纯追加）：`.plan-card` 依赖图 + 风险色（`.plan-risk.risk-{green,yellow,red}`）+「需确认」徽标 + 进度（`d/N`）+「查看轨迹」抽屉 + `.stream-replan` 版本升级提示 + `task_done{skipped}` 的「已跳过」标签 | ✅ |
+| 测试（4 组 48 例） | `tests/test_plan_dag.py`（23）、`tests/test_plan_sse.py`（10）、`tests/test_compensation_guard.py`（10）、`tests/test_scenario_dag_r6.py`（5） | ✅ |
+| DOC-AGENT-001 | `docs/AI_Banking_Agent_Agent与编排文档.md`（图 + DAG 模型 + 状态机 + 重规划决策树 + 补偿三铁律 + SSE 契约 + API 索引） | ✅ |
+| ADR-007 | `docs/ADR/ADR-007-DAG回退与补偿语义.md`（6 条决策 D1–D6、迁移矩阵、取舍、风险与未决项、验证） | ✅ |
+| 样例回放 | `docs/_work/stage3_plan_sample.json`（`Plan.to_dict(full=True)` 真实产出）、`docs/_work/stage3_events_replay.jsonl`（8 事件：`plan`→`node_status`×4→`plan_replanned`→`node_status`→`plan_done`） | ✅ |
+
+### G.2 执行语义实测
+
+| 语义 | 实测证据 |
+|---|---|
+| 拓扑推进 | 两节点 `data` 边 → 边集 `[{"from":"n1","to":"n2","kind":"data"}]`，执行序 `n1→n2`；`ready_nodes()` 只挑 `pending`/`ready` |
+| 环检测 | `n1→n2→n1` → `PlanCycleError(nodes=['n1','n2'])`；Supervisor 捕获后审计 `plan.invalid_cycle` 并**重建为顺序链**（`origin="fallback"`，前端显示「顺序模式」徽标） |
+| 级联跳过 | 上游 `failed` → 下游 `skipped`、`error="dependency_failed:n1"`、审计 `plan.node_skipped`，且 SSE 补发 `task_done{skipped:true}`（否则前端进度卡住） |
+| 重试 | `retryable` 首次失败 → 退避重试 1 次（`attempts=2`）→ 仍失败置 `failed` + 下游 `skipped` |
+| 未知失败 | 回执 `status="unknown"` → 只调用 1 次、`needs_human`、审计 `plan.node_unknown`，**不重试不重规划** |
+| 权限失败 | `error_code=AUTHZ_001` 类 → 只调用 1 次、直接 `failed`，不重试 |
+| 幂等复用 | `resume_plan()` 在计划全 `done` 时零次工具调用，审计 `plan.resumed`；节点幂等键 `sha256(plan_id|version|node_id)[:32]` 随版本变化（v1≠v2） |
+| 重规划上限 | `replan_count=2` 再请求 → 审计 `plan.replan_limit` + `ReplanLimitError`；同会话「上一计划未完成 + 新输入」自动 `version+1`（`plan.replanned`，`from_version=1,to_version=2`） |
+| 向后兼容 | `plan` 事件旧字段仍在（`plan:[{agent,task}]`）；`done.trace` 保留旧 `plan` 并新增 `plan_dag`/`plan_status`/`plan_id`/`plan_version`；旧事件 `task_start`/`task_done` 字段为其父集 |
+
+### G.3 回退与补偿实测
+
+| 场景 | 实测结果 |
+|---|---|
+| 可逆 + 门禁放行 | `freeze_card` 节点 → 补偿调 `card.unfreeze` → 节点 `cancelled`、`compensation="ok"`、审计 `plan.compensated` |
+| 可逆 + 门禁拦下 | `hitl.breaker_gate` 返回阻断回执 → **零**补偿调用、节点 `needs_human`、`compensation="blocked"`、审计 `plan.compensation_blocked` |
+| 不可逆 | `node.irreversible=True`（如 R4 挂失、R3 赎回）→ 零补偿调用、`needs_human`、审计 `plan.irreversible_no_compensation` |
+| 无自动化工具 | `schedule_transfer` 规则可逆但无对应工具 → `needs_human` + `compensation="manual"` |
+| 补偿失败 | 补偿抛异常或回执 `blocked/failed` → 节点 `needs_human`、审计 `plan.compensation_failed`，并调 `circuit_breaker.record_failure(..., immediate=True)` 暂停写能力 |
+| 逆拓扑顺序 | R2 查支出 + R6 预留 + R6 下单 三节点回滚 → 先 `gift.cancel_order`（n3）后 `gift.release_reservation`（n2），只读节点 n1 转人工；`compensated=[ok, ok, irreversible]` |
+| 端到端 | 手工剧本「查上月餐饮支出 → 超 800 订蛋糕预算 500 → 改预算 600 触发 v1→v2 → 只下一次单 → 取消走补偿」在 `tests/test_scenario_dag_r6.py` 中以替身工具固化，审计序列可回放 |
+
+### G.4 验收实测
+
+- `python -m pytest tests -q` → **943 passed, 180 skipped**（无失败）；其中阶段 3 新增 4 个文件 **48 passed**。
+- 事件序列实测：`plan → node_status(running) → task_start → token… → node_status(done) → task_done → done`；失败节点额外产出 `node_status(failed)` + 下游 `node_status(skipped)`。
+- `plan` 事件键：`type/plan/router/plan_id/version/goal/created_at/replan_count/origin/nodes/edges/counts`；`node_status` 键含 `index`/`risk_level`/`depends_on`/`counts`，可选 `reason`/`compensation`。
+- 前端三个内联 `<script>` 块 `node --check` 语法校验通过；旧前端不改仍可用（DAG 信息全在新字段与新增事件里）。
+
+### G.5 本阶段顺带修掉的问题
+
+1. `chat_stream()` 原先只在节点失败时 `cascade_skip` 产出 `node_status`，被跳过的节点没有 `task_done`，前端进度停在 `<N/N`；现已补发 `task_done{skipped:true}` 并同步 `results`/`outcomes`。
+2. `PlanExecutor._execute_node()` 原先只把 `error`/`blocked`/`failed` 判为失败，会把回执 `{"status":"unknown"}` 当成功；现按 `{failed,error,unknown,rejected,blocked,hitl_required,timeout}` 全判失败，避免「未知即成功」的资金类误判。
+3. `Plan.replanned()` 换节点集后原先沿用旧 `edges`，节点数变化时边与 `depends_on` 不一致；现由 `_rebuild_edges()` 按新依赖重建（旧 `kind` 记忆保留），并补 `test_replanning_rebuilds_edges_from_depends_on`。
+4. `classify_failure()` docstring 与实现对 `TimeoutError` 口径不一致（文档写 `retryable`、代码为 `unknown`）；已按代码的安全侧口径改正文档，行为不变（超时=结果未知，转人工不重试）。
+
+### G.6 已知边界（有意为之）
+
+1. 执行器**单线程**顺序推进，不做节点并行——演示安全与审计可读性优先；`depends_on` 只表达依赖，不表达并发许可。
+2. 计划版本存储为**进程内**字典（`Supervisor._plans`，按 `session_id`），重启丢历史版本；跨重启只保 `audit` 与 `plan.node_*` 事件（已落 `audit_event`）。持久化留给后续阶段按需。
+3. `compensating_action` 只给「有自动化工具」的动作；`transfer.cancel_scheduled`/`wealth.cancel_order` 在业务写沙箱中尚无独立工具入口，故运行时按 `manual` 转人工（映射表已就位，接工具即可自动化）。
+4. 补偿只处理 `done` 节点，`failed`/`needs_human` 节点不再补偿（其副作用未确认，交由人工核对）。
+5. `MAX_REPLANS=2` 达上限后不自动降级为人工工单，只审计 + 抛 `ReplanLimitError`，由调用方（前端/服务端）决定转人工入口。
