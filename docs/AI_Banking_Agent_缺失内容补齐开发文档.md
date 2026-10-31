@@ -474,7 +474,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 2 | 受限代码沙箱 | 4 | ✅ | `工作区未提交` |
 | 3 | DAG 与回退/回滚 | 3 | ✅ | `d36e713` |
 | 4 | MFA 凭据化 + 注入五层 | 2 | ✅ | `16597fb` |
-| 5 | 测试体系 | 3 | ✅ | 工作区未提交 |
+| 5 | 测试体系 | 3 | ✅ | `6ef1b3f` |
 | 6 | 交付材料 + README | 3 | ☐ | |
 | 7 | PPT + 视频 | 1.5 | ☐ | |
 | 8 | 容器化与部署 | 2 | ☐ | |
