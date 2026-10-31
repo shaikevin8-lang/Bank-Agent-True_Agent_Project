@@ -6,9 +6,9 @@
 | --- | --- |
 | 文档编号 | DOC-CONTRACT-001 |
 | 版本 | v0.2（阶段 2 + 阶段 4 增量） |
-| 状态 | 已冻结（§2 与 `docs/_work/阶段2-代码沙箱-接口冻结.md` 逐字段对齐、§4 与 `docs/_work/阶段4-确认凭据与注入五层-接口冻结.md` 逐字段对齐，两份冻结文件为**唯一契约来源**） |
-| 当前覆盖 | 阶段 2 受限代码沙箱：`POST /run`、`GET /selfcheck`、`GET /health`、`GET /health/capabilities`（`code_compute_enabled`）、调用方适配器 `common/code_compute.py`；阶段 4 确认凭据：`/api/v1/confirm/*` 五个端点、grant 生命周期、`common/confirm.py` |
-| 未覆盖（本版不写） | 安全与熔断 `/api/v1/safety/*`、时钟 `/api/v1/clock/*`、会话与鉴权、六场景业务端点 → 见总架构文档与 ADR-003 / ADR-004 / ADR-005（确认凭据已在 §4 覆盖，不再列为未覆盖） |
+| 状态 | 已冻结（§2 与 `docs/_work/阶段2-代码沙箱-接口冻结.md` 逐字段对齐、§3 与 `docs/_work/阶段4-确认凭据与注入五层-接口冻结.md` 逐字段对齐，两份冻结文件为**唯一契约来源**） |
+| 当前覆盖 | 阶段 2 受限代码沙箱：`POST /run`、`GET /selfcheck`、`GET /health`、`GET /health/capabilities`（`code_compute_enabled`）、调用方适配器 `common/code_compute.py`；阶段 4 确认凭据：`/api/v1/confirm/*` 六个端点、grant 生命周期、`common/confirm.py` |
+| 未覆盖（本版不写） | 安全与熔断 `/api/v1/safety/*`、时钟 `/api/v1/clock/*`、会话与鉴权、六场景业务端点 → 见总架构文档与 ADR-003 / ADR-004 / ADR-005（确认凭据已在 §3 覆盖，不再列为未覆盖） |
 | 上位约束 | 端口冻结表：代码沙箱 **8022**（禁止运行时覆盖，勘误 E1）；错误码冻结清单：**不新增码族**（勘误 E2） |
 | 变更规则 | 契约先改 `docs/_work/阶段2-代码沙箱-接口冻结.md`，再同步本文与实现；实现不得先于契约改名 |
 
