@@ -472,7 +472,7 @@
 
 ```powershell
 # 0) 用仓库虚拟环境，不要用全局 python（本机全局环境未装 pytest）
-cd D:\Bank-Agent-legacy
+cd <仓库根>   # 例如 D:\<你的路径>\Bank-Agent-legacy
 $env:PYTHONIOENCODING='utf-8'
 
 # 1) 快跑：无 PG、无 integration，日常与 CI 第一道门禁

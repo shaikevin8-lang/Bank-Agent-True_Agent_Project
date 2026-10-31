@@ -475,7 +475,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 3 | DAG 与回退/回滚 | 3 | ✅ | `d36e713` |
 | 4 | MFA 凭据化 + 注入五层 | 2 | ✅ | `16597fb` |
 | 5 | 测试体系 | 3 | ✅ | `6ef1b3f` |
-| 6 | 交付材料 + README | 3 | ☐ | |
+| 6 | 交付材料 + README | 3 | ✅ | `工作区未提交` |
 | 7 | PPT + 视频 | 1.5 | ☐ | |
 | 8 | 容器化与部署 | 2 | ☐ | |
 | 9 | 终验与提交 | 1 | ☐ | |
@@ -829,3 +829,92 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 5. **标记是能力探测而非重要程度**：`pg` / `slow` / `e2e` 表达「需要什么环境」，不是「多重要」。用 `-m "not pg"` 排除掉的是环境依赖，不是断言强度——被排除的用例在覆盖率门禁里仍然算数（覆盖率采集走全量命令）。
 6. **配真实 PG 的全量运行存在既有遗留失败，不计入本阶段验收**：用维护库 `postgresql+psycopg://bank:bank_local@127.0.0.1:5432/postgres` 配 `BANK_AGENT_TEST_DB_URL` 跑 `pytest tests -q` 时实测 2172 passed / 35 failed / 4 skipped，失败集中在 `tests/integration/test_conversations.py`、`test_db_postgres_core.py`、`test_postgres_sdk.py`、`test_reset.py`、`test_seed.py`、`test_storage.py`。这些文件都是阶段 1–4 之前的既有用例，且**在阶段 5 之前的基线提交 `9e84268` 上用 `git worktree` 复跑同样失败**（同一命令 29 failed / 115 passed），因此定性为既有缺陷而非本阶段引入；本阶段的 PG 侧交付物（`test_full_scenario_r1..r6`、`test_compose_smoke`、`test_privilege_escalation` 等）不依赖该遗留问题。另：集成层的 seed/migrate 用例会在集群里留下 `aba_test_*` / `aba_local_*` / `aba_demo_*` 角色（不随 `DROP DATABASE` 回收），反复跑同一集群会互相污染，需要集群级干净环境时请自备维护库并清理这些角色。
 7. **意图评测集与语料仍以表驱动方式内联**：`tests/unit/test_intent_model.py` 的 ≥60 条意图样例是文件内表驱动、`injection_corpus.yaml` 是独立 YAML；前者没有独立数据文件，扩充时要改代码里的表（见测试文档 §4）。
+
+## 附录 J. 阶段 6 实施完成清单（2026-10-31）
+
+阶段 6（D07/D08/D09/D06）只做一件事：把阶段 1–5 已经落地的实现**写成可引用的交付材料**——图、算法说明、安全文档、README。四项均按「实现事实优先」原则成文，凡与代码不符之处一律以代码为准并显式登记（见 J.5），不虚构能力。
+
+### J.1 交付物清单
+
+| 编号 | 交付项 | 落点 | 规格 |
+| --- | --- | --- | --- |
+| D07 | 6 张架构图源 + 12 个导出文件 | `docs/diagrams/fig-01…fig-06.mmd`、`docs/diagrams/export/` | 每图 SVG + PNG 双份，共 **12 个**图文件 |
+| D08 | 核心算法说明 | `docs/AI_Banking_Agent_核心算法说明.md`（DOC-ALG-001） | 1 092 行 / 12 258 中文字；ALG-1…ALG-11 十一节，每节六段齐全 |
+| D09 | 安全设计文档 | `docs/AI_Banking_Agent_安全设计文档.md`（DOC-SEC-001） | 761 行 / 12 228 中文字；10 章 + 51 个子节 |
+| D09 | 安全自评报告（增量修订） | `docs/AI_Banking_Agent_安全自评报告.md`（v0.6） | 456 行 / 10 338 中文字；新增 §10 三色实现、§11 五机制自评、§12 实测覆盖 |
+| D06 | README 定稿 | `README.md` | 279 行 / 4 264 中文字；11 章定稿，`TODO` 字样清零 |
+| D06 | DOC-ARCH 图引用 | `docs/AI_Banking_Agent_项目开发总架构文档.md` | 6 处 `![](diagrams/export/…)` + 图题与 3–4 行说明（行 61/82/124/137/151/207） |
+| D06 | 错误码封闭性脚本 | `scripts/check_error_codes.ps1` | 扫描 41 份 Markdown；stdout 仅 JSON；未知码 exit 1 |
+
+### J.2 D07 架构图
+
+导出命令（Windows 实跑通过；`npx -y @mermaid-js/mermaid-cli` 会因 puppeteer 附带 Chromium 下载失败而卡死，改用本机 Chrome）：
+
+```powershell
+$mmdc = Join-Path $env:LOCALAPPDATA 'npm-cache\_npx\668c188756b835f3\node_modules\.bin\mmdc.cmd'
+$cfg  = '{"executablePath":"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe","args":["--no-sandbox","--disable-gpu"]}'
+& $mmdc -p "$env:TEMP\pptr.json" -i docs/diagrams/fig-05-circuit.mmd -o docs/diagrams/export/fig-05-circuit.svg -b white
+& $mmdc -p "$env:TEMP\pptr.json" -i docs/diagrams/fig-05-circuit.mmd -o docs/diagrams/export/fig-05-circuit.png -b white --size 1600
+```
+
+| 图号 | 源文件 | 内容要点 | 导出（SVG / PNG 字节） |
+| --- | --- | --- | --- |
+| FIG-01 | `fig-01-context.mmd` | 系统上下文：用户/运营·演示身份、前端 5173、API 8000、Supervisor、R1–R6、Mock Core Banking、三沙箱 8020/8021/8022、模型网关 8010、PG；红色子图标「禁止真实出站」 | 222 735 / 78 720 |
+| FIG-02 | `fig-02-container.mmd` | 七层容器：前端 → API（真实路由 `/api/chat`、`/api/confirm/*`、`/api/safety/circuit-breakers`、`/health/ready`）→ Supervisor+`plan.py`→ R1–R6 → 三道门（`hitl.py`／审计 append-only／幂等先查后决）→ 白名单适配器 → PG，旁挂审计回放/指标/熔断 | 261 538 / 118 288 |
+| FIG-03 | `fig-03-sequence.mmd` | 主链路时序（12 参与者）：登录 → 输入 → L1–L5 五层拦截 → 意图路由 → `build_plan` → 预检 → 绿黄红分级 → 确认卡/grant（红色含 MFA）→ 幂等先查后决 → 执行 → 审计 → 回执 | 227 130 / 199 829 |
+| FIG-04 | `fig-04-er.mmd` | 数据模型 ER：`app` 核心表 + 0007 `circuit_breaker_state/event` + 0008 `confirmation_request/grant`，键与 FK 名对齐 `models.py`/`models_ext.py`/迁移 | 601 862 / 139 852 |
+| FIG-05 | `fig-05-circuit.mmd` | 熔断状态机：closed→open（3 次失败／窗口 300 s／零容忍一次即锁 privilege_violation·audit_failure）→half_open（退避 60→120→240→480→900 s，半开仅 1 次试探）→closed，附运维复位端点 | 200 103 / 79 632 |
+| FIG-06 | `fig-06-dag.mmd` | DAG 执行与补偿：环检测 + Kahn 拓扑 → 三道门 → 失败分类（retryable/permission/unknown）→ replan ≤2 且已完成节点不重放 → 补偿走同一门禁、不可逆节点不补偿 | 250 897 / 137 394 |
+
+渲染踩坑（已固化到本节命令）：`mmdc` 无 `-w`，宽度用 `--size`；`stateDiagram-v2` 的边标签加引号会字面显示引号；flowchart 换行用 `<br/>`；超高图（FIG-06，784×2634）不设 `--size` 以免宽度被压扁。
+
+### J.3 D08 核心算法说明
+
+结构：元信息（DOC-ALG-001）→ 阅读约定与全局不变量 6 条 → 总览表（11 行 × 目标/实现位置/关键参数/测试）→ ALG-1…ALG-11（每节固定 `### 问题 → ### 算法 → ### 伪代码 → ### 参数来源 → ### 复杂度 → ### 失效模式`）→ 交叉引用表（DOC-ARCH/ADR-004…008/测试文件/迁移/`check_error_codes.ps1`）→ 差异登记。
+
+参数来源均以「文件:常量=取值」标注，抽查核对结果：
+
+| 算法 | 参数证据 |
+| --- | --- |
+| ALG-4 风险分级 | `common/hitl.py: HITL_POLICY.amount_fen_gte=500_000`（转账类黄档）、调额 `2_000_000`；红档 5 条 `always=True`（report_loss/freeze_card/cancel_subscription/cancel_policy/cancel_workflow） |
+| ALG-5 确认与 grant | `common/confirm.py: REQUEST_TTL_SECONDS=180`、`GRANT_TTL_SECONDS=900`、`MFA_MAX_ATTEMPTS=3` |
+| ALG-8 熔断 | `common/circuit_breaker.py: DEFAULT_THRESHOLD=3`、`DEFAULT_WINDOW_SECONDS=300`、`BACKOFF_SECONDS=(60,120,240,480,900)` |
+| ALG-3 计划与拓扑 | `common/plan.py: MAX_REPLANS=2`、`MAX_ATTEMPTS=2`、`RETRY_DELAY_S=0.0` |
+| ALG-10 AST 白名单 | `docker/code-sandbox/ast_guard.py: MAX_SOURCE_BYTES=8192`、`MAX_AST_NODES=2000`、`MAX_DEPTH=3`；`runner.py` 墙钟 `5000 ms`、`RLIMIT_CPU=5`、`RLIMIT_AS=256MB` |
+
+### J.4 D09 安全文档与自评报告
+
+- `安全设计文档.md` 十章：元信息 → 威胁模型（注入/越权/确认伪造/重复副作用/沙箱逃逸，每条给「攻击者能力→攻击路径→现有控制→残余风险」）→ 三道门与不可绕过性 → 权限分级（三色 × 六能力矩阵）→ 五件套对照（7 类 58 条「要求↔实现↔测试编号」）→ 审计完整性 → 脱敏与最小化 → 部署安全 → 残余风险（含 6 条已知风险清单）→ 附录（错误码冻结清单 + 端点速查）。
+- `安全自评报告.md` 保持 §1–§9 原文与编号，新增 §10 三色实现说明（含 4 处 `[截图位: …]`）、§11 五机制自评（幻觉防护/注入防御/操作审计/熔断/沙箱，逐条满足·部分满足 + 证据链接）、§12 实测覆盖（TOTAL 62%；`hitl`/`code_compute`/`db/audit` 100%、`plan` 91%、`param_guard`/`normalize`/`api_confirm` 87%、`content_moderation` 86%、`circuit_breaker` 82%、`confirm` 80%、`api_circuit_breaker` 78%）。
+- §2 风险表 6 条与设计文档 §9.1 逐行对齐：`bank_local` 在 git 历史=缓解；R3–R6 仍落 SQLite=部分缓解；模型 mock、银行/礼品写沙箱 mock、演示 MFA 模拟通道、无真实 KYC/AML=边界声明。
+
+### J.5 与代码不一致的登记（以代码为准，不对外宣称未实现能力）
+
+| # | 文档口径 | 代码事实 | 处置 |
+| --- | --- | --- | --- |
+| 1 | 黄档「日累计 ≤1000 元需确认」 | 实为**单笔**阈值（转账类 ≥5 000 元、调额 ≥2 万元）+ 5 条 `always=True` 红档；无日累计累加器 | 记为残余风险 R-13 + 设计文档 §4.7 偏差登记 + 自评报告 §10.5 专节；**禁止对外宣称已具备日累计控制** |
+| 2 | 审计「append-only + SHA-256 链 + 365 天」 | `audit.event` 只有 append-only 三触发器（禁改/禁删/禁 TRUNCATE）+ 同事务原子性 + 摘要字段（`request_hash`/`args_fingerprint`/`token_hash`/`mfa_code_hash`），**无 `prev_hash` 列与链校验函数**，无归档作业 | 两份文档写「append-only + 同事务 + 无删除路径天然满足 365 天下限」为已实现；哈希链与受控归档标为基座要求未实施，不宣称防篡改存储 |
+| 3 | ALG-11「输出门」为独立模块 | 仓库无 `output_gate` 模块；输出门由 `transfer_tools` 回执草稿+脱敏、`hitl.mask_args`、`text_format.sanitize_reply`、`contracts.AgentChatResponse` 共同承担 | 文档按真实调用链描述（`tests/security/test_chat_output.py` 为断言落点） |
+| 4 | 自评报告旧文「凭据 TTL 120 s」「注入 ≥25 条签名」「R-2 待确认」 | `GRANT_TTL_SECONDS=900`；L2 为七类 68 条正则 + 五类词表 15 词 | 已校正并记入自评报告 §7 修订记录 v0.6 |
+
+### J.6 验收实测
+
+| 验收项 | 目标 | 实测 | 结论 |
+| --- | --- | --- | --- |
+| `docs/diagrams/export` 图文件数 | ≥12 | **12**（6 图 × SVG+PNG，全部非空，SVG 头含 `<svg>`） | ✅ |
+| DOC-ARCH 图引用数 | 6 处 | **6**（行 61/82/124/137/151/207，每处含图题与 3–4 行说明） | ✅ |
+| 四份交付文档篇幅 | 各 >3 000 字 | 12 258 / 12 228 / 10 338 / 4 264（中文字符） | ✅ |
+| 禁用词扫描 | 无 TODO | 四份文档 `TODO|TBD|待补|占位` 命中 **0** | ✅ |
+| 错误码封闭性 | md 中错误码 ⊆ 冻结 8 码 | `{"passed":true,"scanned_files":41,"codes_found":[9 项],"unknown":[]}`，exit 0 | ✅ |
+| 仓库卫生 | 无缓存/本机绝对路径/明文口令 | `check_repo_hygiene.ps1` **PASS**（顺带消除 `测试文档.md` 与 `verify_code_sandbox.ps1` 两处硬编码仓库路径） | ✅ |
+| 交付一致性 | 文档与实现一致 | J.5 四条差异均已登记，不虚构能力 | ✅ |
+
+`check_error_codes.ps1` 基线口径：正则只认「全大写词 + 三位数字后缀」，`FIG-01`/`ADR-005`/`TC-XXX-01`/`RLIMIT_CPU`/`circuit_breaker_state`/`FR-COM-003` 等均不误报；唯一白名单 `$FrozenExtra = CIRCUIT_OPEN_001`，注释标明出处为本文件勘误 E2（该码被否决，熔断复用 `NOT_READY_001`）。
+
+### J.7 已知边界（有意为之）
+
+1. **`部署运维说明.md` 属阶段 8 交付**：README 的文档索引已改为「阶段 8 交付项 + 当前等效入口（三行部署、`scripts/db.ps1`、`start_local.ps1`）」，不留死链、不留 TODO 占位。
+2. **图由 mermaid 源生成，未做手工美化**：FIG-06 为超高图（784×2634），在 `--size` 下会被压扁，故不设宽度上限；评审演示需要单页视图时请用 SVG 缩放。
+3. **安全文档不声明「防篡改存储」**：受限于 J.5 #2，摘要字段只能证明「参数/凭据未被改动」，不能证明「历史事件未被内鬼篡改」；该差距在自评报告 §11.3 明写为部分满足。
+4. **日累计额度控制缺口显式公开**：1000–10 000 元区间单笔不强制 MFA，属本轮未实现的风险策略缺口（R-13），答辩口径须与文档一致，不得口头夸大。
+5. **README 的 GitHub 地址仍为 `<owner>` 形式**：实际仓库地址在阶段 9 提交前替换，替换不改变本文档任何结论。

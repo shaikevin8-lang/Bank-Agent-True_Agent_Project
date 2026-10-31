@@ -1,0 +1,61 @@
+%% FIG-03 主链路时序（Sequence）——识别 → 澄清 → 计划 → 预检 → 确认 → 执行 → 审计 → 回执
+%% 数据来源：Struct_of_Agent/supervisor.py、common/hitl.py、common/confirm.py、common/middleware/content_moderation.py、web_test/server.py
+sequenceDiagram
+  autonumber
+  actor U as 用户
+  participant FE as 前端 index.html
+  participant API as FastAPI server.py
+  participant IN as 输入门 L1–L5
+  participant SUP as Supervisor
+  participant DAG as 计划与执行器 plan.py
+  participant GATE as 公共安全门 hitl.py
+  participant CONF as 确认卡与凭据 confirm.py
+  participant AD as 白名单适配器
+  participant PG as PostgreSQL 审计链
+
+  U->>FE: 打开页面
+  FE->>API: POST /api/auth/login
+  API->>PG: 校验 web_user 凭据并写会话
+  API-->>FE: 签发会话 Cookie 与租户上下文
+
+  U->>FE: 输入自然语言诉求
+  FE->>API: POST /api/chat 或 /api/chat/stream
+  API->>IN: L1 归一化（同形字与零宽字符还原）
+  IN->>IN: L2 规则词表与注入模式
+  IN->>IN: L3 不可信片段隔离 wrap_untrusted
+  IN->>IN: L4 工具层参数来源校验
+  IN->>IN: L5 模型二次审核（不可用则降级到规则层）
+  alt 命中注入或违规
+    IN-->>API: blocked 结论
+    API->>PG: 审计 security.injection_blocked 并记熔断
+    API-->>FE: 阻断短语与安全提示
+  else 通过
+    IN-->>API: passed 结论
+    API->>SUP: 进入编排
+    SUP->>SUP: 意图路由（LLM 优先，规则关键词兜底 R1–R6）
+    SUP->>DAG: build_plan 生成带依赖的 DAG 并检测环
+    DAG-->>SUP: plan_id 与 version 与节点风险等级
+    SUP->>GATE: 预检：主体、权限、资源归属、字段完整性
+    GATE-->>SUP: 允许 / 需澄清 / 需确认 / 直接阻断
+    SUP->>GATE: 风险分级 green、yellow、red
+    alt yellow 或 red
+      GATE->>CONF: 创建 confirmation_request（存 args_fingerprint）
+      CONF-->>FE: 结构化确认卡（金额、对手、账户、不可逆提示）
+      U->>FE: 确认并提交
+      FE->>API: POST /api/confirm/verify
+      opt red 动作
+        API->>CONF: 先校验类型再签发（原类型直接判定凭据无效）
+        API->>CONF: 校验模拟 MFA 验证码 sha256 并按 attempts 计次
+      end
+      CONF-->>API: 签发一次性 confirmation_grant
+      API->>GATE: 核销 grant（一次性原子占用）
+    end
+    GATE->>GATE: 幂等：服务端生成 idempotency_key 并先查后决
+    GATE->>AD: 执行白名单工具并写入
+    AD-->>GATE: 归一化结果（成功 / 可重试失败 / 权限失败 / 未知）
+    GATE->>PG: 追加审计事件并串接 SHA-256 链
+    GATE-->>SUP: 节点完成
+    SUP-->>API: 回执（结构化事实与下一步操作）
+    API-->>FE: SSE 或 JSON 回执
+    FE-->>U: 展示任务时间线与回执
+  end

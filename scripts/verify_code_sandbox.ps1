@@ -23,7 +23,7 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_code_sandbox.ps1 -KeepUp
 
 .EXAMPLE
-    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_code_sandbox.ps1 -RepoRoot D:\Bank-Agent-legacy
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_code_sandbox.ps1 -RepoRoot <仓库根>
 
 .OUTPUTS
     stdout 仅一段 JSON：

@@ -1,0 +1,49 @@
+%% FIG-06 DAG 执行与补偿（flowchart）
+%% 数据来源：Struct_of_Agent/common/plan.py、supervisor.py（_node_runner / _compensate_node）
+%% 执行语义：单线程顺序推进、建图即环检测、Kahn 拓扑 + ready 队列、重规划上限 2 次、
+%% 失败分类 retryable / permission / unknown、unknown 只置待核不重试、
+%% 补偿本身是写操作（走同一安全门 + 审计），irreversible 节点不进补偿。
+flowchart TD
+  A["用户诉求"] --> B["路由与计划构建 build_plan<br/>节点 PlanNode + 边 Edge<br/>kind: sequential / data / confirm"]
+  B --> C{"建图即环检测"}
+  C -- "存在环" --> C1["拒绝计划并审计<br/>AUDIT_INVALID_CYCLE"]
+  C -- "无环" --> D["Kahn 拓扑排序<br/>ready 队列取就绪节点"]
+  D --> E{"依赖上游是否全部 done"}
+  E -- "否" --> E1["级联跳过 skipped<br/>审计 AUDIT_NODE_SKIPPED"]
+  E -- "是" --> F["节点边界：三道门<br/>风险分级 · 幂等先查后决 · 确认凭据"]
+  F -- "需确认" --> F1["确认卡 / grant 核销<br/>未确认则暂停 pending"]
+  F1 --> F
+  F -- "放行" --> G["runner 调白名单适配器执行"]
+  G --> H{"结果分类"}
+  H -- "成功" --> H1["节点 done<br/>写审计并记幂等结果"]
+  H -- "可重试失败 retryable" --> H2["按节点重试上限内重试"]
+  H2 --> G
+  H -- "权限失败 permission" --> H3["节点 failed<br/>上游失败级联跳过下游"]
+  H -- "未知 unknown" --> H4["置待核 needs_human<br/>先查后决不重试"]
+  H3 --> I{"replan_count 小于 2"}
+  H1 --> J{"还有就绪节点"}
+  J -- "有" --> D
+  J -- "无" --> K["计划完成<br/>逐项结果与回执"]
+  I -- "是" --> I1["replan：生成新 plan version<br/>已完成节点凭幂等键绝不重放"]
+  I1 --> D
+  I -- "否" --> I2["转人工处理<br/>开 HITL 案件"]
+  H4 --> I2
+  K --> L{"是否需要补偿（取消或回退）"}
+  L -- "否" --> Z["结束"]
+  L -- "是" --> M["compensation_for 映射补偿工具"]
+  M --> N{"节点可逆"}
+  N -- "irreversible" --> N1["不进补偿流程<br/>审计标注不可逆"]
+  N1 --> Z
+  N -- "可逆" --> O["补偿写操作<br/>走同一三道门 + 审计"]
+  O --> P{"补偿结果"}
+  P -- "成功" --> P1["节点 cancelled<br/>审计 plan.compensated"]
+  P1 --> Z
+  P -- "失败" --> P2["审计 plan.compensation_failed<br/>立即熔断并转人工"]
+  P2 --> Z
+
+  classDef gate fill:#fff4e5,stroke:#d97706,stroke-width:2px
+  classDef fail fill:#ffe6e6,stroke:#c00000,color:#8b0000
+  classDef ok fill:#e9f7ef,stroke:#1e8449
+  class F,F1 gate
+  class C1,H3,H4,I2,P2 fail
+  class H1,K,P1 ok

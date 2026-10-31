@@ -1,0 +1,53 @@
+﻿%% FIG-01 系统上下文（FIG-01 Context）——数据来源：docs/AI_Banking_Agent_项目开发总架构文档.md §1/§3、项目基座文档 §端口冻结
+%% 说明：所有外部依赖均为本地 Mock；真实银行核心、真实第三方下单、真实 KYC/AML 一律禁止出站。
+flowchart LR
+  subgraph USER["使用方"]
+    U["用户（专用演示租户）"]
+    OP["运营 / 人工审核员"]
+  end
+
+  subgraph APP["本机演示应用（Compose 内部网络）"]
+    FE["前端 index.html :5173"]
+    ID["演示身份 web_user / web_user_session<br/>登录·会话·租户上下文"]
+    API["FastAPI server.py :8000<br/>/api/chat · /api/chat/stream"]
+    SUP["Supervisor 总 Agent<br/>意图路由 + 计划编排"]
+    AG["R1–R6 场景 Agent + common"]
+    GATE["公共安全执行门<br/>HITL 风险分级 · 审计 · 幂等"]
+    MM["模型网关 model-mock :8010"]
+    PG["PostgreSQL 16<br/>app.* / audit.* 合成数据"]
+  end
+
+  subgraph MOCK["Mock 事实源与沙箱（合成数据，无真实接口）"]
+    CORE["Mock Core Banking<br/>账户·流水·产品·卡·授权"]
+    SWB["银行写沙箱 :8020<br/>只产可核验回执"]
+    SWG["礼品写沙箱 :8021<br/>鲜花·蛋糕订单回执"]
+    CSB["代码沙箱 :8022<br/>无网络 · 只读 · 256 MB"]
+  end
+
+  subgraph FORBID["禁止真实出站"]
+    REAL1["真实银行核心 / 真实资金移动"]
+    REAL2["真实第三方下单 / 真实 KYC·AML"]
+  end
+
+  U --> FE
+  OP --> FE
+  FE --> ID
+  ID --> API
+  API --> SUP
+  SUP --> AG
+  AG --> GATE
+  GATE --> CORE
+  GATE --> SWB
+  GATE --> SWG
+  GATE --> CSB
+  SUP --> MM
+  GATE --> PG
+  AG --> PG
+
+  GATE -. "显式阻断：不出站" .-> FORBID
+  MM -. "仅本地 Mock，无外部供应商" .-> FORBID
+
+  classDef forbidden fill:#ffe6e6,stroke:#c00000,stroke-width:2px,color:#8b0000
+  classDef mock fill:#eef6ff,stroke:#1f6feb,color:#0b3d91
+  class REAL1,REAL2 forbidden
+  class CORE,SWB,SWG,CSB mock

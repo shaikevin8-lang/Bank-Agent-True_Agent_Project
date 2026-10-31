@@ -1,0 +1,107 @@
+﻿%% FIG-02 容器分层（Container）——依赖方向固定：入口 → 编排 → 领域 → 安全门 → 白名单适配器 → 事实源/沙箱
+%% 数据来源：Struct_of_Agent/web_test/server.py、supervisor.py、common/hitl.py、db/audit.py、db/idempotency.py、migrations/versions
+flowchart TD
+  subgraph L1["① 前端层"]
+    HTML["index.html<br/>聊天 · 确认卡 · 任务时间线 · 熔断面板"]
+  end
+
+  subgraph L2["② API 层 FastAPI server.py :8000"]
+    EP_CHAT["POST /api/chat<br/>POST /api/chat/stream"]
+    EP_SESS["GET·POST /api/sessions<br/>GET /api/sessions/{id}/memory"]
+    EP_AUTH["/api/auth/register·login·logout·me"]
+    EP_CONF["/api/confirm/* 与 /api/v1/confirm/*"]
+    EP_HITL["/api/hitl/cases·claim·decision·sweep"]
+    EP_SAFE["/api/safety/circuit-breakers<br/>/health/live · /health/ready · /health/capabilities"]
+    EP_CLOCK["/api/clock·advance·freeze·resume"]
+  end
+
+  subgraph L3["③ 编排层"]
+    SUP["Supervisor 总 Agent<br/>LLM 路由 + 规则兜底"]
+    DAG["common/plan.py<br/>DAG 计划 · 拓扑执行 · replan · 补偿"]
+    MEM["common/memory.py<br/>上下文压缩与记忆"]
+  end
+
+  subgraph L4["④ 领域层 R1–R6 + common"]
+    R1["R1 智能转账"]
+    R2["R2 账单分析"]
+    R3["R3 理财操作"]
+    R4["R4 卡片管理"]
+    R5["R5 订阅代扣"]
+    R6["R6 跨场景联动"]
+    RCA["common 通用 Agent"]
+  end
+
+  subgraph L5["⑤ 三道门（不可绕过）"]
+    G1["门一 HITL 风险分级<br/>common/hitl.py 绿·黄·红"]
+    G2["门二 审计 append-only<br/>app.event + SHA-256 链 · 365 天"]
+    G3["门三 幂等与先查后决<br/>db/idempotency.py · app.idempotency_key"]
+  end
+
+  subgraph L6["⑥ 适配器层（白名单）"]
+    AD_PERSIST["R*/persistence.py<br/>PG 仓储 · 参数校验"]
+    AD_CORE["Mock Core Banking 适配器<br/>app.account · bank_transaction 事实"]
+    AD_WRITE["写沙箱客户端<br/>银行 :8020 · 礼品 :8021"]
+    AD_CODE["common/code_compute.py<br/>代码沙箱 :8022 AST 白名单"]
+    AD_LLM["common/llm.py · model_manager.py<br/>model-mock :8010"]
+    AD_CONF["common/confirm.py<br/>一次性 grant 签发与核销"]
+  end
+
+  subgraph L7["⑦ 数据层"]
+    PG[("PostgreSQL 16<br/>app.* 业务表 · audit.* 审计链")]
+    CB[("app.circuit_breaker_state<br/>app.circuit_breaker_event")]
+  end
+
+  subgraph SIDE["旁挂：审计 / 指标 / 沙箱"]
+    REPLAY["common/hitl_replay.py 审计回放"]
+    METRIC["/health/* 指标与就绪探针"]
+    CBRK["common/circuit_breaker.py 熔断器"]
+  end
+
+  HTML --> EP_CHAT
+  HTML --> EP_SESS
+  HTML --> EP_AUTH
+  HTML --> EP_CONF
+  HTML --> EP_HITL
+  HTML --> EP_SAFE
+  HTML --> EP_CLOCK
+  EP_CHAT --> SUP
+  SUP --> DAG
+  SUP --> MEM
+  DAG --> R1
+  DAG --> R2
+  DAG --> R3
+  DAG --> R4
+  DAG --> R5
+  DAG --> R6
+  DAG --> RCA
+  R1 --> G1
+  R2 --> G1
+  R3 --> G1
+  R4 --> G1
+  R5 --> G1
+  R6 --> G1
+  RCA --> G1
+  G1 --> G2
+  G1 --> G3
+  G3 --> AD_PERSIST
+  G3 --> AD_CORE
+  G3 --> AD_WRITE
+  G3 --> AD_CODE
+  G2 --> PG
+  DAG --> AD_LLM
+  EP_CONF --> AD_CONF
+  AD_CONF --> PG
+  AD_PERSIST --> PG
+  AD_CORE --> PG
+  AD_WRITE --> PG
+  AD_CODE --> PG
+  CBRK --> CB
+  CB --> PG
+  G3 --> CBRK
+  REPLAY --> PG
+  METRIC --> CBRK
+
+  classDef gate fill:#fff4e5,stroke:#d97706,stroke-width:2px
+  classDef data fill:#f3f0ff,stroke:#6d28d9
+  class G1,G2,G3 gate
+  class PG,CB data

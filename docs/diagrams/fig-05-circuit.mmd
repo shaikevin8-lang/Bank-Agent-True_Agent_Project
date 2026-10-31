@@ -1,0 +1,35 @@
+﻿%% FIG-05 熔断状态机（stateDiagram-v2）
+%% 数据来源：Struct_of_Agent/common/circuit_breaker.py
+%% 参数：连续失败阈值 3 次；计数窗口 300 s；首次冷却 60 s；半开试探 1 次；升级退避 60→120→240→480→900 s
+%% 零容忍信号：权限越权 privilege_violation、审计写失败 audit_failure —— 一次即锁
+%% 状态持久化：app.circuit_breaker_state 单行 (tenant_id, subject_type, subject_id, capability)，version 乐观锁
+%% 迁移事件：app.circuit_breaker_event 只追加（UPDATE/DELETE/TRUNCATE 被触发器拒绝）
+stateDiagram-v2
+  direction LR
+  [*] --> closed : 初始化或运维复位
+
+  state "closed 关闭（写入放行）" as closed
+  state "open 打开（写入阻断）" as open
+  state "half_open 半开（仅放行 1 次试探）" as half_open
+
+  closed --> closed : 失败但未达阈值（failure_count + 1，窗口 300 s 内累计）
+  closed --> closed : 调用成功（failure_count 清零）
+  closed --> open : 连续失败 3 次
+  closed --> open : 零容忍信号一次即锁（privilege_violation / audit_failure）
+
+  open --> open : 冷却未到期（写入一律拒绝，返回 retry_after）
+  open --> half_open : 冷却到期（60→120→240→480→900 s，按 open_level 取表）
+
+  half_open --> closed : 试探成功（failure_count 清零，open_level 归零）
+  half_open --> open : 试探失败（open_level + 1，退避升级）
+
+  note right of open
+    open 期间：写入能力全部阻断
+    只读能力不受影响
+    /health/circuit-breaker 暴露统计
+    POST /api/safety/circuit-breakers/{capability}/reset 由运维复位
+  end note
+  note right of half_open
+    半开只放行一次：half_open_at 非空即视为试探已取用
+    同能力并发请求直接拒绝
+  end note

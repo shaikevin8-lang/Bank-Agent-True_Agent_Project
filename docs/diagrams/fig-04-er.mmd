@@ -1,0 +1,203 @@
+%% FIG-04 数据模型 ER（app 核心表 + 0007 熔断 + 0008 确认凭据）
+%% 数据来源：migrations/versions/0001~0008、Struct_of_Agent/db/models.py、models_ext.py
+%% 约定：所有业务表以 (tenant_id, id) 复合外键做租户隔离；全部启用 FORCE RLS。
+erDiagram
+  TENANT ||--o{ PRINCIPAL : "tenant_id"
+  TENANT ||--o{ WEB_USER : "tenant_id"
+  WEB_USER ||--o{ WEB_USER_SESSION : "fk_web_user_session_user_id"
+
+  PRINCIPAL ||--o{ CONVERSATION_SESSION : "fk_conversation_session_owner"
+  CONVERSATION_SESSION ||--o{ CONVERSATION_MESSAGE : "fk_conversation_message_session"
+  PRINCIPAL ||--o{ TASK : "fk_task_owner"
+  CONVERSATION_SESSION ||--o{ TASK : "fk_task_session"
+
+  PRINCIPAL ||--o{ ACCOUNT : "fk_account_owner"
+  ACCOUNT ||--o{ BANK_TRANSACTION : "fk_bank_transaction_account"
+  PRINCIPAL ||--o{ BANK_TRANSACTION : "fk_bank_transaction_owner"
+  ACCOUNT ||--o{ BILL_REPORT : "fk_bill_report_account"
+
+  ACCOUNT ||--o{ PAYEE : "fk_payee_account"
+  ACCOUNT ||--o{ SCHEDULED_TRANSFER : "fk_scheduled_transfer_account"
+  PRINCIPAL ||--o{ AA_SPLIT : "fk_aa_split_owner"
+  AA_SPLIT ||--o{ AA_SHARE : "fk_aa_share_split"
+
+  ACCOUNT ||--o{ RISK_ASSESSMENT : "fk_risk_assessment_account"
+  WEALTH_PRODUCT ||--o{ PORTFOLIO_HOLDING : "fk_portfolio_holding_product"
+  WEALTH_PRODUCT ||--o{ WEALTH_ORDER : "fk_wealth_order_product"
+  ACCOUNT ||--o{ WEALTH_ORDER : "fk_wealth_order_account"
+  ACCOUNT ||--o{ WEALTH_BALANCE : "fk_wealth_balance_account"
+
+  ACCOUNT ||--o{ CARD : "fk_card_account"
+  CARD ||--o{ CARD_REQUEST : "fk_card_request_card"
+  ACCOUNT ||--o{ CARD_REQUEST : "fk_card_request_account"
+
+  ACCOUNT ||--o{ SUBSCRIPTION : "fk_subscription_account"
+  SUBSCRIPTION ||--o{ SUBSCRIPTION_REMINDER : "fk_subscription_reminder_subscription"
+  SUBSCRIPTION ||--o{ SUBSCRIPTION_REQUEST : "fk_subscription_request_subscription"
+
+  ACCOUNT ||--o{ WORKFLOW : "fk_workflow_account"
+  WORKFLOW ||--o{ GIFT_ORDER : "fk_gift_order_workflow"
+  ACCOUNT ||--o{ WORKFLOW_BUDGET : "fk_workflow_budget_account"
+  WORKFLOW ||--o{ WORKFLOW_REQUEST : "fk_workflow_request_workflow"
+
+  HITL_CASE ||--o{ HITL_CASE_EVENT : "fk_hitl_case_event_case"
+  TENANT ||--o{ SIM_CLOCK : "fk_sim_clock_tenant"
+
+  PRINCIPAL ||--o{ IDEMPOTENCY_KEY : "fk_idempotency_key_owner"
+
+  CONFIRMATION_REQUEST ||--o| CONFIRMATION_GRANT : "request_id 逻辑关联"
+
+  TENANT {
+    uuid id PK
+    string code UK
+    string name
+  }
+  PRINCIPAL {
+    uuid id PK
+    uuid tenant_id PK
+    string display_name
+    string kind
+  }
+  WEB_USER {
+    uuid id PK
+    uuid tenant_id
+    string username UK
+    string password_hash
+    string role
+    bool is_active
+  }
+  WEB_USER_SESSION {
+    uuid id PK
+    uuid user_id FK
+    string token_hash UK
+    timestamptz expires_at
+  }
+  CONVERSATION_SESSION {
+    uuid id PK
+    uuid tenant_id PK
+    uuid principal_id FK
+    string status
+  }
+  CONVERSATION_MESSAGE {
+    bigint id PK
+    uuid tenant_id
+    uuid session_id FK
+    string role
+    text content
+  }
+  TASK {
+    uuid id PK
+    uuid tenant_id PK
+    uuid principal_id FK
+    uuid session_id FK
+    string status
+    string risk_level
+  }
+  ACCOUNT {
+    uuid id PK
+    uuid tenant_id PK
+    uuid principal_id FK
+    string account_no UK
+    bigint balance_cents
+    string currency
+  }
+  BANK_TRANSACTION {
+    uuid id PK
+    uuid tenant_id
+    uuid account_id FK
+    bigint amount_cents
+    string direction
+    timestamptz booked_at
+  }
+  BILL_REPORT {
+    uuid id PK
+    uuid tenant_id
+    uuid account_id FK
+    string period
+    jsonb payload
+  }
+  IDEMPOTENCY_KEY {
+    uuid id PK
+    uuid tenant_id
+    uuid principal_id FK
+    string key_hash UK
+    string tool_name
+    string status
+  }
+  EVENT {
+    bigint id PK
+    uuid tenant_id
+    string event_type
+    string prev_hash
+    string hash
+    timestamptz created_at
+  }
+  CIRCUIT_BREAKER_STATE {
+    uuid tenant_id PK
+    string subject_type PK
+    uuid subject_id PK
+    string capability PK
+    string state
+    int failure_count
+    timestamptz window_started_at
+    timestamptz cooldown_until
+    timestamptz half_open_at
+    int open_level
+    int version
+  }
+  CIRCUIT_BREAKER_EVENT {
+    uuid id PK
+    uuid tenant_id
+    string subject_type
+    uuid subject_id
+    string capability
+    string from_state
+    string to_state
+    string reason_code
+    string operator_id
+    string trace_id
+    timestamptz created_at
+  }
+  CONFIRMATION_REQUEST {
+    uuid request_id PK
+    uuid tenant_id
+    uuid user_id
+    string session_id
+    string tool_name
+    string args_fingerprint
+    jsonb args_redacted
+    string risk_level
+    bool mfa_required
+    text mfa_code_hash
+    int attempts
+    string status
+    timestamptz expires_at
+  }
+  CONFIRMATION_GRANT {
+    uuid grant_id PK
+    uuid request_id
+    uuid tenant_id
+    uuid user_id
+    string session_id
+    string tool_name
+    string args_fingerprint
+    text token_hash UK
+    timestamptz issued_at
+    timestamptz expires_at
+    timestamptz used_at
+    timestamptz revoked_at
+  }
+  HITL_CASE {
+    uuid id PK
+    uuid tenant_id
+    string case_no UK
+    string status
+    string risk_level
+  }
+  HITL_CASE_EVENT {
+    uuid id PK
+    uuid tenant_id
+    uuid case_id FK
+    string action
+    string actor
+  }
