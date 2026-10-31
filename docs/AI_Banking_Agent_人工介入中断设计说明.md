@@ -699,3 +699,104 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 | 版本 | 日期 | 说明 |
 | --- | --- | --- |
 | v1.0 | 2026-10-28 | 首版：13 条迁移矩阵 + 三决策（含补件回流）+ 单认领 `version` 锁 + 三层幂等 + SLA 900 秒 fail-closed + 职责分离 + 拒绝理由必填 + 9 节完整设计，附 9 条偏差建议 |
+| v1.1 | 2026-10-29 | 新增 §12：阶段 1 写能力熔断门禁接入点（`intercept()` 前置能力门禁 + 结果回写），补充「熔断先于 HITL」的顺序约束 |
+
+## 12. 写能力熔断门禁（阶段 1 接入）
+
+阶段 1（D01）在 HITL 之前加了一道更快的闸门：`Struct_of_Agent/common/circuit_breaker.py` 的写能力断路器。它与 HITL **不是替代关系**，而是顺序关系——先判断「这个能力现在还能不能用」，再判断「这次调用需不需要人」。设计依据见 `docs/ADR/ADR-005-写能力熔断策略.md`。
+
+### 12.1 为什么放在 HITL 之前
+
+| 考量 | 说明 |
+| --- | --- |
+| 不制造无人可处理的人工任务 | 能力整体熔断时，任何同类写请求都会被拒；若先进 HITL 建案，会给复核员堆一批「批了也执行不了」的案件 |
+| 不打扰人工 | 熔断是**系统侧**的自我保护，纯机器判断即可得出结论，不需要人的输入 |
+| 更快 | 状态判定走 5 秒进程内缓存，比建案 + 写 `hitl_case_event` + 双写审计便宜得多 |
+| 语义正确 | `NOT_READY_001` 的含义是「当前不可用、请稍后重试」，不是「需要人工裁决」；混进 HITL 会把「稍后重试」错误地变成「等人处理」 |
+
+### 12.2 `intercept()` 的新顺序
+
+`Struct_of_Agent/common/hitl.py` 的 `intercept(tool_name, ...)` 第一行先过能力门禁，其余逻辑不变：
+
+```
+intercept(tool_name, args, session, task, ...)
+  │
+  ├─① breaker_gate(tool_name)            ← 新增：写工具能力门禁
+  │     ├─ 非写工具 → None（放行，继续 ②）
+  │     ├─ 写工具且闭路 → None（放行，继续 ②）
+  │     └─ 写工具且 open/半开已被用掉 → 返回拦截回执 dict
+  │           { ok: false, code: 'NOT_READY_001',
+  │             detail: { capability, state, retry_after } }
+  │           ⇒ 直接返回该回执：**不建案、不写 hitl_case_event、不打扰人工**
+  │
+  ├─② 策略判定（§3.5 触发策略，沿用既有实现）
+  │     ├─ 不命中 → None（放行，工具照常执行）
+  │     └─ 命中   → 建案（§6.1）
+  │
+  ├─③ 建案 / 挂起等待人工（§6.1、§6.2）
+  │
+  └─④ 结果回写：工具执行后 observe_tool_result(tool_name, ok=..., detail=..., unknown=...)
+        ├─ 成功回执 → record_success(...)（清零 failure_count）
+        ├─ 异常/失败回执 → record_failure(...)（failure_count += 1，达阈值即 open）
+        └─ 结果未知（unknown=True）→ 不计数、不开启，仅记待核痕迹
+```
+
+对应的两个新函数（同文件，与 `intercept` 并列）：
+
+| 函数 | 签名 | 职责 |
+| --- | --- | --- |
+| `breaker_gate` | `breaker_gate(tool_name) -> dict \| None` | 薄封装 `circuit_breaker.guard_write_tool`：非写工具返回 `None`，被熔断返回拦截回执 |
+| `observe_tool_result` | `observe_tool_result(tool_name, *, ok, detail='', unknown=False)` | 成功回执 → `record_success`；失败/异常 → `record_failure(reason_code='write_tool_failure')`；`unknown=True`（回执状态未知）→ 只记待核痕迹，**不计数、不开启**。只读工具直接返回；观测失败吞异常并记日志，不能反过来把已成功的业务操作变成报错 |
+
+### 12.3 时序（含熔断抢先的分支）
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 用户
+    participant R as R1..R6 图
+    participant H as common/hitl.py
+    participant CB as circuit_breaker
+    participant DB as app.hitl_case / 审计
+
+    U->>R: 发起写请求（如转账）
+    R->>H: intercept(tool_name, args, ...)
+    H->>CB: breaker_gate(tool_name) → guard_write_tool
+    alt 能力处于 open（或半开已被用掉）
+        CB-->>H: 拦截回执 NOT_READY_001（capability/state/retry_after）
+        H-->>R: 直接返回该回执
+        Note over H,DB: 不建案、不写 hitl_case_event、不打扰人工
+        R->>CB: observe_tool_result(ok=false)（异常路径仍计入失败）
+        R-->>U: 「该能力暂时停用，请 60 秒后重试」
+    else 能力闭路（或半开放行一次）
+        H->>H: 策略判定（§3.5）
+        alt 命中人工策略
+            H->>DB: 建案 + 双写审计（§7.1）
+            H-->>R: 挂起等待人工（§6.1）
+            Note over R: 工具本次不执行
+        else 未命中
+            H-->>R: 放行
+            R->>R: 执行写工具
+            R->>CB: observe_tool_result(ok=?, detail=?)
+            Note over CB: ok → record_success；失败 → record_failure（3 次 → open）
+        end
+    end
+```
+
+### 12.4 与既有 HITL 语义的边界
+
+| 场景 | 熔断门禁 | HITL 策略 | 结果 |
+| --- | --- | --- | --- |
+| 能力闭路 + 命中人工策略 | 放行 | 命中 | 建案挂起（与阶段 0 完全一致） |
+| 能力闭路 + 未命中策略 | 放行 | 未命中 | 直接执行 |
+| 能力 `open` + 命中人工策略 | **拦截** | 不评估 | 返回 `NOT_READY_001`，**不建案** |
+| 能力半开（本次为试用） | 放行一次 | 照常评估 | 成功则回 `closed`；失败立即回 `open` 并升级 `open_level` |
+| 只读/查询工具 | 恒放行 | 不涉及（只读不建案） | 只读路径完全不受熔断影响 |
+| 人工已批准的案件恢复执行 | 恢复链路不经 `intercept()` | — | 见 §6.2；若此时能力已 `open`，执行侧按 fail-closed 拒绝并留审计 |
+
+补充约束：
+
+- **「被熔断挡下不建案」是一条硬规则。** 拦截回执不写 `hitl_case_event`，也不写「等待人工」的任务状态；它只写 `audit.event`。这样可以保证 `app.hitl_case` 里不存在「等一个永远不会来的批准」的案卷。
+- **只读路径不受影响。** `guard_write_tool` 只对有写能力白名单内的工具名生效；查询、余额读取、账单查询等只读工具永远返回 `None`，不引入任何延迟或拦截。
+- **熔断不会替人做决定。** 熔断只回答「能不能试」，不回答「要不要批」；两者叠加时以「先熔断、后策略」为准，互不改变对方判定。
+- **状态可见性。** `GET /api/safety/circuit-breakers` 与 `GET /health/capabilities` 暴露当前熔断状态，前端在锁定横幅中呈现；人工复核员不需要在 HITL 队列里猜测某个能力是否可用。

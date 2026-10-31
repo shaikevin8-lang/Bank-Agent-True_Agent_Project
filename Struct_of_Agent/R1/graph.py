@@ -285,6 +285,16 @@ def _tools_node(state: TransferState) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001 - 工具异常统一转为可读回执
                 result = {"error": str(exc)}
 
+            # 写能力熔断（D01）观测：只观测真正执行过的写工具；被 HITL / 熔断挡下的不算失败。
+            if blocked is None:
+                hitl.observe_tool_result(
+                    name,
+                    ok="error" not in result,
+                    detail=str(result.get("error") or ""),
+                    unknown=str(result.get("status") or "").strip().lower()
+                    in {"unknown", "timeout", "unconfirmed", "pending"},
+                )
+
         results.append(
             {
                 "role": "tool",

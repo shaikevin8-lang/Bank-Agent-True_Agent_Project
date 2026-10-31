@@ -319,3 +319,273 @@ R1 转账成功后写入一笔 `expense` 流水；R2 统计只使用 `posted` �
 - 让客户端或模型决定 `tenant_id`、`owner_principal_id` 或账户所有者。
 - 把完整银行卡号、密码、Token、API Key 或真实生产数据写入数据库、seed 或日志。
 - 在当前版本提前创建理财、卡片、订阅、生日礼品专用表。
+
+## 10. 熔断相关表（V007）
+
+本节记录 V007（`migrations/versions/0007_circuit_breaker.py`，revision `0007_circuit_breaker`，`down_revision = 0006_web_user`）新增的两张表。它们是**安全状态表**，不是业务表：记录「某个租户下某个主体在某项写能力上是否已被熔断」，以及与状态迁移对应的只追加事件流。
+
+设计口径见 `docs/ADR/ADR-005-写能力熔断策略.md`，执行与验证 SQL 见 `docs/AI_Banking_Agent_数据库实施说明.md` §10。
+
+`capability` 的取值由 CHECK 固定为 6 项，因此本表**不接受**任何未登记的能力名：
+
+| capability | 覆盖范围 |
+| --- | --- |
+| `write:transfer` | R1 转账、定时转账、AA 收款回执等转账写入 |
+| `write:card` | R4 卡片申请、额度、限制、冻结、挂失 |
+| `write:wealth` | R3 理财申购 / 赎回 |
+| `write:subscribe` | R5 订阅取消、提醒设置 |
+| `write:gift` | R6 预算预留、礼品下单、工作流取消 |
+| `code_compute` | 受限代码计算（阶段 2 沙箱） |
+
+### 10.1 `app.circuit_breaker_state`
+
+每个 `(tenant_id, subject_type, subject_id, capability)` 一行当前状态。
+
+| 列名 | 类型 | 可空 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `tenant_id` | `Uuid` | NOT NULL | — | 租户；RLS 隔离列 |
+| `subject_type` | `String(16)` | NOT NULL | — | `'user'` 或 `'tenant'`（主体粒度） |
+| `subject_id` | `Uuid` | NOT NULL | — | 主体标识；`subject_type='user'` 时为用户/会话维度 ID |
+| `capability` | `String(32)` | NOT NULL | — | 6 项白名单之一 |
+| `state` | `String(16)` | NOT NULL | `'closed'` | `closed` / `open` / `half_open` |
+| `failure_count` | `Integer` | NOT NULL | `0` | 当前计数窗口内的连续失败次数 |
+| `window_started_at` | `timestamptz` | 可空 | — | 计数窗口起点（默认窗口 300 秒） |
+| `opened_at` | `timestamptz` | 可空 | — | 最近一次进入 `open` 的时间 |
+| `cooldown_until` | `timestamptz` | 可空 | — | 冷却到期时间，`open → half_open` 的判据 |
+| `half_open_at` | `timestamptz` | 可空 | — | 半开试探的**取用标记**：非空表示这次试探已被用掉（半开只放行一次） |
+| `open_level` | `Integer` | NOT NULL | `0` | 升级层级，用于退避取 60/120/240/480/900 秒；复位归零 |
+| `reason_code` | `String(32)` | 可空 | — | 触发原因码（`write_tool_failure`、`prompt_injection`、`privilege_violation`、`audit_failure`、`unknown_result`、`operator_reset`） |
+| `reason` | `Text` | 可空 | — | 原因详情；禁止写入密钥、完整卡号等敏感内容 |
+| `version` | `Integer` | NOT NULL | `1` | 乐观锁，每次成功迁移 +1 |
+| `updated_at` | `timestamptz` | NOT NULL | `now()` | 行更新时间 |
+
+**主键**
+
+- `pk_circuit_breaker_state` = `(tenant_id, subject_type, subject_id, capability)`：一行恰好对应一个「租户 × 主体 × 能力」的断路器，天然唯一，不需要额外去重逻辑。
+
+**CHECK 约束**
+
+| 约束名 | 规则 |
+| --- | --- |
+| `ck_circuit_breaker_state_subject_type` | `subject_type IN ('user', 'tenant')` |
+| `ck_circuit_breaker_state_state` | `state IN ('closed', 'open', 'half_open')` |
+| `ck_circuit_breaker_state_capability` | `capability IN ('write:transfer', 'write:card', 'write:wealth', 'write:subscribe', 'write:gift', 'code_compute')` |
+| `ck_circuit_breaker_state_failure_count` | `failure_count >= 0` |
+| `ck_circuit_breaker_state_open_level` | `open_level >= 0` |
+| `ck_circuit_breaker_state_version` | `version >= 1` |
+
+能力白名单写在 CHECK 里而不是只写在应用常量里：应用侧常量改错、或有人直接改库，都会在写入时被数据库拒绝。
+
+**索引**
+
+| 索引 | 列 | 用途 |
+| --- | --- | --- |
+| `ix_circuit_breaker_state_tenant_state` | `(tenant_id, state)` | 按租户拉「当前哪些能力处于 `open`/`half_open`」，供健康视图与锁定横幅使用 |
+
+### 10.2 `app.circuit_breaker_event`
+
+状态迁移事件，只追加。一次迁移一条，记录「从什么状态到什么状态、因为什么、谁操作的」。
+
+| 列名 | 类型 | 可空 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `id` | `Uuid` | NOT NULL | `gen_random_uuid()` | 事件主键 |
+| `tenant_id` | `Uuid` | NOT NULL | — | 租户；RLS 隔离列 |
+| `subject_type` | `String(16)` | NOT NULL | — | 与状态表同口径 |
+| `subject_id` | `Uuid` | NOT NULL | — | 与状态表同口径 |
+| `capability` | `String(32)` | NOT NULL | — | 迁移发生的写能力 |
+| `from_state` | `String(16)` | 可空 | — | 迁移前状态；首次建行为 `NULL` |
+| `to_state` | `String(16)` | NOT NULL | — | 迁移后状态 |
+| `reason_code` | `String(32)` | 可空 | — | 触发原因码 |
+| `reason` | `Text` | 可空 | — | 原因详情（脱敏后写入） |
+| `operator_id` | `String(64)` | 可空 | — | 人工操作者署名（`X-Operator`）；系统迁移为空 |
+| `trace_id` | `String(64)` | 可空 | — | 链路追踪标识 |
+| `created_at` | `timestamptz` | NOT NULL | `now()` | 事件时间 |
+
+**主键**：`pk_circuit_breaker_event` = `(id)`。
+
+**索引**
+
+| 索引 | 列 | 用途 |
+| --- | --- | --- |
+| `ix_circuit_breaker_event_tenant_created` | `(tenant_id, created_at DESC)` | 按租户拉最近事件（运维与答辩演示的时间线） |
+| `ix_circuit_breaker_event_subject` | `(tenant_id, capability, created_at DESC)` | 拉某能力的历史迁移，回答「这个能力反复升级了几次」 |
+
+### 10.3 只追加保护
+
+与 `audit.event` 同口径：安全结论的时间线一旦可改写，事后就无法复算。
+
+| 对象 | 类型 | 规则 |
+| --- | --- | --- |
+| `app.reject_circuit_breaker_event_mutation()` | 函数（plpgsql） | 直接 `RAISE EXCEPTION`，`ERRCODE = 'insufficient_privilege'` |
+| `trg_circuit_breaker_event_append_only` | 触发器（`BEFORE UPDATE OR DELETE`，`FOR EACH ROW`） | 任何按行修改 / 删除都被拒绝 |
+| `trg_circuit_breaker_event_no_truncate` | 触发器（`BEFORE TRUNCATE`，`FOR EACH STATEMENT`） | 整表清空被拒绝 |
+
+效果：`INSERT` 是唯一合法写入方式；`DELETE` 与 `TRUNCATE` 在数据库层失败，而不是靠「应用不许这么写」的约定。
+
+### 10.4 RLS 策略
+
+两张表都执行 `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY`，各挂两条策略（沿用 0004 的口径）：
+
+| 策略 | 适用命令 | 表达式 |
+| --- | --- | --- |
+| `tenant_isolation` | `ALL`（`USING` + `WITH CHECK`） | `tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid)` |
+| `seed_import` | `ALL`（`USING` + `WITH CHECK`） | `(SELECT current_setting('app.seed_mode', true) = 'on')` |
+
+要点：
+
+- `FORCE` 意味着连表属主也受策略约束，不存在「应用用超级用户连接就绕过」的路径。
+- 应用侧所有读写必须在事务内注入 `app.tenant_id`；漏注入时读不到任何行、也写不进任何行（fail-closed，而不是 fail-open）。
+- `seed_import` 只服务演示数据导入/重置（`app.seed_mode = 'on'`），正常运行态不开启。
+
+### 10.5 刻意不建到 `app.tenant` 的外键
+
+两张表都**没有**指向 `app.tenant(id)` 的外键，理由有两条，缺一不可：
+
+1. **安全状态要比业务行活得久。** `db.reset` 会按外键顺序清理 `app` 里的演示业务数据；如果熔断状态挂了外键，重置就会连带删除安全证据，出现「事故记录随演示数据一起消失」。熔断事件属于应该被保留、可被回查的那一类记录。
+2. **清库不能因为外键顺序失败。** `db.reset`（按 `DELETE_ORDER` 逐表删除）与测试清库（`tests/conftest.py` 的 `TRUNCATE app.*` 显式列表 + `CASCADE`）都需要能稳定执行；不带外键，就不会出现「先删父表还是先删子表」的顺序问题，`CASCADE` 也不会把熔断状态连带清空。
+
+代价是「租户存在性」不由数据库保证，改由服务端的租户上下文（请求解析出的 `tenant_id`）保证；这与 §2.2「归属由服务端上下文确定」的既有规则一致，因此不引入新的信任假设。
+
+需要提醒的一点：`app.circuit_breaker_event` 的 `TRUNCATE` 被 `trg_circuit_breaker_event_no_truncate` 拒绝（同 `audit.event`），所以「清库」不会清掉事件流；确需清空时走受控运维流程，不能作为常规 reset 的一部分。
+
+### 10.6 与既有表的关系
+
+- 不修改 V001~V006 的任何对象；V007 只新增两张表、它们的索引、触发器/函数与 RLS 策略，以及表注释。
+- 熔断状态**不引用** `app.principal` / `app.conversation_session` 等业务行：`subject_id` 是逻辑主体标识，即使对应业务行被归档或清理，安全状态与事件仍然有效。
+- 熔断事件与 `audit.event` 是两条互补的链路：`audit.event` 记录「谁在业务上做了什么」，`app.circuit_breaker_event` 记录「写能力为什么被关掉 / 被放开」。
+
+## 11. 确认凭据两表（V008）
+
+本节记录 V008（`migrations/versions/0008_confirmation_grant.py`，revision `0008_confirmation_grant`，`down_revision = 0007_circuit_breaker`）新增的两张表。它们也是**安全状态表**而非业务表：`app.confirmation_request` 是「一次确认的输入侧」（谁、对哪个工具、哪组参数、什么风险等级、试了几次码），`app.confirmation_grant` 是「输出侧」（可用于放行**一次**执行的凭据）。
+
+设计口径见 `docs/ADR/ADR-008-确认凭据服务端化.md`；接口见 `docs/AI_Banking_Agent_接口契约文档.md` §3；契约来源 `docs/_work/阶段4-确认凭据与五层-接口冻结.md` §1.4（列名与 `common/confirm.py` 的 dataclass 字段一一对应）。
+
+时间口径（契约 §0）：两张表的时间列**一律写入业务时间**（`hitl.business_now()` + `hitl.iso()`），与演示时钟同轴；「真实发生时刻」由 `audit.event.created_at` 承担，不在这两张表里重复存。因此 `expires_at` 与 `created_at` 的差值就是 TTL（180 s / 120 s），与演示偏移无关。
+
+### 11.1 `app.confirmation_request`
+
+| 列名 | 类型 | 可空 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `request_id` | `Uuid` | NOT NULL | `gen_random_uuid()` | 主键 `pk_confirmation_request`；也是验证码哈希的加盐串（`sha256("<request_id>:<code>")`） |
+| `tenant_id` | `Uuid` | NOT NULL | — | 租户；RLS 隔离列 |
+| `user_id` | `Uuid` | 可空 | — | 主体用户；演示身份下允许为空（契约 `user_id: uuid \| None`） |
+| `session_id` | `String` | NOT NULL | `'default'` | 会话标识（契约默认值 `"default"`）；与 `user_id` 一并构成主体绑定维度 |
+| `tool_name` | `String` | NOT NULL | — | 待执行工具名，如 `transfer_by_name` |
+| `args_fingerprint` | `String(64)` | NOT NULL | — | `hitl.fingerprint(tool_name, args)` 的 sha256 十六进制；确认的「绑定」就落在这列 |
+| `args_redacted` | `JSONB` | NOT NULL | — | `hitl.mask_args()` 后的展示摘要（前端卡片用），**不放原始敏感参数** |
+| `risk_level` | `String(8)` | NOT NULL | — | `green` / `yellow` / `red`（PRD 三色，**非**理财 R1-R5） |
+| `mfa_required` | `Boolean` | NOT NULL | `false` | 红色为 `true`；非红色建请求后直接签发凭据 |
+| `mfa_code_hash` | `String(64)` | 可空 | — | `sha256("<request_id>:<code>")` 十六进制；非红色为 `NULL`。**明文码不落库** |
+| `attempts` | `Integer` | NOT NULL | `0` | 验证码错误次数；到 3 即 `locked` |
+| `status` | `String(16)` | NOT NULL | `'pending'` | `pending` / `issued` / `used` / `locked` / `expired` / `revoked` |
+| `created_at` | `timestamptz` | NOT NULL | `now()` | 建请求时刻（业务时间） |
+| `expires_at` | `timestamptz` | NOT NULL | — | 到期时刻 = `created_at + 180s`；到期为惰性判定，不靠定时任务改行 |
+
+**主键**：`pk_confirmation_request` = `(request_id)`。
+
+**CHECK 约束**
+
+| 约束名 | 规则 |
+| --- | --- |
+| `ck_confirmation_request_status` | `status IN ('pending','issued','used','locked','expired','revoked')` |
+| `ck_confirmation_request_risk_level` | `risk_level IN ('green','yellow','red')` |
+| `ck_confirmation_request_attempts` | `attempts >= 0 AND attempts <= 3` |
+| `ck_confirmation_request_expiry` | `expires_at > created_at` |
+| `ck_confirmation_request_code_hash` | `mfa_required = false OR mfa_code_hash IS NOT NULL`（要发码就必须先存码哈希） |
+
+**索引**
+
+| 索引 | 列 | 用途 |
+| --- | --- | --- |
+| `ix_confirmation_request_tenant_status` | `(tenant_id, status, created_at DESC)` | 按租户看「现在有哪些待确认/已锁定」请求 |
+| `ix_confirmation_request_session_tool` | `(tenant_id, session_id, tool_name, status)` | `confirm.session_grant()` 的会话态兜底查询（同会话 + 同工具 + 未用） |
+| `ix_confirmation_request_expires` | `(expires_at)` | 清理任务的范围扫描 |
+
+### 11.2 `app.confirmation_grant`
+
+一行 = 一张一次性凭据。**只存哈希**，明文令牌只在签发那一刻存在于响应体里。
+
+| 列名 | 类型 | 可空 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `grant_id` | `Uuid` | NOT NULL | `gen_random_uuid()` | 主键 `pk_confirmation_grant`；对外唯一可见的凭据标识 |
+| `request_id` | `Uuid` | NOT NULL | — | 来源请求；唯一外键指向 `app.confirmation_request(request_id)` |
+| `tenant_id` | `Uuid` | NOT NULL | — | 租户；RLS 隔离列 |
+| `user_id` | `Uuid` | 可空 | — | 主体用户；签发时从请求复制，消费时比对 |
+| `session_id` | `String` | NOT NULL | — | 会话标识；跨会话使用即 `SubjectMismatch` |
+| `tool_name` | `String` | NOT NULL | — | 绑定工具；与消费时的 `tool_name` 必须逐字相等 |
+| `args_fingerprint` | `String(64)` | NOT NULL | — | 绑定参数指纹；消费时按实际参数重算并比对 |
+| `token_hash` | `String(64)` | NOT NULL | — | `sha256(secrets.token_urlsafe(32))` 十六进制；**令牌明文不落库** |
+| `issued_at` | `timestamptz` | NOT NULL | `now()` | 签发时刻（业务时间） |
+| `expires_at` | `timestamptz` | NOT NULL | — | `issued_at + 120s` |
+| `used_at` | `timestamptz` | 可空 | — | 消费成功时刻；**非空即已用**，由 `consume_grant` 的原子 CAS 写入 |
+| `revoked_at` | `timestamptz` | 可空 | — | 撤销时刻（用户 `DELETE` 请求时级联置位） |
+
+**主键**：`pk_confirmation_grant` = `(grant_id)`。
+**唯一约束**：`uq_confirmation_grant_token_hash` = `(token_hash)`（令牌碰撞即写入失败，不靠应用侧判重）。
+
+**CHECK 约束**
+
+| 约束名 | 规则 |
+| --- | --- |
+| `ck_confirmation_grant_expiry` | `expires_at > issued_at` |
+| `ck_confirmation_grant_used_at` | `used_at IS NULL OR used_at >= issued_at` |
+| `ck_confirmation_grant_revoked_at` | `revoked_at IS NULL OR revoked_at >= issued_at` |
+
+> 没有 `status` 列：凭据状态由 `used_at` / `revoked_at` / `expires_at` 三者**推导**（先到先得），避免「状态列与时间列打架」这类双写不一致。契约里的 `ConfirmationGrant` 同样只有这三个时间字段。
+
+**索引**
+
+| 索引 | 列 | 用途 |
+| --- | --- | --- |
+| `ix_confirmation_grant_request` | `(request_id)` | 由请求反查凭据（诊断与审计回放） |
+| `ix_confirmation_grant_session_tool` | `(tenant_id, session_id, tool_name, used_at)` | `session_grant()` 取「同会话 + 同工具 + 未用 + 未过期」的最新凭据 |
+| `ix_confirmation_grant_expires` | `(expires_at)` | 清理任务的范围扫描 |
+
+### 11.3 外键
+
+只建一条外键；其余主体列刻意不建（理由沿用 §10.5）。
+
+| 约束名 | 列 → 目标 | 删除行为 | 理由 |
+| --- | --- | --- | --- |
+| `fk_confirmation_grant_request_id_confirmation_request` | `confirmation_grant.request_id` → `confirmation_request.request_id` | `ON DELETE CASCADE` | 凭据不能脱离来源请求独立存在：删请求即删其凭据，不留「无主可用凭据」 |
+| 无 | `tenant_id` → `app.tenant` | —— | ①`db.reset` 与测试清库（`TRUNCATE app.*` 显式列表 + `CASCADE`）不能因外键顺序失败；②租户存在性由服务端上下文保证（§2.2），不引入新的信任假设 |
+| 无 | `user_id` → `app.principal` | —— | 同上；且演示身份允许 `user_id` 为空 |
+
+两条因此而来的运维约束：
+
+1. 清库必须**显式列出**这两张表（`DELETE_ORDER` / `TRUNCATE` 清单），否则残留凭据会在重启后仍可消费（TTL 120 s 内）。
+2. 删 `app.confirmation_request` 的行会连带删凭据——这正是「用户取消 → 撤销凭据」的数据库侧兜底；正常路径仍走 `status=revoked` + `revoked_at`，不做物理删除。
+
+### 11.4 RLS 策略
+
+两张表都执行 `ENABLE ROW LEVEL SECURITY` + `FORCE ROW LEVEL SECURITY`，策略与 §10.4 同款两条：
+
+| 策略 | 适用命令 | 表达式 |
+| --- | --- | --- |
+| `tenant_isolation` | `ALL`（`USING` + `WITH CHECK`） | `tenant_id = (SELECT NULLIF(current_setting('app.tenant_id', true), '')::uuid)` |
+| `seed_import` | `ALL`（`USING` + `WITH CHECK`） | `(SELECT current_setting('app.seed_mode', true) = 'on')` |
+
+要点：
+
+- **`FORCE` 是关键**：确认凭据的校验读（`get_grant` / `consume_grant`）必须在带 `app.tenant_id` 的事务里执行；漏注入时读不到行 → `GrantInvalid` → 拒绝。这是「fail-closed 由数据库保证」的第二个例子（第一个是 §10.4 的熔断状态）。
+- 跨租户读取凭据在数据库层就不可见，`SubjectMismatch`/`AUTHZ_001` 只是应用层的第二道确认。
+- **清理策略受 RLS 约束**：`purge_expired()` 若以普通应用角色执行，只能删到当前 `app.tenant_id` 可见的行。全库清理有两条口径（二选一，见实现 `Struct_of_Agent/common/confirm.py::SqlStore.purge`）：按租户循环执行（每租户一次事务），或由具备 `BYPASSRLS` 的运维角色执行。**不得**为此关闭 `FORCE ROW LEVEL SECURITY`。
+- `seed_import` 只服务演示数据导入/重置，正常运行态不开启（同 §10.4）。
+
+### 11.5 清理策略
+
+| 项 | 约定 |
+| --- | --- |
+| 判据 | `expires_at < now() - interval '1 hour'`（`purge_expired(older_than_seconds=3600)`，与阶段 4 需求文本一致） |
+| 触发 | ①应用启动时执行一次；②运维/定时任务按需调用；**不**依赖请求路径上的惰性删除 |
+| 顺序 | 先删 `confirmation_grant`，再删 `confirmation_request`（虽然 `ON DELETE CASCADE` 会连带，但先删子表让计数更准确） |
+| 返回 | 删除行数（int），进日志；**不写** `audit.event`（清理不是业务事实，避免审计被例行任务淹没） |
+| 为何留 1 小时宽限 | 过期后仍需在短时间内可诊断（「刚才那条为什么失败」），宽限期短于演示会话长度即可 |
+| 未过期数据 | 一律不主动删除；`used`/`locked`/`revoked` 的请求同样按 `expires_at` 清理，不按状态清理 |
+
+### 11.6 与既有表的关系
+
+- 不修改 V001～V007 的任何对象；V008 只新增两张表、索引、外键、RLS 策略与表注释。
+- **复用 `audit.event`，不新建事件表**：确认链路的 7 个 `confirm.*` 动作（`requested` / `mfa_failed` / `grant_issued` / `grant_consumed` / `grant_rejected` / `grant_injected` / `request_cancelled`）全部写 `audit.event`，`resource_type="confirmation"`、`resource_id=grant_id|request_id`。这与 `app.circuit_breaker_event` 的做法不同：熔断需要独立时间线做状态机回放，确认只需要「谁在什么时候确认/被拒绝」的事实。
+- **不加只追加触发器**：与 §10.3 相反，这两张表的核心列（`status`/`attempts`/`used_at`）本来就是**可变**的——`consume_grant` 的原子 CAS 就是一次 `UPDATE ... WHERE used_at IS NULL`。不可篡改性由 `audit.event` 承担，而不是禁止 `UPDATE`。这也是本表与熔断表在安全建模上的分野：熔断是「状态快照 + 只追加事件」，确认是「一次性令牌 + 审计流水」。
+- 与 `app.idempotency_key` 无耦合：确认凭据解决「这次执行是否被用户授权」，幂等键解决「同一次授权是否被重复执行」，两者正交，可在同一请求上同时存在。

@@ -105,7 +105,9 @@ from R6.persistence import ConversationStore as R6ConversationStore
 from supervisor import SupervisorAgent
 from web_test import api_common
 from web_test.api_auth import router as auth_router
+from web_test.api_circuit_breaker import router as safety_router
 from web_test.api_clock import router as clock_router
+from web_test.api_confirm import router as confirm_router
 from web_test.api_hitl import router as hitl_router
 from web_test.session_store import (
     ChatSessionStore,
@@ -871,6 +873,10 @@ app.include_router(clock_router)
 app.include_router(hitl_router)
 # 登录/注册路由：账号接口必须先于页面可用，但行为上只是追加 /api/auth/* 路径。
 app.include_router(auth_router)
+# 写能力熔断（D01）：只追加 /api/safety/circuit-breakers* 与 /health/capabilities。
+app.include_router(safety_router)
+# 高风险确认凭据（D04）：只追加 /api/confirm* 与 /api/v1/confirm*。
+app.include_router(confirm_router)
 
 # 到期结算接线（C1）：让「推进演示时钟」真正结转到期的定时转账与超时的人工案件。
 # install() 只往时钟服务里挂一个回调，import 期不碰数据库（真正的库读写发生在推进

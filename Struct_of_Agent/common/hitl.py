@@ -135,7 +135,18 @@ ERROR_HITL_UNAVAILABLE = "hitl_unavailable"  # 503（队列不可用，fail-clos
 #: 指纹计算时剔除的易变字段：确认/MFA 由人工与用户两侧分别记录，不能影响
 #: 「同一次提案」的判定；``hitl_case_no`` 之类是回填字段，同样剔除。
 VOLATILE_ARG_KEYS: frozenset[str] = frozenset(
-    {"confirmed", "mfa_code", "pin", "hitl_case_no", "idempotency_key", "ack", "confirmed_at"}
+    {
+        "confirmed",
+        "mfa_code",
+        "pin",
+        "hitl_case_no",
+        "idempotency_key",
+        "ack",
+        "confirmed_at",
+        # D04：确认凭据号是「这一次确认」的载体，不是提案内容的一部分；
+        # 同一笔业务先用凭据 A 触发、再用凭据 B 重试，仍是同一次提案。
+        "confirmation_grant_id",
+    }
 )
 
 
@@ -1077,27 +1088,64 @@ def _next_public_id(session: Session, tenant_id: uuid.UUID, business_day: date) 
 # ---------------------------------------------------------------------------
 
 
-def _user_confirmation(rule: PolicyRule, arguments: Mapping[str, Any]) -> dict[str, Any]:
-    """记录用户侧的确认证据（与人工决策分离，PRD FR-COM-003）。
+def _user_confirmation(
+    tool_name: str,
+    rule: PolicyRule,
+    arguments: Mapping[str, Any],
+) -> dict[str, Any]:
+    """登记用户侧的确认**候选**，但不消费凭据（PRD FR-COM-003 / D04）。
+
+    建案发生在「模型刚调了写工具、还没有人确认」的时刻：前端此时连参数都还没
+    拿到（参数在阻断回执里），不可能先走 ``/confirm/request``。因此这里只登记
+    「当前会话有没有可用凭据」，真正的消费留给 :func:`_check_user_confirmation`
+    （人工批准前）——用户可以从容补 MFA，而模型自带的 ``confirmed`` /
+    ``mfa_code`` 一律不算数。
 
     Args:
+        tool_name: 工具名。
         rule: 命中的策略规则。
-        arguments: 模型给出的工具参数。
+        arguments: 模型给出的工具参数（仅用于指纹匹配与「模型是否伪造」判断）。
 
     Returns:
-        形如 ``{"confirmed_by": "user", "confirmed_at": …, "confirmed": True,
-        "mfa_ok": True, "mfa_required": True}`` 的证据字典。
+        确认证据字典；``grant_id`` 为找到的候选凭据（没有则为 ``None``）。
     """
-    confirmed = arguments.get("confirmed") is True
-    mfa_code = str(arguments.get("mfa_code") or "")
-    mfa_ok = (not rule.requires_mfa) or (confirmed and len(mfa_code) == 6 and mfa_code.isdigit())
+    from common import confirm  # 延迟导入：common.confirm 反向依赖 common.hitl
+
+    moment = business_now()
+    context = current_context()
+    model_claimed = arguments.get("confirmed") is True or bool(arguments.get("mfa_code"))
+    explicit = arguments.get("confirmation_grant_id")
+    grant_id = str(explicit).strip() if isinstance(explicit, str) and explicit.strip() else ""
+    if not grant_id:
+        try:
+            candidate = confirm.session_grant(
+                tool_name=tool_name,
+                args=dict(arguments),
+                session_id=context.session_id or "default",
+                tenant_id=context.tenant_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - 查询失败按「暂无凭据」登记
+            logger.warning("查询确认凭据失败 tool=%s：%s", tool_name, exc)
+            candidate = None
+        if candidate is not None:
+            grant_id = str(candidate.grant_id)
+    if model_claimed:
+        confirm.audit_quietly(
+            context.tenant_id,
+            action="security.confirmation_argument_ignored",
+            tool_name=tool_name,
+            detail="模型传入的 confirmed/mfa_code 已被忽略，只认服务端签发的凭据",
+        )
+    source = "confirmation_grant" if grant_id else ("model_arguments_ignored" if model_claimed else "no_grant")
     return {
-        "confirmed_by": "user",
-        "confirmed_at": iso(business_now()),
-        "confirmed": confirmed,
-        "mfa_required": rule.requires_mfa,
-        "mfa_ok": bool(mfa_ok),
-        "source": "tool_arguments",
+        "confirmed_by": "user" if grant_id else None,
+        "confirmed_at": iso(moment),
+        "confirmed": bool(grant_id),
+        "mfa_required": bool(rule.requires_mfa),
+        "mfa_ok": bool(grant_id),
+        "source": source,
+        "grant_id": grant_id or None,
+        "consumed_at": None,
     }
 
 
@@ -1145,7 +1193,7 @@ def _open_case(
                         "summary": hit.reason_text,
                         "amount_fen": hit.amount_fen,
                         "graph_thread_id": (context.session_id or "default")[:128],
-                        "user_confirmation": _user_confirmation(hit.rule, arguments),
+                        "user_confirmation": _user_confirmation(hit.tool_name, hit.rule, arguments),
                         "created_business_at": iso(moment),
                     },
                     graph_thread_id=(context.session_id or "default")[:128],
@@ -1171,7 +1219,9 @@ def _open_case(
             last_error = exc
             logger.warning("HITL 案件号分配冲突，重试：%s", exc)
         except SQLAlchemyError as exc:
+            report_violation("audit_failure", detail=f"建案失败：{exc}"[:300])
             raise HitlUnavailable("人工复核队列不可用：建案失败") from exc
+    report_violation("audit_failure", detail="案件号分配连续冲突")
     raise HitlUnavailable("人工复核队列不可用：案件号分配连续冲突") from last_error
 
 
@@ -1296,6 +1346,18 @@ def _blocked_receipt(case: HitlCase, hit: PolicyHit | None = None) -> dict[str, 
     }
     if hit is not None and hit.amount_fen is not None:
         receipt["amount_fen"] = hit.amount_fen
+    # D04：确认卡所需的全部信息。前端在工具被拦**之前**拿不到参数，只能从这里
+    # 取（``args`` 已脱敏存档），据此直接 POST /api/v1/confirm/request。
+    receipt["confirmation"] = {
+        "tool_name": proposal.get("tool_name") or "",
+        "args": dict(proposal.get("args") or {}),
+        "args_fingerprint": proposal.get("fingerprint")
+        or fingerprint(str(proposal.get("tool_name") or ""), dict(proposal.get("args") or {})),
+        "risk_level": case.risk_level,
+        "mfa_required": bool(confirmation.get("mfa_required")),
+        "requires_user_confirmation": True,
+        "case_no": case.public_id,
+    }
     return receipt
 
 
@@ -1319,10 +1381,118 @@ def _rejected_receipt(tool_name: str, reason: str) -> dict[str, Any]:
     }
 
 
+def breaker_gate(tool_name: str) -> dict[str, Any] | None:
+    """写能力熔断闸门（D01）：在 HITL 策略判定**之前**调用。
+
+    顺序刻意放在策略判定前：HITL 关注「这一笔是否高风险、要不要人工批」，
+    熔断关注「这个用户这条写路径是否已经坏了」。写路径坏了时连建案都不该再
+    消耗一次数据库写入，因此先熔断、后策略。
+
+    只做三件事：开关判断、取当前上下文（租户 + 会话即用户维度）、交给
+    :func:common.circuit_breaker.guard_write_tool 裁决。只读工具
+    （`capability_for_tool` 返回 `None`）恒放行。
+
+    Args:
+        tool_name: 即将执行的工具名。
+
+    Returns:
+        `None` 表示放行；否则为 `error_code="NOT_READY_001"` 的阻断回执。
+    """
+    from common import circuit_breaker  # 延迟导入：避免 common 包内循环导入
+
+    if not circuit_breaker.is_enabled():
+        return None
+    context = current_context()
+    return circuit_breaker.guard_write_tool(
+        tool_name,
+        tenant_id=context.tenant_id,
+        user_id=context.session_id,
+    )
+
+
+def observe_tool_result(tool_name: str, *, ok: bool, detail: str = "", unknown: bool = False) -> None:
+    """把一次写工具的真实执行结果回报给熔断器（成功清零 / 失败计数）。
+
+    调用点在「闸门放行且工具确实执行过」之后：被 HITL 或熔断本身挡下的调用
+    **不**计入失败，否则一次人工复核就会把熔断器推向开启。
+
+    只读工具直接返回。回报失败一律吞掉异常并记日志：观测失败不能反过来把
+    已经成功的业务操作变成报错。
+
+    Args:
+        tool_name: 已执行的工具名。
+        ok: 是否成功（工具回执里没有 `error` 即视为成功）。
+        detail: 失败详情（进审计，禁止写入密钥/完整卡号）。
+        unknown: 回执状态未知（unknown / 超时未确认）。这类结果**不熔断**：失败
+            计数不动，只留待核痕迹——把「不知道」当成失败，会让一次网络抖动
+            直接锁死用户的写能力。
+    """
+    from common import circuit_breaker  # 延迟导入：避免 common 包内循环导入
+
+    capability = circuit_breaker.capability_for_tool(tool_name)
+    if capability is None:
+        return
+    if unknown:
+        # 待核分支：先让用户查询原操作，再决定是否重试；不计数、不开启。
+        logger.warning(
+            "写工具结果未知，置待核（不计入熔断）tool=%s capability=%s detail=%s",
+            tool_name,
+            capability,
+            detail[:200],
+        )
+        return
+    context = current_context()
+    try:
+        if ok:
+            circuit_breaker.record_success(
+                tenant_id=context.tenant_id,
+                user_id=context.session_id,
+                capability=capability,
+            )
+        else:
+            circuit_breaker.record_failure(
+                tenant_id=context.tenant_id,
+                user_id=context.session_id,
+                capability=capability,
+                reason_code=circuit_breaker.REASON_WRITE_TOOL_FAILURE,
+                detail=detail,
+            )
+    except Exception as exc:  # noqa: BLE001 - 观测失败不影响业务结果
+        logger.error("熔断观测写入失败 tool=%s capability=%s：%s", tool_name, capability, exc)
+
+
+def report_violation(reason_code: str, *, detail: str = "", capability: str | None = None) -> None:
+    """把一次越权 / 注入类安全事件报给熔断器（零容忍：立即开启）。
+
+    与 :func:`observe_tool_result` 的分工：那个记「工具失败了」，这个记「有人在
+    试探边界」。后者一次就够，不需要凑够 3 次。
+
+    Args:
+        reason_code: 原因码（``privilege_violation`` / ``prompt_injection``）。
+        detail: 事件详情（禁止写入密钥/完整卡号）。
+        capability: 指定能力；``None`` 表示影响全部写能力。
+    """
+    from common import circuit_breaker  # 延迟导入：避免 common 包内循环导入
+
+    context = current_context()
+    try:
+        circuit_breaker.record_violation(
+            reason_code,
+            tenant_id=context.tenant_id,
+            user_id=context.session_id,
+            detail=detail,
+            capability=capability,
+        )
+    except Exception as exc:  # noqa: BLE001 - 上报失败不影响既有拒绝结论
+        logger.error("熔断越权事件上报失败 reason=%s：%s", reason_code, exc)
+
+
 def intercept(tool_name: str, args: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
     """工具层闸门：在 ``tool.invoke(...)`` **之前**调用。
 
     判定顺序：
+
+    0. 写能力熔断（D01）：能力处于 `open` 时直接返回阻断回执，不建案；
 
     1. 闸门关闭（演示开关）或策略不命中 → 返回 ``None``（调用方继续执行）；
     2. 命中且存在同 ``(tenant, session, tool, args 指纹)`` 的已批准案件 →
@@ -1339,9 +1509,18 @@ def intercept(tool_name: str, args: Mapping[str, Any] | None = None) -> dict[str
         ``None`` 表示放行；字典表示阻断（含 ``hitl_required`` 或 fail-closed 的
         ``rejected``）。
     """
+    gated = breaker_gate(tool_name)
+    if gated is not None:
+        return gated
+    # L4 参数来源校验（D05）：在任何策略判定之前剥掉模型自带的确认类参数，
+    # 并**原地**改调用方 dict——各域 graph.py 随后就拿这个 dict 去 invoke。
+    from common import param_guard  # 延迟导入：避免 common 包内循环导入
+
+    arguments = dict(args or {}) if not isinstance(args, dict) else args
+    if param_guard.sanitize(tool_name, arguments):
+        logger.warning("工具参数含被丢弃的敏感键 tool=%s keys=%s", tool_name, sorted(arguments))
     if not is_enabled():
         return None
-    arguments = dict(args or {})
     hit = evaluate(tool_name, arguments)
     if hit is None:
         return None
@@ -1350,7 +1529,11 @@ def intercept(tool_name: str, args: Mapping[str, Any] | None = None) -> dict[str
         with session_scope() as session:
             outcome = _consume_approved_in(session, hit=hit, arguments=arguments, context=context)
             if outcome.matched:
-                return outcome.receipt
+                if outcome.receipt is not None:
+                    return outcome.receipt
+                # 已批准案件被消费：服务端为工具补上它自校验所需的确认标记。
+                _inject_confirmation(tool_name, arguments, context=context)
+                return None
     except Exception as exc:  # noqa: BLE001 - 闸门自身故障一律 fail-closed
         return _rejected_receipt(tool_name, str(exc))
     try:
@@ -1358,6 +1541,34 @@ def intercept(tool_name: str, args: Mapping[str, Any] | None = None) -> dict[str
         return _blocked_receipt(case, hit)
     except Exception as exc:  # noqa: BLE001 - 建案失败一律 fail-closed
         return _rejected_receipt(tool_name, str(exc))
+
+
+def _inject_confirmation(tool_name: str, arguments: dict[str, Any], *, context: HitlContext) -> None:
+    """放行写工具前，由**服务端**补上 ``confirmed`` / ``mfa_code`` 哨兵（D04）。
+
+    全仓库唯一写 ``confirmed=True`` 的地方。触发条件是「本次调用消费了一个已批准
+    案件」——也就是确认凭据已经由 :func:`_check_user_confirmation` 消费过；模型
+    参数里的同名字段早已被 :mod:`common.param_guard` 剥掉，伪造无从生效。
+
+    ``mfa_code`` 用固定哨兵 ``000000``：它不是任何真实验证码，只用于满足工具侧
+    ``len==6 and isdigit()`` 的形参校验。
+
+    Args:
+        tool_name: 已放行的工具名。
+        arguments: **原地修改**的工具参数字典。
+        context: 当前上下文（审计主体）。
+    """
+    arguments["confirmed"] = True
+    arguments["mfa_code"] = "000000"
+    from common import confirm  # 延迟导入：避免 common 包内循环导入
+
+    confirm.audit_quietly(
+        context.tenant_id,
+        action=confirm.AUDIT_GRANT_INJECTED,
+        tool_name=tool_name,
+        session_id=context.session_id or "default",
+        detail="已批准案件放行，服务端注入确认标记",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1648,20 +1859,76 @@ class DecisionOutcome:
 
 
 def _check_user_confirmation(case: HitlCase) -> None:
-    """批准前校验用户侧确认证据（人工批准不能代替用户确认）。
+    """批准前**消费**用户侧确认凭据（人工批准不能代替用户确认，D04）。
+
+    这是全链路唯一消费凭据的地方：建案时只登记候选，用户可以在案件等待期间
+    从容完成确认（黄=点确认即发凭据，红=短信验证码），审核员批准时才把凭据
+    置为已用并写回案件存档。凭据无效/过期/已用/跨会话一律拒绝，**绝不续签**
+    ——续签等于替用户确认。
 
     Args:
-        case: 案件。
+        case: 待批准的案件（已 attach 到当前事务，写回会随 flush 落库）。
 
     Raises:
-        UserConfirmationMissing: ``proposal["user_confirmation"]["mfa_ok"]`` 不为真。
+        UserConfirmationMissing: 没有可用凭据，或凭据校验不通过。
     """
-    confirmation = dict((case.proposal or {}).get("user_confirmation") or {})
-    if confirmation.get("mfa_ok") is not True:
-        raise UserConfirmationMissing(
-            f"案件 {case.public_id} 缺少用户侧确认（MFA）证据，人工批准不能代替用户确认",
-            data={"case_no": case.public_id, "user_confirmation": confirmation},
+    from common import confirm  # 延迟导入：common.confirm 反向依赖 common.hitl
+
+    proposal = dict(case.proposal or {})
+    confirmation = dict(proposal.get("user_confirmation") or {})
+    tool_name = str(proposal.get("tool_name") or "")
+    arguments = dict(proposal.get("args") or {})
+    grant_id = confirmation.get("grant_id")
+    if not grant_id:
+        # 建案时用户还没确认：现在补查一次（确认卡可能是在案件建好之后才点的）。
+        try:
+            candidate = confirm.session_grant(
+                tool_name=tool_name,
+                args=arguments,
+                session_id=case.session_id,
+                tenant_id=case.tenant_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - 查询失败按「无凭据」处理
+            logger.warning("案件 %s 查询确认凭据失败：%s", case.public_id, exc)
+            candidate = None
+        if candidate is None:
+            raise UserConfirmationMissing(
+                f"案件 {case.public_id} 缺少用户侧确认（MFA）证据，人工批准不能代替用户确认",
+                data={"case_no": case.public_id, "user_confirmation": confirmation},
+            )
+        grant_id = str(candidate.grant_id)
+    try:
+        consumed = confirm.consume_grant(
+            grant_id=grant_id,
+            tool_name=tool_name,
+            args=arguments,
+            tenant_id=case.tenant_id,
+            session_id=case.session_id,
         )
+    except confirm.ConfirmError as exc:
+        logger.warning("案件 %s 确认凭据被拒（%s）：%s", case.public_id, exc.error_code, exc)
+        raise UserConfirmationMissing(
+            f"确认凭据无效：{exc}",
+            data={
+                "case_no": case.public_id,
+                "reason": getattr(exc, "error_code", None),
+                "user_confirmation": confirmation,
+            },
+        ) from exc
+    updated = dict(confirmation)
+    updated.update(
+        {
+            "confirmed_by": "user",
+            "confirmed": True,
+            "mfa_ok": True,
+            "source": "confirmation_grant",
+            "grant_id": str(consumed.grant_id),
+            "consumed_at": iso(business_now()),
+        }
+    )
+    proposal["user_confirmation"] = updated
+    case.proposal = proposal
+    logger.info("案件 %s 已消费用户确认凭据 %s，允许人工批准", case.public_id, consumed.grant_id)
 
 
 def decide_case(
@@ -1918,6 +2185,11 @@ def cancel_case(
         _sweep_in(session, tenant_id=tenant)
         case = _load_case(session, case_no, tenant)
         if actor.role == "user" and (session_id or "")[:64] != case.session_id:
+            # 归属校验拒绝分支：一次就越过边界，按零容忍立即开启写能力熔断。
+            report_violation(
+                "privilege_violation",
+                detail=f"user 试图撤销他人会话的案件 {case.public_id}",
+            )
             raise RoleNotAllowed(
                 "无权撤销他人会话的案件",
                 data={"case_no": case.public_id, "session_id": case.session_id},
@@ -2077,6 +2349,9 @@ def serialize_case(
 
 
 __all__ = [
+    "breaker_gate",
+    "observe_tool_result",
+    "report_violation",
     "ACTION_APPROVE",
     "ACTION_CANCEL",
     "ACTION_CLAIM",

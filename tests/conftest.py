@@ -40,6 +40,13 @@ _TEST_DATA_DIR = tempfile.mkdtemp(prefix="bank_agent_tests_")
 os.environ.setdefault("BANK_AGENT_DATA_DIR", _TEST_DATA_DIR)
 atexit.register(shutil.rmtree, _TEST_DATA_DIR, ignore_errors=True)
 
+# 熔断状态（D01）默认落在 PostgreSQL。测试环境没有业务库，而熔断器是
+# **fail-closed** 的：读不到状态就按 open 处理，会让所有写工具闸门直接拒绝，
+# 既有单测全红。这里在导入期把存储切成进程内存实现（产品代码支持该开关），
+# 使熔断相关用例无需数据库即可覆盖状态机与闸门语义。
+os.environ.setdefault("BANK_AGENT_CIRCUIT_BREAKER_STORE", "memory")
+os.environ.setdefault("BANK_AGENT_CONFIRM_STORE", "memory")
+
 
 def _ensure_writable_pytest_temp_root() -> None:
     """保证 ``tmp_path`` 的根目录可写，必要时改用仓库内的临时目录。
@@ -308,6 +315,62 @@ def _isolated_managers(monkeypatch: pytest.MonkeyPatch) -> Any:
     model_manager.reset_managers()
     yield
     model_manager.reset_managers()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_circuit_breaker() -> Any:
+    """每个测试使用全新的熔断存储与空缓存，避免状态跨用例泄漏。
+
+    Yields:
+        无（仅为在测试前后夹住重置动作）。
+    """
+    from common import circuit_breaker
+
+    def _reset_state() -> None:
+        """重置引擎与缓存，并清空存储内的熔断行。
+
+        Returns:
+            无。
+        """
+        circuit_breaker.reset_engine()
+        circuit_breaker.clear_cache()
+        clear = getattr(circuit_breaker.get_store(), "clear", None)
+        if callable(clear):
+            clear()
+
+    _reset_state()
+    yield
+    _reset_state()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_confirmation_store() -> Any:
+    """每个测试使用全新的确认凭据存储，避免请求/凭据跨用例泄漏。
+
+    Yields:
+        无（仅为在测试前后重置存储）。
+    """
+
+    def _reset_state() -> None:
+        """重置确认凭据存储（memory 模式下即清空字典）。
+
+        Returns:
+            无。
+        """
+        try:
+            from common import confirm
+        except ImportError:  # 阶段 4 之前不存在该模块：跳过隔离
+            return
+
+        confirm.reset_engine()
+        confirm.configure_store(None)
+        clear = getattr(confirm.get_store(), "clear", None)
+        if callable(clear):
+            clear()
+
+    _reset_state()
+    yield
+    _reset_state()
 
 
 def _free_port() -> int:

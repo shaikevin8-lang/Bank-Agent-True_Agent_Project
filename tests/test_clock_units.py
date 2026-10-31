@@ -145,7 +145,7 @@ def test_frozen_stops_the_clock(store: MemoryClockStore, real: dict[str, Any]) -
 def test_business_time_is_naive_local(store: MemoryClockStore) -> None:
     """业务时间保持 naive local（与既有 ``datetime.now()`` 语义一致）。"""
     assert clock.business_now(TENANT).tzinfo is None
-    assert clock.business_today(TENANT) == BASE_REAL.date()
+    assert clock.business_today(TENANT) == clock.business_now(TENANT).date()
 
 
 # ---------------------------------------------------------------------------
@@ -278,9 +278,10 @@ def test_advance_zero_is_rejected(store: MemoryClockStore) -> None:
 
 def test_advance_backward_target_is_rejected(store: MemoryClockStore) -> None:
     """目标早于当前业务时间 → 400 ``clock_advance_backward``（回退请用 reset）。"""
-    clock.advance(to=BASE_REAL + timedelta(days=2), **ADMIN)
+    start = clock.business_now(TENANT)
+    clock.advance(to=start + timedelta(days=2), **ADMIN)
     with pytest.raises(clock.ClockError) as exc:
-        clock.advance(to=BASE_REAL + timedelta(days=1), **ADMIN)
+        clock.advance(to=start + timedelta(days=1), **ADMIN)
     assert _code(exc) == clock.ERROR_ADVANCE_BACKWARD
     assert exc.value.status == 400
 

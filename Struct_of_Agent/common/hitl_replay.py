@@ -33,10 +33,11 @@ logger = logging.getLogger(__name__)
 #: 工具名 → 工具实例（LangChain ``StructuredTool``）。进程内注册表，幂等覆盖。
 _REGISTRY: dict[str, Any] = {}
 
-#: 重放时额外注入的确认参数（人工批准已隐含确认）。
+#: 重放时由服务端补的确认参数。**只在**案件已消费过用户确认凭据时才补——
+#: 重放不再是「人工批准即隐含用户确认」，而是「用户确认过 + 人工批准」两件事都成立。
 _REPLAY_EXTRA: dict[str, Any] = {"confirmed": True}
-#: 无 MFA 记录时兜底使用的演示验证码（仅当工具确实声明了该参数才注入）。
-_FALLBACK_MFA = "123456"
+#: 已消费凭据的案件重放时补的 MFA 哨兵（工具侧只做 `len==6 and isdigit()` 形参校验）。
+_REPLAY_MFA_SENTINEL = "000000"
 
 
 def register(tool_name: str, tool_obj: Any) -> None:
@@ -122,7 +123,11 @@ def _declared_args(tool_obj: Any) -> set[str]:
 
 
 def build_call_args(proposal: Mapping[str, Any] | None) -> dict[str, Any]:
-    """从 proposal 构造重放参数（原样 + 确认标记）。
+    """从 proposal 构造重放参数（存档参数 + 确认凭据）。
+
+    D04 之后重放不再凭空补 ``confirmed=True``：只有案件存档里记录了**已消费**
+    的用户确认凭据（``source="confirmation_grant"`` 且有 ``consumed_at``）才补，
+    否则不补——工具侧自校验会拒绝执行，回执里体现为 ``execution.ok=false``。
 
     Args:
         proposal: 案件存档的提案（含 ``tool_name`` / ``args`` / ``user_confirmation``）。
@@ -133,10 +138,16 @@ def build_call_args(proposal: Mapping[str, Any] | None) -> dict[str, Any]:
     payload = dict(proposal or {})
     args = dict(payload.get("args") or {})
     confirmation = dict(payload.get("user_confirmation") or {})
-    args.setdefault("confirmed", True)
-    stored_mfa = str(args.get("mfa_code") or confirmation.get("mfa_code") or "")
-    if stored_mfa:
-        args.setdefault("mfa_code", stored_mfa)
+    consumed = (
+        confirmation.get("source") == "confirmation_grant"
+        and bool(confirmation.get("grant_id"))
+        and bool(confirmation.get("consumed_at"))
+    )
+    if consumed:
+        args.setdefault("confirmation_grant_id", str(confirmation["grant_id"]))
+        args.update({key: value for key, value in _REPLAY_EXTRA.items() if key not in args})
+        if confirmation.get("mfa_required"):
+            args.setdefault("mfa_code", _REPLAY_MFA_SENTINEL)
     return args
 
 
@@ -165,10 +176,6 @@ def replay(case: Any) -> dict[str, Any]:
     declared = _declared_args(tool_obj)
     if declared:
         call_args = {key: value for key, value in call_args.items() if key in declared}
-        if "confirmed" in declared:
-            call_args["confirmed"] = True
-        if "mfa_code" in declared:
-            call_args.setdefault("mfa_code", _FALLBACK_MFA)
     started: datetime = business_now()
     try:
         receipt = tool_obj.invoke(call_args)

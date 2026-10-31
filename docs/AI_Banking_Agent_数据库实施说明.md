@@ -268,3 +268,189 @@ $env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/p
 | 集成测试全部 skip | 没设 `BANK_AGENT_TEST_DB_URL`，或把它指向了业务库（必须指向维护库，如 `.../postgres`） |
 | `tmp_path` 报 `PermissionError` | 本机 `%TEMP%\pytest-of-<用户>` 被历史进程创建成不可读写；`tests/conftest.py` 会自动改用仓库内 `.pytest-tmp/`（已 gitignore） |
 | 导入后余额没变 | 默认不覆盖已存在账户余额；需要覆盖时加 `--apply-legacy-balance` |
+
+---
+
+## 10. V007 熔断表（`0007_circuit_breaker`）
+
+字段与约束的定义以设计文档 §10 为准，本节只说明**怎么执行、升级/回滚各做了什么、怎么验证**。
+
+### 10.1 迁移标识
+
+| 项 | 值 |
+| --- | --- |
+| 文件 | `migrations/versions/0007_circuit_breaker.py` |
+| `revision` | `0007_circuit_breaker` |
+| `down_revision` | `0006_web_user` |
+| 新增对象 | `app.circuit_breaker_state`、`app.circuit_breaker_event`、3 条索引（状态表 1 条 + 事件表 2 条）、1 个触发器函数、2 个触发器、4 条 RLS 策略（每表 2 条）、2 条表注释 |
+| 当前状态 | **已在演示库执行到 head**（`0007_circuit_breaker` 为最大版本） |
+
+### 10.2 升级行为（`upgrade()`）
+
+按以下顺序执行，全部在 Alembic 的单个迁移事务内：
+
+1. 建 `app.circuit_breaker_state`：16 列、主键 `pk_circuit_breaker_state` = `(tenant_id, subject_type, subject_id, capability)`、6 条 CHECK（`subject_type` / `state` / `capability` 白名单、`failure_count >= 0`、`open_level >= 0`、`version >= 1`）。
+2. 建索引 `ix_circuit_breaker_state_tenant_state` `(tenant_id, state)`。
+3. 建 `app.circuit_breaker_event`：12 列、主键 `pk_circuit_breaker_event` = `(id)`，`id` 默认 `gen_random_uuid()`。
+4. 建索引 `ix_circuit_breaker_event_tenant_created` `(tenant_id, created_at DESC)`、`ix_circuit_breaker_event_subject` `(tenant_id, capability, created_at DESC)`。
+5. 建只追加保护：函数 `app.reject_circuit_breaker_event_mutation()`（抛 `insufficient_privilege`）+ 触发器 `trg_circuit_breaker_event_append_only`（`BEFORE UPDATE OR DELETE`，行级）、`trg_circuit_breaker_event_no_truncate`（`BEFORE TRUNCATE`，语句级）。
+6. 两张表 `ENABLE` + `FORCE ROW LEVEL SECURITY`，各建 `tenant_isolation` 与 `seed_import` 两条策略。
+7. 写表注释（`COMMENT ON TABLE`）。
+
+**不建到 `app.tenant` 的外键**：安全状态要比业务行活得久，且 `db.reset`（按 `DELETE_ORDER` 逐表删除）与测试清库（`TRUNCATE ... CASCADE` 的显式表列表）不能因为外键顺序而失败。理由详见设计文档 §10.5。
+
+要点：
+
+- 只新增对象，**不修改 V001~V006 的任何列、约束或数据**，因此对既有 Web/R1/R2 运行时无影响。
+- 两表都开了 `FORCE RLS`：应用读写必须在事务内注入 `app.tenant_id`，否则读不到行、也写不进行（fail-closed）。
+- 事件表只追加：`INSERT` 是唯一合法写入；`UPDATE` / `DELETE` / `TRUNCATE` 在数据库层直接报错。
+
+### 10.3 回滚行为（`downgrade()`）
+
+顺序与升级相反，确保依赖对象先摘除：
+
+1. 两张表 `DROP POLICY IF EXISTS seed_import` / `tenant_isolation`，再 `NO FORCE` / `DISABLE ROW LEVEL SECURITY`。
+2. `DROP TRIGGER IF EXISTS trg_circuit_breaker_event_no_truncate`、`trg_circuit_breaker_event_append_only`。
+3. `DROP FUNCTION IF EXISTS app.reject_circuit_breaker_event_mutation()`。
+4. `DROP INDEX` 两条事件索引 → `DROP TABLE app.circuit_breaker_event`。
+5. `DROP INDEX ix_circuit_breaker_state_tenant_state` → `DROP TABLE app.circuit_breaker_state`。
+
+注意：
+
+- 回滚**会丢数据**：熔断状态与事件流（含 operator 复位记录）一并删除，属于「安全证据」的丢失。生产/赛后环境不应回滚到 `0006`，只在本地或临时库使用。
+- 回滚不影响 V001~V006 的对象，因此 `downgrade` 到 `0006_web_user` 之后应用仍能正常读写业务表；此时 `common/circuit_breaker.py` 的 `SqlStore` 会因为表不存在而读失败——按 fail-closed 口径，写路径会被按 `open` 拦截并写 `safety.circuit.read_failed` 审计。这正是「状态不可知即不安全」的设计效果，而不是 bug。
+- 回滚到 `base` 之前请先确认没有其他迁移依赖这两张表（当前无）。
+
+### 10.4 执行方式
+
+```powershell
+# 1) alembic 不读 .env：必须先把连接串注入环境变量
+$env:BANK_AGENT_DB_URL = 'postgresql+psycopg://bank:<口令>@127.0.0.1:5432/bank_agent'
+$env:BANK_AGENT_ENV    = 'demo'
+
+# 2) 升级到 head（推荐走仓库入口，口令不落命令行）
+python scripts/db.py upgrade            # = alembic upgrade head
+python scripts/db.py current            # 期望 current = head = 0007_circuit_breaker
+python scripts/db.py check              # 版本 + app/audit schema 校验
+
+# 3) 零漂移自检（模型与迁移必须一致）
+python -m alembic check                 # 期望：No new upgrade operations detected.
+```
+
+> **`alembic` 不读 `.env`**：仓库里没有任何 `dotenv` / `load_dotenv` 调用（见安全自评报告 §3）。`.env` 只有启动脚本会解析并注入子进程环境，直接执行 `alembic upgrade head` 时必须自己确保 `BANK_AGENT_DB_URL` 已在当前会话的环境变量里，否则会得到 `DatabaseConfigError`／`未配置数据库连接`。缺变量时**不会**回落到任何内置默认连接串。
+
+只升这一版：
+
+```powershell
+python -m alembic upgrade 0007_circuit_breaker
+python -m alembic downgrade 0006_web_user
+```
+
+### 10.5 验证 SQL
+
+以下均可在 `psql` 或任意 PG 客户端执行，只读为主（唯一写操作是负向验证 DELETE，预期失败）。
+
+**① 两表是否存在**
+
+```sql
+SELECT table_schema, table_name
+  FROM information_schema.tables
+ WHERE table_schema = 'app'
+   AND table_name IN ('circuit_breaker_state', 'circuit_breaker_event');
+-- 期望：2 行
+```
+
+**② 迁移版本是否为 0007**
+
+```sql
+SELECT version_num FROM public.alembic_version;
+-- 期望：0007_circuit_breaker
+```
+
+**③ 主键与 CHECK 约束**
+
+```sql
+SELECT conname, contype, pg_get_constraintdef(oid) AS definition
+  FROM pg_constraint
+ WHERE conrelid IN ('app.circuit_breaker_state'::regclass, 'app.circuit_breaker_event'::regclass)
+ ORDER BY conrelid::text, conname;
+-- 期望：pk_circuit_breaker_state、pk_circuit_breaker_event，
+--       以及 ck_circuit_breaker_state_{subject_type,state,capability,failure_count,open_level,version}
+```
+
+**④ 索引**
+
+```sql
+SELECT indexname FROM pg_indexes
+ WHERE schemaname = 'app' AND tablename LIKE 'circuit_breaker%'
+ ORDER BY indexname;
+-- 期望：ix_circuit_breaker_event_subject、ix_circuit_breaker_event_tenant_created、
+--       ix_circuit_breaker_state_tenant_state（+ 两个主键索引）
+```
+
+**⑤ RLS 是否 ENABLE + FORCE**
+
+```sql
+SELECT c.relname,
+       c.relrowsecurity      AS rls_enabled,
+       c.relforcerowsecurity AS rls_forced
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = 'app' AND c.relname LIKE 'circuit_breaker%';
+-- 期望：两行，rls_enabled = true 且 rls_forced = true
+```
+
+**⑥ RLS 策略**
+
+```sql
+SELECT tablename, policyname, cmd, qual, with_check
+  FROM pg_policies
+ WHERE schemaname = 'app' AND tablename LIKE 'circuit_breaker%'
+ ORDER BY tablename, policyname;
+-- 期望：每表两条（seed_import、tenant_isolation），共 4 行；
+--       tenant_isolation 的 qual 含 current_setting('app.tenant_id')
+```
+
+**⑦ 只追加触发器**
+
+```sql
+SELECT t.tgname, p.proname, pg_get_triggerdef(t.oid) AS definition
+  FROM pg_trigger t
+  JOIN pg_class c ON c.oid = t.tgrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  JOIN pg_proc p ON p.oid = t.tgfoid
+ WHERE n.nspname = 'app' AND c.relname = 'circuit_breaker_event' AND NOT t.tgisinternal
+ ORDER BY t.tgname;
+-- 期望：trg_circuit_breaker_event_append_only（BEFORE UPDATE OR DELETE ... FOR EACH ROW）
+--       trg_circuit_breaker_event_no_truncate（BEFORE TRUNCATE ... FOR EACH STATEMENT）
+--       两者都指向 app.reject_circuit_breaker_event_mutation()
+```
+
+**⑧ 负向验证：事件表拒绝改删**
+
+```sql
+DELETE FROM app.circuit_breaker_event WHERE false;
+-- 期望：ERROR: app.circuit_breaker_event is append-only (DELETE rejected)
+--       SQLSTATE 42501（insufficient_privilege）
+
+TRUNCATE app.circuit_breaker_event;
+-- 期望：同样被拒绝（append-only (TRUNCATE rejected)）
+```
+
+**⑨ 当前熔断状态快照（运维视角）**
+
+```sql
+BEGIN;
+SET LOCAL app.tenant_id = '<演示租户 UUID>';
+SELECT capability, state, failure_count, open_level, cooldown_until, reason_code, version
+  FROM app.circuit_breaker_state
+ ORDER BY capability;
+COMMIT;
+-- 注意：不注入 app.tenant_id 时因 FORCE RLS 查不到任何行（这是预期行为）
+```
+
+### 10.6 与 reset / 清库的关系
+
+- `db.reset` 按 `DELETE_ORDER` 的外键顺序清理 `app` 演示数据；熔断两表**不是 ORM 模型、也不在 `DELETE_ORDER` 里**，因此既不参与清理顺序、也不会被 reset 删除。
+- 事件表的 `TRUNCATE` 被触发器拒绝（同 `audit.event`），测试清库的显式表列表也不含这两张表：任何「清空事件流」的要求都必须走受控运维流程，不能作为常规 reset 的一部分。
+- 状态表的行会在 reset 后保留：这是刻意的——重置演示数据不应该顺手抹掉「某个能力正在 `open`」这个事实；需要恢复写能力请用 operator 复位端点（见 ADR-005 D8），而不是删行。

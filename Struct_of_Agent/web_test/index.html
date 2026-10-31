@@ -835,6 +835,101 @@
   .hitl-card.state-rejected,
   .hitl-card.state-expired { border-color: var(--warn-border); background: var(--warn-bg); }
 
+  /* ==================== 高风险操作确认卡（MFA，阶段 4 D04） ====================
+     与 .hitl-* 同一套视觉语言：红色只用于「需要用户亲自确认」的高风险操作，
+     配色全部取上面 :root 的 --risk-red / --bad-* 变量，不新增硬编码色值。
+     层级 59：压住复核抽屉（57）与时钟面板（58），但在登录门禁（90）之下。 */
+  .mfa-overlay {
+    position: fixed; inset: 0; z-index: 59;
+    display: flex; align-items: center; justify-content: center;
+    padding: 18px; background: var(--scrim);
+  }
+  .mfa-overlay[hidden] { display: none; }
+  .mfa-card {
+    width: 440px; max-width: 100%; max-height: 90vh; overflow-y: auto;
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--bad-border); border-top: 3px solid var(--risk-red);
+    border-radius: 14px; box-shadow: var(--shadow-float);
+    padding: 16px 18px 18px;
+  }
+  .mfa-head { display: flex; align-items: center; gap: 8px; }
+  .mfa-head h2 { font-size: 14.5px; font-weight: 600; }
+  .mfa-head .grow { flex: 1; }
+  .mfa-risk {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11.5px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--bad-border); background: var(--bad-bg); color: var(--bad-text);
+  }
+  .mfa-risk .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--risk-red); }
+  .mfa-risk.yellow {
+    border-color: var(--warn-border); background: var(--warn-bg); color: var(--warn-text);
+  }
+  .mfa-risk.yellow .dot { background: var(--risk-yellow); }
+  .mfa-risk.green {
+    border-color: var(--ok-border); background: var(--ok-bg); color: var(--ok-text);
+  }
+  .mfa-risk.green .dot { background: var(--risk-green); }
+  .mfa-sub { margin-top: 6px; font-size: 11.5px; line-height: 1.7; color: var(--text-sub); }
+  .mfa-summary {
+    margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--bg-soft, #f8fafc);
+    font-size: 12px; line-height: 1.8;
+  }
+  .mfa-row { display: flex; gap: 8px; }
+  .mfa-row .k { flex: 0 0 76px; color: var(--text-sub); }
+  .mfa-row .v { flex: 1; color: var(--text); word-break: break-all; }
+  .mfa-amount { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .mfa-irreversible {
+    margin-top: 9px; padding: 7px 10px; border-radius: 9px;
+    border: 1px solid var(--bad-border); background: var(--bad-bg); color: var(--bad-text);
+    font-size: 11.5px; font-weight: 600;
+  }
+  .mfa-irreversible[hidden] { display: none; }
+  .mfa-code-block { margin-top: 14px; }
+  .mfa-code-block[hidden] { display: none; }
+  .mfa-code-label { font-size: 11.5px; color: var(--text-sub); }
+  .mfa-code {
+    display: flex; gap: 8px; margin-top: 7px;
+  }
+  .mfa-code input {
+    width: 42px; height: 48px; text-align: center;
+    font-size: 20px; font-family: inherit; font-variant-numeric: tabular-nums;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel); color: var(--text);
+  }
+  .mfa-code input:focus-visible { outline: 2px solid var(--risk-red); outline-offset: 1px; }
+  .mfa-code input:disabled { opacity: .55; cursor: not-allowed; }
+  .mfa-msg {
+    margin-top: 10px; padding: 7px 10px; border-radius: 9px;
+    font-size: 11.5px; line-height: 1.6; background: var(--bad-bg);
+    border: 1px solid var(--bad-border); color: var(--bad-text);
+  }
+  .mfa-msg[hidden] { display: none; }
+  .mfa-msg.ok { background: var(--ok-bg); border-color: var(--ok-border); color: var(--ok-text); }
+  .mfa-msg.warn { background: var(--warn-bg); border-color: var(--warn-border); color: var(--warn-text); }
+  .mfa-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .mfa-actions .btn { padding: 7px 12px; font-size: 12.5px; }
+  .mfa-actions .btn.primary { background: var(--risk-red); border-color: var(--risk-red); color: #fff; }
+  .mfa-actions .btn[disabled] { opacity: .55; cursor: not-allowed; }
+  .mfa-resend {
+    margin-top: 8px; font-size: 11.5px; font-family: inherit;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text-sub);
+    padding: 5px 10px; border-radius: 999px; cursor: pointer;
+  }
+  .mfa-resend[disabled] { opacity: .6; cursor: not-allowed; }
+  .mfa-sms {
+    margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border);
+    font-size: 11.5px; color: var(--text-sub);
+  }
+  .mfa-sms[hidden] { display: none; }
+  .mfa-sms summary { cursor: pointer; }
+  .mfa-sms .mfa-sms-body { margin-top: 7px; line-height: 1.8; }
+  .mfa-sms code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; letter-spacing: 2px; color: var(--bad-text);
+  }
+  .mfa-foot { margin-top: 12px; font-size: 11px; color: var(--text-sub); }
+
   /* ==================== 登录 / 注册门禁 ====================
      未登录时全屏显示；层级压在所有浮层之上（设置面板 50 / 复核抽屉 57 /
      时钟面板 58 / 自绘确认框 60），保证门禁期间不会漏出主界面。
@@ -1041,6 +1136,9 @@
       <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
         人工复核<span class="count" id="hitlCount" hidden>0</span>
       </button>
+      <button type="button" class="hitl-entry" id="mfaEntry" aria-haspopup="dialog" aria-label="待确认的高风险操作">
+        高风险确认<span class="count" id="mfaCount" hidden>0</span>
+      </button>
       <!-- 当前登录账号 + 退出登录：未登录时都隐藏（由 applySessionUser 控制） -->
       <span class="auth-user" id="authUser" aria-label="当前登录账号" title="当前登录账号" hidden></span>
       <button type="button" class="auth-logout" id="logoutBtn" title="退出当前账号" hidden>退出登录</button>
@@ -1218,6 +1316,54 @@
       <div id="hitlDetail" hidden></div>
     </div>
   </aside>
+</div>
+
+<!-- ==================== 高风险操作确认卡（MFA，阶段 4 D04） ====================
+     红色动作在这里完成「用户亲自确认」：黄色动作点确认即生效，红色动作要 6 位短信码。
+     验证码只在本地输入、只发给 /api/v1/confirm/mfa，绝不进模型上下文。 -->
+<div class="mfa-overlay" id="mfaOverlay" hidden>
+  <section class="mfa-card" id="mfaCard" role="dialog" aria-modal="true"
+           aria-labelledby="mfaTitle" aria-describedby="mfaSub">
+    <div class="mfa-head">
+      <h2 id="mfaTitle">高风险操作确认</h2>
+      <span class="mfa-risk" id="mfaRisk"><span class="dot"></span><span id="mfaRiskText">高风险</span></span>
+      <span class="grow"></span>
+      <button type="button" class="icon-btn" id="mfaClose" aria-label="关闭确认卡" title="关闭">&#10005;</button>
+    </div>
+    <p class="mfa-sub" id="mfaSub">该操作需要你本人确认后才会执行。</p>
+    <div class="mfa-summary">
+      <div class="mfa-row"><span class="k">操作</span><span class="v" id="mfaTool">—</span></div>
+      <div class="mfa-row"><span class="k">对象</span><span class="v" id="mfaTarget">—</span></div>
+      <div class="mfa-row"><span class="k">金额</span><span class="v mfa-amount" id="mfaAmount">—</span></div>
+      <div class="mfa-row"><span class="k">确认编号</span><span class="v" id="mfaRequestNo">—</span></div>
+      <div class="mfa-irreversible" id="mfaIrreversible" hidden>此操作不可撤销，请确认无误后再继续</div>
+    </div>
+    <div class="mfa-code-block" id="mfaCodeBlock" hidden>
+      <div class="mfa-code-label">短信验证码（已发送至 <span id="mfaPhone">138****8888</span>）</div>
+      <div class="mfa-code" id="mfaCode" role="group" aria-label="6 位短信验证码">
+        <input type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="1" data-mfa-index="0" aria-label="验证码第 1 位">
+        <input type="text" inputmode="numeric" maxlength="1" data-mfa-index="1" aria-label="验证码第 2 位">
+        <input type="text" inputmode="numeric" maxlength="1" data-mfa-index="2" aria-label="验证码第 3 位">
+        <input type="text" inputmode="numeric" maxlength="1" data-mfa-index="3" aria-label="验证码第 4 位">
+        <input type="text" inputmode="numeric" maxlength="1" data-mfa-index="4" aria-label="验证码第 5 位">
+        <input type="text" inputmode="numeric" maxlength="1" data-mfa-index="5" aria-label="验证码第 6 位">
+      </div>
+    </div>
+    <div class="mfa-msg" id="mfaMsg" role="status" aria-live="polite" hidden></div>
+    <div class="mfa-actions">
+      <button type="button" class="btn primary" id="mfaSubmit">确认执行</button>
+      <button type="button" class="btn" id="mfaResend" hidden>重新发送（<span id="mfaResendLeft">60</span> 秒）</button>
+      <button type="button" class="btn" id="mfaCancel">取消</button>
+    </div>
+    <details class="mfa-sms" id="mfaSms" hidden>
+      <summary>模拟短信（仅演示者可见）</summary>
+      <div class="mfa-sms-body" id="mfaSmsBody">—</div>
+    </details>
+    <div class="mfa-foot">
+      验证码只在本页面输入，不进入模型上下文；确认凭据由服务端签发。
+      在聊天里发送「确认 123456」不会被当作确认。
+    </div>
+  </section>
 </div>
 
 <script>
@@ -3437,6 +3583,11 @@
   function hitlInfoFromPayload(data) {
     if (!data || typeof data !== 'object') return null;
     const candidates = [data, data.case, data.result, data.receipt, data.tool_result, data.data];
+    // 子 Agent 的统一契约把工具回执放在 result.tasks[] 里（HITL 回执就在这一层），
+    // 这里补进去：否则只有「模型复述回执」时才能靠正则兜底，confirmation 段会丢。
+    const nestedTasks = (data.result && typeof data.result === 'object' && Array.isArray(data.result.tasks))
+      ? data.result.tasks : [];
+    for (let t = 0; t < nestedTasks.length; t += 1) candidates.push(nestedTasks[t]);
     for (let i = 0; i < candidates.length; i += 1) {
       const item = candidates[i];
       if (!item || typeof item !== 'object') continue;
@@ -3447,7 +3598,9 @@
           reason_code: String(item.reason_code || ''),
           reason_text: String(item.reason_text || ''),
           risk_level: String(item.risk_level || ''),
-          expires_at: String(item.expires_at || '')
+          expires_at: String(item.expires_at || ''),
+          // 高风险写操作会带 confirmation 段：前端据此直接建确认请求（用户侧 MFA）
+          confirmation: (item.confirmation && typeof item.confirmation === 'object') ? item.confirmation : null
         };
       }
     }
@@ -3465,6 +3618,8 @@
     const info = hitlInfoFromPayload(data);
     if (info) {
       renderHitlCard(info);
+      // 需要用户本人确认（红色/黄色）时同时弹确认卡：MFA 不靠聊天文字完成
+      if (info.confirmation) openMfaCard(info.confirmation);
       return;
     }
     let raw = '';
@@ -3612,6 +3767,467 @@
     loadHitlQueue().catch(function () { /* 静默 */ });
   }
 
+  /* ==================== 高风险操作确认卡（MFA / 阶段 4 D04） ====================
+     职责边界：本模块只做「用户侧确认」——把工具名 + 参数交给服务端换一次性凭据；
+     真正的门禁、指纹比对、凭据消费全在 common/confirm.py 与 common/hitl.py。
+     因此前端不持有任何可被改写结论：grant 只由后端签发，聊天文字一律不算确认。 */
+
+  /** 工具名 → 中文名（未知工具显示原名，便于发现没有登记的新工具）。 */
+  const MFA_TOOL_LABEL = {
+    transfer: '转账', transfer_by_name: '转账', freeze_card: '冻结卡片', unfreeze_card: '解冻卡片',
+    set_transfer_limit: '修改转账限额', close_account: '销户', update_mobile: '修改手机号',
+    purchase_wealth: '理财申购', redeem_wealth: '理财赎回', cancel_subscription: '取消订阅',
+    issue_card: '开卡', activate_card: '激活卡片', reset_password: '重置密码', loan_apply: '贷款申请'
+  };
+  /** 不可逆动作：卡片上要显式警示。 */
+  const MFA_IRREVERSIBLE = {
+    transfer: true, transfer_by_name: true, freeze_card: true, close_account: true,
+    purchase_wealth: true, redeem_wealth: true, cancel_subscription: true, update_mobile: true,
+    issue_card: true, reset_password: true, loan_apply: true
+  };
+  /** 重发倒计时（与后端请求 TTL 180s 不冲突：60s 只是防连点）。 */
+  const MFA_RESEND_SECONDS = 60;
+
+  const mfaState = {
+    requestId: '',
+    toolName: '',
+    args: {},
+    mfaRequired: false,
+    riskLevel: '',
+    busy: false,
+    countdown: null,
+    closeTimer: null
+  };
+
+  function mfaEl(id) { return $(id); }
+
+  /** 工具名 → 中文标签。 */
+  function mfaToolLabel(toolName) {
+    const key = String(toolName || '');
+    return Object.prototype.hasOwnProperty.call(MFA_TOOL_LABEL, key) ? MFA_TOOL_LABEL[key] : (key || '未知操作');
+  }
+
+  /** 从参数里挑一个最能代表「操作对象」的字段（已由服务端脱敏）。 */
+  function mfaTargetOf(args) {
+    const source = args && typeof args === 'object' ? args : {};
+    const keys = ['payee', 'payee_name', 'to', 'name', 'target', 'card_no', 'account_no', 'merchant', 'phone', 'mobile'];
+    for (let i = 0; i < keys.length; i += 1) {
+      const value = source[keys[i]];
+      if (value !== undefined && value !== null && String(value).trim() !== '') return String(value);
+    }
+    return '—';
+  }
+
+  /** 金额统一成「12,000.00 元」；没有金额时显示破折号。 */
+  function mfaAmountOf(args) {
+    const source = args && typeof args === 'object' ? args : {};
+    let fen = null;
+    if (source.amount_fen !== undefined && source.amount_fen !== null && source.amount_fen !== '') {
+      fen = Number(source.amount_fen);
+    } else if (source.amount !== undefined && source.amount !== null && source.amount !== '') {
+      fen = Number(source.amount) * 100;
+    }
+    if (fen === null || !isFinite(fen)) return '—';
+    const yuan = (fen / 100).toFixed(2);
+    const parts = yuan.split('.');
+    parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return parts.join('.') + ' 元';
+  }
+
+  function mfaShowMsg(text, kind) {
+    const el = mfaEl('mfaMsg');
+    if (!el) return;
+    if (!text) { el.hidden = true; el.textContent = ''; return; }
+    el.hidden = false;
+    el.textContent = text;
+    el.className = 'mfa-msg' + (kind ? ' ' + kind : '');
+  }
+
+  function mfaCodeInputs() {
+    const box = mfaEl('mfaCode');
+    if (!box) return [];
+    return Array.prototype.slice.call(box.querySelectorAll('input[data-mfa-index]'));
+  }
+
+  function mfaClearCode() {
+    mfaCodeInputs().forEach(function (input) { input.value = ''; });
+  }
+
+  function mfaReadCode() {
+    return mfaCodeInputs().map(function (input) { return input.value; }).join('');
+  }
+
+  function mfaFocusFirst() {
+    const inputs = mfaCodeInputs();
+    if (inputs.length) inputs[0].focus();
+  }
+
+  function mfaSetBusy(busy) {
+    mfaState.busy = !!busy;
+    const submit = mfaEl('mfaSubmit');
+    if (submit) {
+      submit.disabled = !!busy;
+      submit.textContent = busy ? '处理中…' : '确认执行';
+    }
+    mfaCodeInputs().forEach(function (input) { input.disabled = !!busy; });
+  }
+
+  /** 把「确认请求」的返回体渲染到卡片上（红色=待输码，黄色=已签发凭据）。 */
+  function mfaRenderRequest(data) {
+    const payload = data && typeof data === 'object' ? data : {};
+    mfaState.requestId = String(payload.request_id || '');
+    mfaState.mfaRequired = payload.mfa_required === true;
+    mfaSetBusy(false);
+    mfaState.riskLevel = String(payload.risk_level || mfaState.riskLevel || 'red');
+    const risk = mfaEl('mfaRisk');
+    if (risk) {
+      risk.className = 'mfa-risk' + (mfaState.riskLevel === 'yellow' ? ' yellow' : (mfaState.riskLevel === 'green' ? ' green' : ''));
+      const label = mfaEl('mfaRiskText');
+      if (label) label.textContent = mfaState.riskLevel === 'yellow' ? '中风险' : (mfaState.riskLevel === 'green' ? '低风险' : '高风险');
+    }
+    const requestNo = mfaEl('mfaRequestNo');
+    if (requestNo) requestNo.textContent = mfaState.requestId ? mfaState.requestId.slice(0, 8) + '…' : '—';
+    const phone = mfaEl('mfaPhone');
+    if (phone && (payload.phone_mask || payload.phone)) phone.textContent = payload.phone_mask || payload.phone;
+    const codeBlock = mfaEl('mfaCodeBlock');
+    if (codeBlock) codeBlock.hidden = !mfaState.mfaRequired;
+    const resend = mfaEl('mfaResend');
+    if (resend) resend.hidden = !mfaState.mfaRequired;
+    if (mfaState.mfaRequired) {
+      mfaFocusFirst();
+      mfaStartCountdown();
+      mfaLoadDemoSms(mfaState.requestId);
+      mfaShowMsg('验证码已发送，请在 3 分钟内输入。', '');
+    } else {
+      // 黄色动作：服务端已签发凭据，提示「已确认」即可（不需要用户再输码）。
+      mfaShowMsg('已确认，正在执行…', 'ok');
+      mfaFinishAndClose(900);
+    }
+  }
+
+  /**
+   * 打开确认卡：先按（工具名 + 参数）向服务端建确认请求，再按返回的状态渲染。
+   * 参数来自 hitl_required 回执里的 ``confirmation`` 段（前端拿不到工具调用参数）。
+   */
+  async function openMfaCard(confirmation) {
+    const info = confirmation && typeof confirmation === 'object' ? confirmation : {};
+    const toolName = String(info.tool_name || '');
+    if (!toolName) return null;
+    mfaState.toolName = toolName;
+    mfaState.args = (info.args && typeof info.args === 'object') ? info.args : {};
+    mfaState.riskLevel = String(info.risk_level || 'red');
+    mfaState.mfaRequired = info.mfa_required === true;
+    mfaState.requestId = '';
+
+    const overlay = mfaEl('mfaOverlay');
+    if (overlay) overlay.hidden = false;
+    const tool = mfaEl('mfaTool');
+    if (tool) tool.textContent = mfaToolLabel(toolName) + '（' + toolName + '）';
+    const target = mfaEl('mfaTarget');
+    if (target) target.textContent = mfaTargetOf(mfaState.args);
+    const amount = mfaEl('mfaAmount');
+    if (amount) amount.textContent = mfaAmountOf(mfaState.args);
+    const irreversible = mfaEl('mfaIrreversible');
+    if (irreversible) irreversible.hidden = !Object.prototype.hasOwnProperty.call(MFA_IRREVERSIBLE, toolName);
+    const sub = mfaEl('mfaSub');
+    if (sub) sub.textContent = mfaState.mfaRequired
+      ? '这是高风险操作，需要你输入短信验证码确认后才会执行。'
+      : '该操作经风控判定需要你本人确认一次，点「确认执行」即生效。';
+    mfaClearCode();
+    mfaShowMsg('正在创建确认请求…', '');
+    mfaSetBusy(true);
+
+    try {
+      const sid = await ensureSession();
+      const body = { tool_name: toolName, args: mfaState.args, session_id: sid || '' };
+      const res = await callApi('/api/v1/confirm/request', 'POST', body, { timeoutMs: 8000 });
+      if (!res || res.ok !== true) {
+        mfaShowMsg((res && res.message) || '创建确认请求失败，请稍后重试。', 'warn');
+        mfaSetBusy(false);
+        return null;
+      }
+      mfaRenderRequest(res.data);
+      return res.data;
+    } catch (err) {
+      mfaShowMsg('网络异常，确认请求未创建成功。', 'warn');
+      mfaSetBusy(false);
+      return null;
+    }
+  }
+
+  /** 已有请求（比如刷新页面后从 ``/pending`` 恢复）：不重复建请求，直接渲染。 */
+  function attachMfaRequest(item) {
+    const payload = item && typeof item === 'object' ? item : {};
+    const toolName = String(payload.tool_name || '');
+    if (!toolName) return;
+    mfaState.toolName = toolName;
+    mfaState.args = (payload.args && typeof payload.args === 'object') ? payload.args
+      : ((payload.args_redacted && typeof payload.args_redacted === 'object') ? payload.args_redacted
+        : ((payload.args_summary && typeof payload.args_summary === 'object') ? payload.args_summary : {}));
+    mfaState.riskLevel = String(payload.risk_level || 'red');
+    mfaState.mfaRequired = payload.mfa_required === true;
+    mfaState.requestId = String(payload.request_id || '');
+    const overlay = mfaEl('mfaOverlay');
+    if (overlay) overlay.hidden = false;
+    const tool = mfaEl('mfaTool');
+    if (tool) tool.textContent = mfaToolLabel(toolName) + '（' + toolName + '）';
+    const target = mfaEl('mfaTarget');
+    if (target) target.textContent = mfaTargetOf(mfaState.args);
+    const amount = mfaEl('mfaAmount');
+    if (amount) amount.textContent = mfaAmountOf(mfaState.args);
+    const irreversible = mfaEl('mfaIrreversible');
+    if (irreversible) irreversible.hidden = !Object.prototype.hasOwnProperty.call(MFA_IRREVERSIBLE, toolName);
+    mfaClearCode();
+    mfaSetBusy(false);
+    if (mfaState.mfaRequired) {
+      const codeBlock = mfaEl('mfaCodeBlock');
+      if (codeBlock) codeBlock.hidden = false;
+      const resend = mfaEl('mfaResend');
+      if (resend) resend.hidden = false;
+      mfaShowMsg('验证码已发送，请在 3 分钟内输入。', '');
+      mfaStartCountdown();
+      mfaLoadDemoSms(mfaState.requestId);
+      mfaFocusFirst();
+    } else {
+      mfaShowMsg('该操作已确认，可直接执行。', 'ok');
+    }
+  }
+
+  function mfaStopCountdown() {
+    if (mfaState.countdown !== null) {
+      clearInterval(mfaState.countdown);
+      mfaState.countdown = null;
+    }
+  }
+
+  function mfaStartCountdown() {
+    mfaStopCountdown();
+    const left = mfaEl('mfaResendLeft');
+    const button = mfaEl('mfaResend');
+    let seconds = MFA_RESEND_SECONDS;
+    if (left) left.textContent = String(seconds);
+    if (button) button.disabled = true;
+    mfaState.countdown = setInterval(function () {
+      seconds -= 1;
+      if (left) left.textContent = String(Math.max(0, seconds));
+      if (seconds > 0) return;
+      mfaStopCountdown();
+      if (button) button.disabled = false;
+    }, 1000);
+  }
+
+  /** 演示者可见的「模拟短信」面板：普通用户角色下永远不请求该接口。 */
+  async function mfaLoadDemoSms(requestId) {
+    const box = mfaEl('mfaSms');
+    const body = mfaEl('mfaSmsBody');
+    if (!box || !body) return;
+    const demoRole = currentRole === 'risk_reviewer' || currentRole === 'ops_admin';
+    box.hidden = !demoRole;
+    if (!demoRole || !requestId) return;
+    body.textContent = '读取中…';
+    try {
+      const res = await callApi('/api/v1/confirm/sms/' + encodeURIComponent(requestId), 'GET', undefined, { timeoutMs: 5000 });
+      if (!res || res.ok !== true) {
+        body.textContent = (res && res.message) || '读取模拟短信失败';
+        return;
+      }
+      const data = res.data || {};
+      body.textContent = '【银行】验证码 ' + String(data.code || '') + '，3 分钟内有效（仅演示面板可见）';
+    } catch (err) {
+      body.textContent = '读取模拟短信失败';
+    }
+  }
+
+  /** 提交验证码 → 换一次性凭据。失败按后端 data.reason 给出可读提示。 */
+  async function mfaSubmitCode() {
+    if (mfaState.busy) return;
+    if (!mfaState.requestId) {
+      mfaShowMsg('确认请求尚未创建成功，请关闭后重试。', 'warn');
+      return;
+    }
+    const code = mfaReadCode();
+    if (!/^\d{6}$/.test(code)) {
+      mfaShowMsg('请输入 6 位数字验证码。', 'warn');
+      mfaFocusFirst();
+      return;
+    }
+    mfaSetBusy(true);
+    mfaShowMsg('正在校验验证码…', '');
+    try {
+      const res = await callApi('/api/v1/confirm/mfa', 'POST', {
+        request_id: mfaState.requestId,
+        code: code
+      }, { timeoutMs: 8000 });
+      if (res && res.ok === true) {
+        mfaShowMsg('验证通过，已确认。正在执行…', 'ok');
+        mfaFinishAndClose(900);
+        return;
+      }
+      const data = (res && res.data) || {};
+      if (data.reason === 'invalid_code') {
+        // 先解除禁用再聚焦：输入格在提交期间是 disabled 的，disabled 元素无法 focus
+        mfaSetBusy(false);
+        const left = typeof data.attempts_left === 'number' ? data.attempts_left : null;
+        mfaShowMsg(left === null ? '验证码错误，请重新输入。' : '验证码错误，还可尝试 ' + left + ' 次。', 'warn');
+        mfaClearCode();
+        mfaFocusFirst();
+      } else if (data.reason === 'attempts_exceeded') {
+        mfaSetBusy(false);
+        mfaShowMsg('验证码错误次数过多，请重新发送或关闭后重新发起确认。', 'warn');
+        mfaCodeInputs().forEach(function (input) { input.disabled = true; });
+        const resend = mfaEl('mfaResend');
+        if (resend) resend.disabled = false;
+      } else {
+        mfaSetBusy(false);
+        mfaShowMsg((res && res.message) || '验证失败，请稍后重试。', 'warn');
+      }
+    } catch (err) {
+      mfaShowMsg('网络异常，验证码未提交成功。', 'warn');
+      mfaSetBusy(false);
+    }
+  }
+
+  /** 重发：重新建一条确认请求（旧请求由服务端按过期清理），并重置倒计时。 */
+  async function mfaResend() {
+    if (mfaState.busy || !mfaState.toolName) return;
+    mfaShowMsg('正在重新发送验证码…', '');
+    const data = await openMfaCard({
+      tool_name: mfaState.toolName,
+      args: mfaState.args,
+      risk_level: mfaState.riskLevel,
+      mfa_required: true
+    });
+    if (!data) mfaShowMsg('重新发送失败，请稍后重试。', 'warn');
+  }
+
+  /** 关闭卡片（并清掉所有计时器，避免后台还在跑）。 */
+  function closeMfaCard() {
+    mfaStopCountdown();
+    if (mfaState.closeTimer !== null) {
+      clearTimeout(mfaState.closeTimer);
+      mfaState.closeTimer = null;
+    }
+    const overlay = mfaEl('mfaOverlay');
+    if (overlay) overlay.hidden = true;
+    mfaState.requestId = '';
+    mfaState.toolName = '';
+    mfaState.args = {};
+    mfaState.busy = false;
+    mfaClearCode();
+    mfaShowMsg('', '');
+    const sms = mfaEl('mfaSms');
+    if (sms) sms.hidden = true;
+  }
+
+  /** 成功后的收尾：留 0.9s 给用户看一眼「已确认」，再关闭并提示去重试操作。 */
+  function mfaFinishAndClose(delayMs) {
+    if (mfaState.closeTimer !== null) clearTimeout(mfaState.closeTimer);
+    mfaState.closeTimer = setTimeout(function () {
+      mfaState.closeTimer = null;
+      closeMfaCard();
+      addMessage('assistant', '已完成本人确认。请重新发起刚才的操作，服务端会校验确认凭据后执行。');
+    }, delayMs);
+  }
+
+  /** 聊天里出现「确认 123456」：不当确认、不回显验证码，只给引导。 */
+  function isChatMfaAttempt(text) {
+    return /^(确认|确定|confirm)\s*[:：]?\s*\d{6}$/i.test(String(text || '').trim());
+  }
+
+  function interceptChatMfa() {
+    addMessage('user', '（验证码已隐藏）');
+    addMessage('assistant', '验证码不能通过聊天发送，也不会被当作确认。请在「高风险操作确认」卡片里输入；如果卡片已关闭，点顶栏的「高风险确认」重新打开。');
+    openPendingMfa().catch(function () { /* 静默 */ });
+  }
+
+  /** 顶栏入口 / 聊天引导：把当前会话里待确认的请求恢复成卡片。 */
+  async function openPendingMfa() {
+    const sid = currentSessionId || '';
+    if (!sid) {
+      addMessage('assistant', '当前还没有会话，请先发起一次高风险操作。');
+      return;
+    }
+    const res = await callApi('/api/v1/confirm/pending?session_id=' + encodeURIComponent(sid), 'GET', undefined, { timeoutMs: 5000 });
+    if (!res || res.ok !== true) {
+      addMessage('assistant', (res && res.message) || '查询待确认操作失败。');
+      return;
+    }
+    const items = (res.data && res.data.items) || [];
+    if (!items.length) {
+      addMessage('assistant', '当前会话没有待确认的高风险操作。');
+      return;
+    }
+    attachMfaRequest(items[0]);
+  }
+
+  /** 事件绑定只做一次（退出再登录不重复绑）。 */
+  function initMfaCard() {
+    const overlay = mfaEl('mfaOverlay');
+    if (!overlay) return;
+    const close = mfaEl('mfaClose');
+    if (close) close.addEventListener('click', closeMfaCard);
+    const cancel = mfaEl('mfaCancel');
+    if (cancel) cancel.addEventListener('click', closeMfaCard);
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) closeMfaCard();
+    });
+    const submit = mfaEl('mfaSubmit');
+    if (submit) submit.addEventListener('click', function () { mfaSubmitCode(); });
+    const resend = mfaEl('mfaResend');
+    if (resend) resend.addEventListener('click', function () { mfaResend(); });
+    const entry = mfaEl('mfaEntry');
+    if (entry) entry.addEventListener('click', function () { openPendingMfa().catch(function () { /* 静默 */ }); });
+
+    // 6 格输入：只收数字；粘贴自动分发；退格/方向键可回退
+    const inputs = mfaCodeInputs();
+    inputs.forEach(function (input, index) {
+      input.addEventListener('input', function () {
+        const digits = String(input.value || '').replace(/\D/g, '');
+        if (!digits) { input.value = ''; return; }
+        const chars = digits.split('');
+        input.value = chars[0];
+        let next = index + 1;
+        for (let i = 1; i < chars.length && next < inputs.length; i += 1, next += 1) {
+          inputs[next].value = chars[i];
+        }
+        if (next < inputs.length) inputs[next].focus();
+        else inputs[inputs.length - 1].focus();
+      });
+      input.addEventListener('keydown', function (event) {
+        if (event.key === 'Backspace' && !input.value && index > 0) {
+          event.preventDefault();
+          inputs[index - 1].value = '';
+          inputs[index - 1].focus();
+        } else if (event.key === 'ArrowLeft' && index > 0) {
+          event.preventDefault();
+          inputs[index - 1].focus();
+        } else if (event.key === 'ArrowRight' && index < inputs.length - 1) {
+          event.preventDefault();
+          inputs[index + 1].focus();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          mfaSubmitCode();
+        }
+      });
+      input.addEventListener('paste', function (event) {
+        const text = (event.clipboardData && event.clipboardData.getData('text')) || '';
+        const digits = text.replace(/\D/g, '').slice(0, 6);
+        if (!digits) return;
+        event.preventDefault();
+        for (let i = 0; i < inputs.length; i += 1) inputs[i].value = digits[i] || '';
+        const focusIndex = Math.min(digits.length, inputs.length - 1);
+        inputs[focusIndex].focus();
+      });
+    });
+
+    document.addEventListener('keydown', function (event) {
+      if (event.key !== 'Escape') return;
+      if (overlay.hidden) return;
+      event.preventDefault();
+      closeMfaCard();
+    });
+  }
+
   function initClockAndHitl() {
     const roleSel = $('roleSelect');
     if (roleSel) {
@@ -3654,6 +4270,7 @@
     bind('clockReset', clockReset);
 
     bind('hitlEntry', function () { openHitlDrawer(''); });
+    initMfaCard();
     bind('hitlClose', closeHitlDrawer);
     bind('hitlRefresh', function () { loadHitlQueue().catch(function () { /* 静默 */ }); });
     bind('hitlBack', function () {
@@ -4077,6 +4694,13 @@
   async function send(text) {
     text = (text || inputEl.value).trim();
     if (!text || sendBtn.disabled) return;
+    // 聊天里发「确认 123456」：验证码不进模型上下文，也不当作确认，只给引导
+    if (isChatMfaAttempt(text)) {
+      inputEl.value = '';
+      autoResize();
+      interceptChatMfa();
+      return;
+    }
     sendBtn.disabled = true;
 
     let typing = null;

@@ -31,6 +31,7 @@ from .middleware.content_moderation import ContentModerationMiddleware
 from .persistence import ConversationStore, TransactionStore
 from .state import BillState
 from .tools.bill_tools import build_bill_tools
+from .tools.sandbox_tools import build_sandbox_tools
 
 
 class BillAgent:
@@ -83,7 +84,8 @@ class BillAgent:
             conversation_store = conversation_store or ConversationStore(database=database)
         self.store = store
         self.conversation_store = conversation_store
-        self._tools = build_bill_tools(self.model, self.store)
+        # 阶段2：追加「受限代码沙箱」计算工具（自定义统计口径，结果标注「沙箱计算」）
+        self._tools = build_bill_tools(self.model, self.store) + build_sandbox_tools(self.store)
         self.graph = build_graph(self.model, self.moderator, self._tools)
 
     def _default_model(self) -> ChatModel:

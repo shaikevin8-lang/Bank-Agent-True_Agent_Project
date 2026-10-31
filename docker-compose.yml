@@ -1,0 +1,24 @@
+# 阶段2 受限代码沙箱编排。
+# 只包含 code-sandbox 服务：不发布宿主端口，仅挂在 internal 网络上，
+# 因此沙箱既不能访问外部网络，也无法被容器外部直接访问。
+services:
+  code-sandbox:
+    build: ./docker/code-sandbox
+    image: bank-agent/code-sandbox:0.1.0
+    container_name: bank-agent-code-sandbox
+    environment: []
+    read_only: true
+    user: "65534:65534"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs: ["/tmp:size=8m,noexec,nosuid"]
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 32
+    networks: [sandbox_net]
+    # 不发布端口
+
+networks:
+  sandbox_net:
+    driver: bridge
+    internal: true

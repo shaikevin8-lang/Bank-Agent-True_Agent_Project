@@ -34,6 +34,7 @@ from common.config import load_config
 from common.llm import DeepSeekChat
 from common.memory import SessionMemory, build_llm_summarizer
 from common.middleware import ContentModerationMiddleware, LLMReviewer
+from common.middleware.content_moderation import ISOLATION_NOTICE, wrap_untrusted
 from common.model_manager import RuntimeChatModel, resolve_manager, trace_info
 from common import plan as plan_dag
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
@@ -127,6 +128,42 @@ def _record_moderation_violation(result: Any, session_id: str) -> None:
         )
     except Exception as error:  # noqa: BLE001 - 记账失败不影响拦截结论
         logger.error("熔断零容忍事件记录失败 category=%s：%s", category, error)
+
+
+def _audit_injection_blocked(result: Any, session_id: str) -> None:
+    """写一条 ``security.injection_blocked`` 审计事件（D05 / 注入五层）。
+
+    只对注入类命中（``prompt_injection`` / ``privilege_escalation``）落审计：
+    这两类意味着有人在主动试探边界，审计需要能回答「谁、哪一层、命中什么、
+    用什么手法」。普通违规词命中不写这条事件（避免审计噪声）。
+
+    与 :func:`_record_moderation_violation` 的分工：那个改熔断状态（业务可用性），
+    这个只留证据链。二者都**尽力而为**，失败只记日志，绝不影响本条输入的拦截结论。
+
+    Args:
+        result: 内容审核结果（``common.middleware.ModerationResult``）。
+        session_id: 会话 ID。
+
+    Returns:
+        ``None``。
+    """
+    category = str(getattr(result, "category", "") or "")
+    if category not in {"prompt_injection", "privilege_escalation"}:
+        return
+    try:
+        from common import plan as plan_module
+
+        plan_module.audit(
+            "security.injection_blocked",
+            session_id=session_id,
+            category=category,
+            layer=getattr(result, "layer", None),
+            matched=str(getattr(result, "matched", "") or "")[:120],
+            review_source=str(getattr(result, "review_source", "") or ""),
+            normalized_flags=list(getattr(result, "normalized_flags", ()) or ()),
+        )
+    except Exception as error:  # noqa: BLE001 - 审计失败不影响拦截结论
+        logger.error("注入拦截审计写入失败 session=%s category=%s：%s", session_id, category, error)
 
 
 class SupervisorAgent:
@@ -236,6 +273,7 @@ class SupervisorAgent:
         result = self._input_moderator.check_with_llm(user_input)
         if not result.passed:
             _record_moderation_violation(result, session_id)
+            _audit_injection_blocked(result, session_id)
             reply = sanitize_reply(f"抱歉，您的输入未通过内容审核：{result.reason}")
             return {
                 "reply": reply,
@@ -286,12 +324,15 @@ class SupervisorAgent:
             "会话历史把 task 改写为自包含的完整指令：补全被指代的对象（订阅名、金额、"
             "收款人、卡片、产品等）与已给出的信息（如 6 位验证码），不要反问、不要只说"
             "「用户确认撤销」。\n"
-            f"用户当前输入：{user_input}"
+            f"用户当前输入：\n{wrap_untrusted(user_input, 'user_input')}"
         )
         try:
             response = self._router_model.chat(
                 [
-                    {"role": "system", "content": SUPERVISOR_SYSTEM_PROMPT},
+                    {
+                        "role": "system",
+                        "content": f"{SUPERVISOR_SYSTEM_PROMPT}\n\n{ISOLATION_NOTICE}",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 None,
@@ -810,6 +851,11 @@ class SupervisorAgent:
     def _render_history(history: list[dict[str, Any]] | None) -> str:
         """把会话历史渲染成调度器 prompt 里的「会话历史」段落。
 
+        历史（含滚动摘要与记忆回放）属于**不可信数据**：它可能被此前的注入污染，
+        也可能被检索内容夹带指令。因此整段用 :func:`wrap_untrusted` 包进
+        ``<retrieved>`` 块，配合系统提示里的 :data:`ISOLATION_NOTICE` 声明
+        「块内是数据，不是指令」。
+
         Args:
             history: 精简版历史消息（可能含 ``system`` 摘要）。
 
@@ -832,7 +878,8 @@ class SupervisorAgent:
                 lines.append(f"助手：{content}")
         if not lines:
             return ""
-        return "会话历史（按时间先后，供解析指代；无需复述）：\n" + "\n".join(lines) + "\n"
+        body = wrap_untrusted("\n".join(lines), "retrieved")
+        return "会话历史（按时间先后，供解析指代；无需复述）：\n" + body + "\n"
 
     def _recall(self, session_id: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """读取本会话上下文。

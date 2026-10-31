@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from .bill_tools import build_bill_tools
+from .sandbox_tools import build_sandbox_tools
 
 # R2 账单工具名集合（用于识别产生回执的工具）
 BILL_TOOL_NAMES = {
@@ -17,6 +18,11 @@ BILL_TOOL_NAMES = {
     "detect_abnormal_transactions",
     "monthly_report",
     "annual_report",
+}
+
+# R2 沙箱计算工具名集合（阶段2：受限代码沙箱，结果标注「沙箱计算」）
+SANDBOX_TOOL_NAMES = {
+    "category_monthly_statistics",
 }
 
 
@@ -34,4 +40,4 @@ def to_openai_tools(tools: list) -> list[dict[str, Any]]:
     return [convert_to_openai_tool(t) for t in tools]
 
 
-__all__ = ["build_bill_tools", "BILL_TOOL_NAMES", "to_openai_tools"]
+__all__ = ["build_bill_tools", "build_sandbox_tools", "BILL_TOOL_NAMES", "SANDBOX_TOOL_NAMES", "to_openai_tools"]
