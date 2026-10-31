@@ -12,6 +12,17 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+import pytest
+
+# 测试专用依赖：langgraph 的 PostgreSQL checkpointer 只被本文件的 SDK 契约用例用到，
+# 生产代码没有任何引用（全仓搜 PostgresSaver 零命中），所以它不在 requirements.txt 里。
+# 未安装时整文件跳过，而不是让 pytest 在收集阶段 ImportError 中断——
+# 否则一条可选依赖会让其余 1400+ 用例一个都跑不了。
+pytest.importorskip(
+    "langgraph.checkpoint.postgres",
+    reason="缺少测试专用依赖 langgraph-checkpoint-postgres（生产不引用，可选安装）",
+)
+
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
