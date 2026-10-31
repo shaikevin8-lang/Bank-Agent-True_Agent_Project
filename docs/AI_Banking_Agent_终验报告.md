@@ -171,7 +171,7 @@
 
 ### 6.1 打包
 
-`scripts/package_release.ps1`（本轮新增）：以 `git archive HEAD` 导出**仅被跟踪**的文件（天然排除 `.venv`/`*.db`/`node_modules`/`.env`），再收 `docs/deliverables/` 下的视频/PPT/PDF（本轮为空，记「按计划跳过」），写 `MANIFEST.txt`（提交哈希、文件数、缺失项），压成 `dist/bank-agent-legacy-<tag>.zip`。实测结果回填于开发文档附录 D 进度表同批提交。
+`scripts/package_release.ps1`（本轮新增）：以 `git archive HEAD` 导出**仅被跟踪**的文件（天然排除 `.venv`/`*.db`/`node_modules`/`.env`），再收 `docs/deliverables/` 下的视频/PPT/PDF（本轮为空，记「按计划跳过」），写 `MANIFEST.txt`（提交哈希、文件数、缺失项），压成 `dist/bank-agent-legacy-<tag>.zip`。本轮（复审修复后）实测：`dist/bank-agent-legacy-reviewfix.zip`，**3 488 970 字节 / 3.33 MB**，sha256 `088E96E7E7B34A135D7B1F1E988A3E3F7E0116DEBC8D5EAE928420BE72F067C7`，包内 **412** 条目（410 个仓库文件 + `MANIFEST.txt` + 1 个目录项），`repo.zip` 残留 **0**；`MANIFEST.txt` 记录 `True_Agent_Project@cc3f7f6`（dirty=False）、410 个文件、7.71 MB 目录大小、缺失 3 类（PPT/视频/PDF 按决定跳过）。阶段 9 首版包（`dist/bank-agent-legacy-phase9-final.zip`，6 755 587 字节）因脚本缺陷含 3.4 MB 重复副本，已修复并重打，**对外以 reviewfix 包的哈希为准**。
 
 ### 6.2 冷启动到打包的复现步骤（三行）
 

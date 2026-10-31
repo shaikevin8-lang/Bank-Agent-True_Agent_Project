@@ -481,8 +481,9 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 7 | PPT + 视频 | 1.5 | ⏭ 延后 | 本轮按用户决定跳过，补齐路径见附录 K.8 |
 | 8 | 容器化与部署 | 2 | ✅ | `a369f18` |
 | 9 | 终验与提交 | 1 | ✅ | `80e5426` |
+| 复审 | 阶段 0–9 复审与修复（阶段 7 跳过） | 2 | ✅ | `cc3f7f6` |
 
-**变更记录**：v1.0 2026-10-29 首版（14 项诊断 → 10 阶段）｜v1.1 2026-10-29 勘误 12 处（端口/错误码/端点/前缀/网络架构/行号/文档缺口/配置语义/资源限制/模型一致性/计数/演示码来源）并全文精简。｜v1.2 2026-10-31 阶段 8/9 落地回填：附录 D 进度表勾选与提交哈希、阶段 8 交付状态段（含实测偏差三条）、新增附录 K 阶段 9 完成清单（交付物核对 / PRD §11 八条取证 / 彩排与门禁数字 / 打包实测 / 偏差登记）。
+**变更记录**：v1.0 2026-10-29 首版（14 项诊断 → 10 阶段）｜v1.1 2026-10-29 勘误 12 处（端口/错误码/端点/前缀/网络架构/行号/文档缺口/配置语义/资源限制/模型一致性/计数/演示码来源）并全文精简。｜v1.2 2026-10-31 阶段 8/9 落地回填：附录 D 进度表勾选与提交哈希、阶段 8 交付状态段（含实测偏差三条）、新增附录 K 阶段 9 完成清单（交付物核对 / PRD §11 八条取证 / 彩排与门禁数字 / 打包实测 / 偏差登记）。｜v1.3 2026-11-01 阶段 0–9 复审（跳过 7）：新增附录 L（复审方法与取证、13 项缺陷修复与回归用例、5 类文档口径更正、复测数字表、5 条新增偏差），进度表增补复审行与提交哈希 `cc3f7f6`；终验报告新增 §7 复审修复登记并全文数字复测更新。
 
 ## 附录 E. 阶段 1 实施完成清单（2026-10-29）
 
@@ -1005,7 +1006,20 @@ $cfg  = '{"executablePath":"C:\\Program Files\\Google\\Chrome\\Application\\chro
 powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Tag phase9
 ```
 
-实测输出：`dist\bank-agent-legacy-phase9.zip`（6 745 005 字节 / 6.43 MB，sha256 `989E8F3E49D62AD9298C3274965FB08C0CA91BDC583DAFEF094398F6E10348EF`），仓库文件 **403** 个、deliverables **0** 个、缺失 **3** 类（`*.mp4/*.pptx/*.pdf`，按计划跳过）。包内 `MANIFEST.txt` 记录分支@提交（`True_Agent_Project@80e5426`）、生成时间、文件数、目录大小与缺失项；`repo/` 为 `git archive HEAD` 解包结果，天然不含 `.venv` / `*.db` / `node_modules` / `.env`。工作区脏且未加 `-AllowDirty` 时脚本 exit 1（本轮已验证该守卫生效）。回填提交后可用同命令重打，包内 MANIFEST 的哈希即对应打包基线。
+实测输出：`dist\bank-agent-legacy-phase9.zip`（6 745 005 字节 / 6.43 MB，sha256 `989E8F3E49D62AD9298C3274965FB08C0CA91BDC583DAFEF094398F6E10348EF`），仓库文件 **403** 个、deliverables **0** 个、缺失 **3** 类（`*.mp4/*.pptx/*.pdf`，按计划跳过）。包内 `MANIFEST.txt` 记录分支@提交（`True_Agent_Project@80e5426`）、生成时间、文件数、目录大小与缺失项；`repo/` 为 `git archive HEAD` 解包结果，天然不含 `.venv` / `*.db` / `node_modules` / `.env`。工作区脏且未加 `-AllowDirty` 时脚本 exit 1（本轮已验证该守卫生效）。
+
+> **复审修复后的重打（2026-11-01）**：上面那次产物含一处缺陷——解包中间件 `repo.zip` 未删，被打进成品（3.4 MB 重复副本，条目 406）。脚本已修（解包后立即删除 + 压缩前防御性清理），重打结果：`dist\bank-agent-legacy-reviewfix.zip`，**3 488 970 字节 / 3.33 MB**，sha256 `088E96E7E7B34A135D7B1F1E988A3E3F7E0116DEBC8D5EAE928420BE72F067C7`，包内 **412** 条目（410 个仓库文件 + `MANIFEST.txt` + 1 个目录项）、`repo.zip` **0** 命中；`MANIFEST.txt` 记录 `True_Agent_Project@cc3f7f6`（dirty=False）、410 个文件、7.71 MB 目录大小、缺失 3 类。**对外以该包的哈希为准**。
+
+### K.6.1 复审修复后的提交与打包（2026-11-01）
+
+| 项 | 值 |
+| --- | --- |
+| 修复提交 | `cc3f7f6`（`Agent0.12: 阶段0-9复审修复…`） |
+| 提交包 | `dist/bank-agent-legacy-reviewfix.zip`（3 488 970 字节 / 3.33 MB） |
+| sha256 | `088E96E7E7B34A135D7B1F1E988A3E3F7E0116DEBC8D5EAE928420BE72F067C7` |
+| 包内条目 | 412（410 文件 + MANIFEST + 1 目录项），无 `repo.zip` 残留 |
+| MANIFEST | `True_Agent_Project@cc3f7f6`（dirty=False）、410 文件、缺失 3 类 |
+| 门禁 | 快跑 1847 passed / 0 failed；`tests/security` 438 passed；卫生 PASS（索引 410）；错误码 `scanned_files=52, unknown=[]` |
 
 ### K.7 偏差与边界登记（不对外宣称）
 
