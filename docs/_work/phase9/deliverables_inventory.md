@@ -1,6 +1,6 @@
 # 阶段 9 交付物核对 · 实测清单（deliverables_inventory）
 
-- 测量环境：Windows + PowerShell 7，工作目录 `D:\Bank-Agent-legacy`
+- 测量环境：Windows + PowerShell 7，工作目录 `<repo>`
 - 分支/提交：`True_Agent_Project` @ `6a0069c`（2026-10-31「docs: 回填阶段 6 进度表提交哈希（02130e2）」）
 - 解释器：`.\.venv\Scripts\python.exe` → Python 3.12.13
 - 测量时间：2026-10-31 22:11–22:15（Asia/Shanghai）
@@ -30,7 +30,7 @@
 
 ## 1. 作品简介（≤200 字）
 
-- 路径：`D:\Bank-Agent-legacy\docs\deliverables\作品简介.md`（758 B，5 物理行 / 3 非空行）
+- 路径：`<repo>\docs\deliverables\作品简介.md`（758 B，5 物理行 / 3 非空行）
 - 字数实测：
   - 正文段（第 5 行）：中文 **153** 字，非空白字符 **196** 个 —— 双口径均 ≤200 ✅
   - 全文件：中文 **195** 字，非空白 **288** 字符（含标题与说明块）
@@ -334,4 +334,4 @@
 
 ## 记录文件路径
 
-`D:\Bank-Agent-legacy\docs\_work\phase9\deliverables_inventory.md`
+`<repo>\docs\_work\phase9\deliverables_inventory.md`

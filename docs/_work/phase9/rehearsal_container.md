@@ -2,8 +2,8 @@
 
 - 执行时间：2026-10-31 22:11 ~ 22:20（Asia/Shanghai）
 - 主机：Windows + PowerShell(pwsh) + Docker server 29.8.0
-- 工作目录：`D:\Bank-Agent-legacy`
-- Python：`D:\Bank-Agent-legacy\.venv\Scripts\python.exe`
+- 工作目录：`<repo>`
+- Python：`<repo>\.venv\Scripts\python.exe`
 - 记录者：运维验证代理（仅在本目录 `docs\_work\phase9\` 写入；未修改任何源码/文档）
 
 ## 0. 起点与两处环境前置异常（如实记录）

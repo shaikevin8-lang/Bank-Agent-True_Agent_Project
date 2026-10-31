@@ -1,8 +1,8 @@
 # 阶段 9 质量门禁实测记录（gate_tests）
 
 - 执行者：质量门禁验证代理（只读验证，仅在本目录写入记录文件）
-- 工作目录：`D:\Bank-Agent-legacy`，Shell：Windows PowerShell 5.1（见「环境说明 0.x」）
-- 解释器：`D:\Bank-Agent-legacy\.venv\Scripts\python.exe`
+- 工作目录：`<repo>`，Shell：Windows PowerShell 5.1（见「环境说明 0.x」）
+- 解释器：`<repo>\.venv\Scripts\python.exe`
 - 实测时间：2026-10-31T22:11 ~ 2026-10-31T22:2x（Asia/Shanghai）
 - 环境噪声：本机同时有另一代理在跑 `docker compose` 冷启动与容器端口占用；本轮所有命令 **未观察到端口/容器导致的失败**，因此没有触发「重跑确认抖动」的分支（下文如实标注）。
 - 原始完整日志：`docs/_work/phase9/_raw_fast.txt`（快跑）、`docs/_work/phase9/_raw_full.txt`（全量）
@@ -33,7 +33,7 @@
 ........................................................................ [100%]
 ============================== warnings summary ===============================
 tests/unit/test_db_units.py::test_head_revision_works_from_any_working_directory
-  D:\Bank-Agent-legacy\.venv\Lib\site-packages\alembic\config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
+  <repo>\.venv\Lib\site-packages\alembic\config.py:604: DeprecationWarning: No path_separator found in configuration; falling back to legacy splitting on spaces, commas, and colons for prepend_sys_path.  Consider adding path_separator=os to Alembic config.
     util.warn_deprecated(
 
 -- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
