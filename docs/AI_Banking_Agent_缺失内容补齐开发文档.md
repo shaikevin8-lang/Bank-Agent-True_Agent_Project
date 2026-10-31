@@ -654,7 +654,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 迁移 | `migrations/versions/0008_confirmation_grant.py`（新增，181 行）：`app.confirmation_request` / `app.confirmation_grant`，含 6+ 条 CHECK、`used_at` 单向、RLS FORCE + 租户隔离、`app.seed_mode` 直查放行、`expires_at` 索引 | ✅ |
 | 确认 API | `Struct_of_Agent/web_test/api_confirm.py`（新增，695 行）：`POST /confirm/request`、`POST /confirm/mfa`、`GET /confirm/sms/{id}`（仅 risk_reviewer/ops_admin）、`GET /confirm/pending`、`GET /confirm/{id}`、`DELETE /confirm/{id}`，同时挂 `/api/v1/confirm/*` 与 `/api/confirm/*`；错误码只用 `VALIDATION_001` / `CONFLICT_001` / `AUTHZ_001`，细分原因放 `data.reason`（`invalid_code` 带 `attempts_left`、`attempts_exceeded`、`request_used`…）；`server.py` 注册路由（+6 行） | ✅ |
 | 前端确认卡 | `Struct_of_Agent/web_test/index.html`（修改，+626 行）：`.mfa-*` 样式 + `section#mfaCard`（`role=dialog` + `aria-modal` + `aria-labelledby/describedby`）+ 6 格验证码（`inputmode=numeric`、粘贴分发、退格回退、方向键、Enter 提交）+ `aria-live` 提示条 + 60 s 重发倒计时 + 模拟短信面板（仅演示者角色可见）+ 顶栏「高风险确认」入口与 `/pending` 恢复 + 聊天内「确认 123456」拦成引导气泡 | ✅ |
-| 测试（4 组） | `tests/test_mfa_grant.py`（20）、`tests/test_confirm_api.py`（13）、`tests/test_injection_corpus.py` + `tests/injection_corpus.yaml`（79，语料 57 负向 / 16 正向防误杀）、`tests/frontend/test_mfa_ui.mjs`（75）；另在 `tests/test_content_moderation.py` 补 1 条「注入被拦 → 六项写能力全熔断」联动红线 | ✅ |
+| 测试（4 组） | `tests/test_mfa_grant.py`（22）、`tests/test_confirm_api.py`（13）、`tests/test_injection_corpus.py` + `tests/injection_corpus.yaml`（79，语料 57 负向 / 16 正向防误杀）、`tests/frontend/test_mfa_ui.mjs`（75）；另在 `tests/test_content_moderation.py` 补 1 条「注入被拦 → 六项写能力全熔断」联动红线 | ✅ |
 | 文档 | `docs/ADR/ADR-008-确认凭据服务端化.md`、`docs/AI_Banking_Agent_前端应用文档.md`（DOC-APP-001）、`docs/AI_Banking_Agent_接口契约文档.md` 追章、`docs/AI_Banking_Agent_测试文档.md` 追章、`docs/AI_Banking_Agent_数据库设计文档.md`（+270 行，两表 + 索引 + RLS）、`docs/AI_Banking_Agent_数据库实施说明.md`（+186 行，迁移/repository/SQL 对账）、`docs/AI_Banking_Agent_人工介入中断设计说明.md`（+101 行，确认与复核的分界）、`docs/AI_Banking_Agent_安全自评报告.md`（+231 行，伪造确认/重放/跨用户/参数注入四类威胁） | ✅ |
 
 ### H.2 凭据生命周期实测
@@ -703,7 +703,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 
 ### H.5 验收实测
 
-- `python -m pytest tests -q -m "not pg and not integration"` → **1050 passed, 180 skipped, 6 deselected**（46 s）；阶段 4 新增 113 例（20 + 13 + 79 + 1 条注入→熔断联动红线）。
+- `python -m pytest tests -q -m "not pg and not integration"` → **1052 passed, 180 skipped, 6 deselected**（45 s）；阶段 4 新增 116 例（22 + 13 + 79 + 2 条红线：注入→熔断联动、闸门剥参数/注入确认）。
 - 前端：`node test_mfa_ui.mjs` → **75/75**；另三个既有 .mjs 全绿。
 - `python -m alembic heads` → 单头 `0008_confirmation_grant (head)`；`0008` 的 `down_revision="0007_circuit_breaker"`，升级链未分叉。
 - 契约探针：`/api/v1/confirm/*` 与 `/api/confirm/*` 双前缀行为一致（同名用例各跑一遍）；未知请求 400 `VALIDATION_001` + `data.reason="not_found"`；缺 `session_id`/`tool_name` 同样 400 而非 500。

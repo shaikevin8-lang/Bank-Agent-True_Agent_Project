@@ -382,3 +382,49 @@ def test_replay_args_never_invent_confirmation(store: Any) -> None:
     assert "confirmed" not in built
     assert "mfa_code" not in built
     assert "confirmation_grant_id" not in built
+
+
+# ---------------------------------------------------------------------------
+# 6. 闸门：L4 剥参数 + 只对「已批准案件」注入确认
+# ---------------------------------------------------------------------------
+
+
+def test_intercept_strips_model_confirmation_before_policy(store: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """L4：模型自带的 confirmed/mfa_code 在策略判定前就被剥掉，且不会传给工具。"""
+    args = {"account_no": "6222****0001", "confirmed": True, "mfa_code": "123456"}
+    token = hitl.set_context(session_id="sess-yellow", tenant_id=TENANT)
+    try:
+        assert hitl.intercept("query_balance", args) is None  # 只读工具不命中，直接放行
+    finally:
+        hitl.reset_context(token)
+
+    assert "confirmed" not in args, "模型给的 confirmed 必须被剥掉，不能传给工具"
+    assert "mfa_code" not in args
+
+
+def test_intercept_injects_server_side_confirmation_after_approval(
+    store: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """消费到已批准案件时才注入：哨兵码覆盖模型伪造值，证明「剥掉→服务端补」。"""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _scope() -> Any:
+        yield None
+
+    monkeypatch.setattr(hitl, "session_scope", _scope)
+    monkeypatch.setattr(
+        hitl,
+        "_consume_approved_in",
+        lambda *_a, **_kw: hitl._ConsumeOutcome(matched=True, receipt=None),
+    )
+
+    args = {"card_id": "6222****0001", "confirmed": False, "mfa_code": "999999"}
+    token = hitl.set_context(session_id="sess-yellow", tenant_id=TENANT)
+    try:
+        assert hitl.intercept("report_loss", args) is None
+    finally:
+        hitl.reset_context(token)
+
+    assert args["confirmed"] is True
+    assert args["mfa_code"] == "000000", "必须用哨兵码，而不是模型给的 999999"

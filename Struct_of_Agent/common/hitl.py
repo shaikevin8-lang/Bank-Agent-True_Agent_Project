@@ -1517,8 +1517,9 @@ def intercept(tool_name: str, args: Mapping[str, Any] | None = None) -> dict[str
     from common import param_guard  # 延迟导入：避免 common 包内循环导入
 
     arguments = dict(args or {}) if not isinstance(args, dict) else args
-    if param_guard.sanitize(tool_name, arguments):
-        logger.warning("工具参数含被丢弃的敏感键 tool=%s keys=%s", tool_name, sorted(arguments))
+    dropped = param_guard.sanitize(tool_name, arguments)
+    if dropped:
+        logger.warning("工具参数含被丢弃的敏感键 tool=%s keys=%s", tool_name, dropped)
     if not is_enabled():
         return None
     hit = evaluate(tool_name, arguments)
