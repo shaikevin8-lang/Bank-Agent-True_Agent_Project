@@ -96,4 +96,4 @@ def test_markup_exposes_brand_text_and_tools_groups() -> None:
     html = _html()
     assert '<div class="brand-text">' in html
     assert '<div class="header-tools">' in html
-    assert '<h1>银行智能 Agent 测试</h1>' in html
+    assert '<h1>智能银行助手</h1>' in html

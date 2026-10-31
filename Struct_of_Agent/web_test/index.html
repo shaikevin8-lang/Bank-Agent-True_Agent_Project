@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>银行智能 Agent 测试</title>
+<title>Bank Agent · 智能银行助手</title>
 <script>
   /*
    * 首帧定态：侧边栏开合必须在样式生效前就决定好。
@@ -22,15 +22,15 @@
 </script>
 <style>
   :root {
-    --bg: #f4f6f8;
+    --bg: #f8f9f6;
     --panel: #ffffff;
-    --border: #e5e7eb;
-    --text: #1f2933;
-    --text-sub: #6b7280;
-    --brand: #2563eb;
-    --brand-hover: #1d4ed8;
-    --user-bubble: #2563eb;
-    --assistant-bubble: #f1f3f5;
+    --border: #e4e8e1;
+    --text: #233c32;
+    --text-sub: #778078;
+    --brand: #32634d;
+    --brand-hover: #234a39;
+    --user-bubble: #32634d;
+    --assistant-bubble: #ffffff;
     --radius: 14px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1030,18 +1030,283 @@
     .auth-gate { padding: 16px 10px; }
     .auth-card { width: 92vw; max-width: none; padding: 22px 18px 18px; }
   }
+
+  /* Bank Agent: a quiet, editorial workspace for everyday banking. */
+  :root { --sidebar-bg: #193d30; --muted: #9ba59d; --accent: #dce8b5; }
+  body { -webkit-font-smoothing: antialiased; }
+  button, input, textarea, select { font-family: inherit; }
+  button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, a:focus-visible { outline: 2px solid #73916c; outline-offset: 4px; }
+  svg.ui-icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+  .icon-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+  .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: #dce8b5; color: #244d38; flex: 0 0 auto; }
+  .brand-mark .ui-icon { width: 24px; height: 24px; stroke-width: 1.8; }
+  .sidebar { background: var(--sidebar-bg); color: #e8eee7; border: 0; padding: 0 16px; }
+  .sidebar-head { padding: 29px 4px 30px; gap: 11px; }
+  .sidebar-wordmark { font-size: 18px; font-weight: 600; letter-spacing: -.4px; }
+  .sidebar-wordmark small { display: block; font-size: 9px; letter-spacing: 2.4px; margin-top: 4px; color: #9eb4a5; font-weight: 400; }
+  .new-chat { margin: 0 0 25px; min-height: 43px; border-color: #658266; background: #dce8b5; color: #24452e; border-radius: 8px; font-weight: 600; }
+  .new-chat:hover:not(:disabled) { background: #edf3d4; border-color: #edf3d4; }
+  .sidebar-label { display: flex; align-items: center; gap: 8px; padding: 0 10px 13px; font-size: 10px; letter-spacing: 1.4px; color: #b0c1b5; }
+  .sidebar-nav { display: grid; gap: 4px; padding-bottom: 24px; margin-bottom: 23px; border-bottom: 1px solid #375446; }
+  .sidebar-link { display: flex; align-items: center; gap: 11px; border: 0; width: 100%; padding: 11px 12px; background: transparent; color: #bdcec1; text-align: left; font-size: 13px; cursor: pointer; border-radius: 7px; }
+  .sidebar-link:hover { background: #294b3d; color: white; }
+  .sidebar-link .ui-icon { width: 17px; height: 17px; }
+  .sidebar-link .nav-tail { margin-left: auto; font-size: 10px; opacity: .65; }
+  .session-list { padding: 0 0 15px; gap: 5px; min-height: 70px; }
+  .session-item { padding: 10px 8px; border-radius: 7px; }
+  .session-item:hover { background: #274b3b; }
+  .session-item.active { background: #315341; border-color: #42624d; }
+  .session-title, .session-item.active .session-title { color: #e2e9df; font-size: 12px; font-weight: 400; }
+  .session-sub { color: #b1c1b4; font-size: 10px; margin-top: 5px; }
+  .session-action { color: #bbcebe; }
+  .session-action:hover { background: #47654e; color: white; }
+  .session-rename { color: var(--text); }
+  .session-empty { color: #b0c1b5; text-align: left; font-size: 11px; padding: 10px; }
+  .session-empty.error { color: #f1b5aa; }
+  .sidebar-foot { padding: 18px 3px 20px; border-color: #375446; }
+  .sidebar-note { display: flex; gap: 8px; color: #b8cbb9; font-size: 10px; align-items: center; margin-bottom: 18px; }
+  .sidebar-note .ui-icon { width: 14px; height: 14px; }
+  .account-row { display: flex; gap: 9px; align-items: center; }
+  .account-avatar { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: #365342; color: #dce8b5; }
+  .account-details { flex: 1; min-width: 0; }
+  .auth-user { border: 0; background: none; color: #edf2e9; display: block; padding: 0; max-width: 130px; font-size: 12px; line-height: 1.6; border-radius: 0; }
+  .account-details small { font-size: 9px; color: #a7bdac; letter-spacing: .7px; }
+  .auth-logout { border: 0; padding: 8px 2px; color: #c0cec0; background: none; font-size: 10px; }
+  .auth-logout:hover:not(:disabled) { color: white; }
+  .chat-column > header { min-height: 84px; padding: 19px 30px; gap: 14px; background: var(--bg); }
+  header .logo { display: none; }
+  header h1 { font-size: 15px; letter-spacing: .3px; }
+  header .sub { font-size: 10px; color: var(--text-sub); margin-top: 5px; letter-spacing: .25px; }
+  header .header-tools { gap: 13px; }
+  .icon-btn { border: 0; background: transparent; border-radius: 8px; }
+  .icon-btn:hover { background: #edf0e9; }
+  .mode-badge { font-size: 10px; padding: 7px 9px; }
+  .mode-badge.mode-model { border-color: #d4e3cd; background: #edf3e8; color: #426442; }
+  .mode-badge.mode-model .dot { background: #69865b; }
+  .workspace { flex: 1; min-height: 0; display: flex; }
+  .conversation-surface { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+  .conversation-surface > main { flex: 1; min-height: 0; padding: 32px 0 24px; scroll-behavior: smooth; }
+  .container { max-width: 860px; padding: 0 40px; }
+  .workspace-rail { flex: 0 0 246px; width: 246px; border-left: 1px solid var(--border); padding: 30px 23px; overflow-y: auto; background: #f5f7f2; }
+  .rail-eyebrow { color: #8a9388; font-size: 9px; letter-spacing: 2px; }
+  .rail-title { font-size: 13px; font-weight: 600; margin: 9px 0 26px; }
+  .guide-step { display: flex; gap: 11px; position: relative; padding-bottom: 25px; }
+  .guide-step:not(:last-child)::before { content: ''; position: absolute; width: 1px; background: #dce2d5; left: 12px; top: 30px; bottom: 4px; }
+  .step-number { flex-shrink: 0; border: 1px solid #dce2d5; width: 25px; height: 25px; border-radius: 50%; display: grid; place-items: center; color: #7e8b70; font-size: 10px; font-variant-numeric: tabular-nums; }
+  .guide-step h3 { font-size: 12px; font-weight: 500; margin: 4px 0 7px; }
+  .guide-step p { font-size: 11px; line-height: 1.9; color: #707b6d; }
+  .rail-safety { margin-top: 6px; padding: 18px 15px; border: 1px solid #e1e6d8; border-radius: 9px; background: #eef2e7; }
+  .rail-safety .ui-icon { color: #6d8254; margin-bottom: 8px; }
+  .rail-safety h3 { font-size: 12px; font-weight: 500; margin-bottom: 8px; }
+  .rail-safety p { font-size: 11px; line-height: 1.9; color: #707c66; }
+  .workspace-tools { display: grid; gap: 12px; margin-top: 32px; padding-top: 23px; border-top: 1px solid var(--border); }
+  .workspace-tools > label { display: flex; align-items: center; justify-content: space-between; gap: 6px; font-size: 10px; color: var(--text-sub); }
+  .workspace-tools .clock-badge { width: 100%; justify-content: center; border-radius: 7px; background: transparent; min-height: 33px; font-size: 10px; }
+  .role-select { font-size: 10px; border-radius: 6px; max-width: 100px; background: transparent; }
+  .hitl-entry { justify-content: center; border-radius: 7px; padding: 9px; background: transparent; font-size: 11px; }
+  .welcome { animation: welcome-in .45s ease both; }
+  .welcome-eyebrow { display: inline-flex; align-items: center; gap: 7px; color: #6e8058; border: 1px solid #dfe6d3; border-radius: 20px; padding: 5px 10px; background: #eff3e8; font-size: 9px; letter-spacing: 1.4px; }
+  .welcome-eyebrow .ui-icon { width: 12px; height: 12px; }
+  .welcome h2 { font-family: 'Songti SC', 'STSong', 'SimSun', serif; font-weight: 400; font-size: clamp(30px, 3vw, 44px); letter-spacing: 1px; line-height: 1.5; margin: 18px 0 12px; }
+  .welcome h2 em { font-style: normal; color: #75875b; }
+  .welcome-intro { font-size: 13px; color: #707a6b; line-height: 1.9; margin-bottom: 24px; }
+  .section-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .section-heading h3 { font-size: 13px; font-weight: 500; }
+  .section-heading span { color: #879180; font-size: 9px; letter-spacing: 1px; }
+  .service-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  .service-card { position: relative; text-align: left; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 17px 15px 15px; cursor: pointer; color: var(--text); transition: border-color .18s, transform .18s, box-shadow .18s; }
+  .service-card:hover { border-color: #a9ba93; transform: translateY(-3px); box-shadow: 0 8px 24px #233c3208; }
+  .service-icon { display: grid; place-items: center; width: 33px; height: 33px; background: #eff3e9; border-radius: 9px; color: #66814e; margin-bottom: 14px; }
+  .service-card:nth-child(2) .service-icon, .service-card:nth-child(5) .service-icon { background: #f4f0e5; color: #9a865c; }
+  .service-card:nth-child(3) .service-icon, .service-card:nth-child(6) .service-icon { background: #eef1ed; color: #668271; }
+  .service-card h4 { font-size: 14px; font-weight: 500; margin-bottom: 7px; }
+  .service-card p { color: #707b6b; font-size: 11px; line-height: 1.7; }
+  .card-arrow { position: absolute; right: 14px; top: 20px; color: #a4ae9d; font-size: 15px; transition: transform .18s; }
+  .service-card:hover .card-arrow { transform: translate(2px, -2px); color: var(--brand); }
+  .feature-story { margin-top: 23px; display: flex; align-items: center; gap: 20px; padding: 21px 23px; background: #eaf0e3; border: 1px solid #dfe6d7; border-radius: 10px; position: relative; overflow: hidden; }
+  .feature-story::after { content: ''; position: absolute; width: 110px; height: 110px; border: 1px solid #cfdbc3; border-radius: 50%; right: -38px; top: -37px; pointer-events: none; }
+  .feature-story .story-art { flex: 0 0 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; background: #dce7cf; color: #738b5e; }
+  .story-art .ui-icon { width: 28px; height: 28px; stroke-width: 1.2; }
+  .story-copy { flex: 1; }
+  .story-copy small { font-size: 8px; color: #7f916c; letter-spacing: 1.5px; }
+  .story-copy h3 { font-size: 13px; font-weight: 500; margin: 7px 0; }
+  .story-copy p { font-size: 11px; color: #707d65; line-height: 1.7; }
+  .story-button { z-index: 1; background: #fff9; border: 1px solid #cad7bd; border-radius: 6px; padding: 8px 10px; color: #557346; font-size: 10px; cursor: pointer; white-space: nowrap; }
+  .story-button:hover { background: white; }
+  .welcome-footnote { display: flex; align-items: center; gap: 6px; margin-top: 18px; font-size: 9px; color: #8a9481; }
+  .welcome-footnote .ui-icon { width: 12px; height: 12px; }
+  .conversation-surface > footer { flex: 0 0 auto; border: 0; background: transparent; padding: 14px 0 21px; }
+  .input-box { max-width: 860px; padding: 0 40px; }
+  .composer { display: block; border-radius: 12px; padding: 15px 16px 11px; border-color: #dce2d5; background: white; box-shadow: 0 4px 20px #233c3204; }
+  .composer:focus-within { border-color: #90a47b; box-shadow: 0 0 0 3px #829b6410; }
+  .composer textarea { width: 100%; min-height: 28px; font-size: 13px; line-height: 1.8; display: block; }
+  .composer textarea::placeholder { color: #9aa190; }
+  .composer-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; }
+  .composer-caption { display: inline-flex; align-items: center; gap: 6px; font-size: 9px; color: #859277; }
+  .composer-caption .ui-icon { width: 13px; height: 13px; }
+  .composer button { width: 30px; height: 30px; border-radius: 8px; }
+  .composer button svg { width: 16px; height: 16px; }
+  .hint { font-size: 9px; color: #8a9382; margin-top: 11px; }
+  .message { gap: 12px; margin-bottom: 15px; }
+  .message.user { flex-direction: row-reverse; justify-content: flex-start; }
+  .avatar { border-radius: 10px; width: 31px; height: 31px; font-size: 11px; }
+  .message.assistant .avatar { background: var(--brand); }
+  .message.user .avatar { background: #e5ebde; color: #728161; }
+  .bubble { max-width: calc(100% - 50px); font-size: 13px; line-height: 1.9; padding: 13px 17px; border-radius: 12px; }
+  .message.assistant .bubble { margin: 0; border: 1px solid #e8ebe3; }
+  .message.user .bubble { margin: 0; border-top-right-radius: 4px; }
+  .meta { font-size: 10px; margin-top: -7px; margin-bottom: 25px; line-height: 1.8; overflow-wrap: anywhere; }
+  .tag { background: #e9efdf; color: #5b7848; font-size: 9px; }
+  .settings-overlay, .confirm-overlay { backdrop-filter: blur(5px); background: #18302540; }
+  .settings-panel { max-width: 640px; border: 1px solid #e2e7dc; border-radius: 16px; box-shadow: 0 30px 100px #18302525; }
+  .settings-panel > header { padding: 22px 24px; }
+  .settings-body { padding: 24px; }
+  .settings-panel > footer { padding: 17px 24px; }
+  .settings-field input:focus, .settings-field select:focus, .auth-field input:focus { box-shadow: 0 0 0 3px #829b6415; }
+  .settings-note { color: #7f8978; }
+  .hitl-drawer { box-shadow: -12px 0 60px #18302515; }
+  .auth-gate { display: grid; grid-template-columns: 1.12fr 1fr; place-items: stretch; padding: 0; background: #fbfcf8; overflow-y: auto; }
+  .auth-story { align-self: stretch; min-height: 100dvh; background: #193d30; color: #eff2e7; padding: 45px 9%; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+  .auth-story-brand { display: flex; align-items: center; gap: 11px; font-size: 19px; letter-spacing: -.3px; }
+  .auth-story-brand small { display: block; font-size: 8px; color: #b3c6ad; margin-top: 5px; letter-spacing: 2.7px; }
+  .auth-story-content { margin: auto 0; padding: 65px 0 40px; position: relative; z-index: 1; }
+  .auth-kicker { font-size: 10px; letter-spacing: 3px; color: #c2d0ae; }
+  .auth-story h1 { font-family: 'Songti SC', 'STSong', 'SimSun', serif; font-size: clamp(38px, 4vw, 58px); font-weight: 400; line-height: 1.5; letter-spacing: 3px; margin: 24px 0 20px; }
+  .auth-story h1 span { color: #dce8b5; }
+  .auth-story-content > p { font-size: 12px; line-height: 2.2; color: #b3c5b2; }
+  .auth-art { height: 210px; width: 270px; position: relative; margin: 35px auto 12px; }
+  .auth-orbit { position: absolute; width: 200px; height: 200px; border: 1px solid #718664; border-radius: 50%; left: 35px; top: 5px; }
+  .auth-orbit:nth-child(2) { transform: rotate(-35deg) scaleX(.55); }
+  .auth-orbit:nth-child(3) { transform: rotate(35deg) scaleX(.55); }
+  .auth-orbit:nth-child(4) { transform: scale(.72); border-color: #8b9d77; }
+  .auth-orbit::after { content: ''; position: absolute; width: 7px; height: 7px; border-radius: 50%; background: #dce8b5; left: 24px; top: 24px; }
+  .auth-art-center { position: absolute; inset: 0; display: grid; place-items: center; color: #e0e8c0; }
+  .auth-art-center .ui-icon { width: 57px; height: 57px; stroke-width: 1; }
+  .auth-story-footer { font-size: 9px; color: #a6bca3; display: flex; justify-content: space-between; gap: 10px; letter-spacing: 1px; line-height: 1.8; }
+  .auth-card { width: min(370px, calc(100% - 56px)); max-width: 370px; border: 0; box-shadow: none; background: none; padding: 50px 0; border-radius: 0; margin: auto; }
+  .auth-brand { display: block; margin-bottom: 30px; }
+  .auth-brand .logo { display: none; }
+  .auth-brand .auth-overline { color: #8d9c7b; font-size: 9px; letter-spacing: 2px; margin-bottom: 14px; }
+  .auth-brand h2 { font-size: 26px; letter-spacing: 1px; font-weight: 500; }
+  .auth-brand p { color: var(--text-sub); font-size: 11px; margin-top: 12px; line-height: 1.9; }
+  .auth-tabs { border: 0; background: #edf0e7; border-radius: 8px; padding: 4px; margin-bottom: 27px; }
+  .auth-tab { padding: 10px; font-size: 12px; border-radius: 5px; }
+  .auth-tab.active { color: var(--brand); box-shadow: 0 2px 6px #233c3208; }
+  .auth-field { margin-bottom: 20px; }
+  .auth-field > span { font-size: 11px; color: #58694f; margin-bottom: 9px; }
+  .auth-field input { font-size: 12px; padding: 13px; background: white; border-color: #dfe5d7; border-radius: 7px; }
+  .auth-field input::placeholder { color: #a1aa97; }
+  .auth-submit { padding: 13px; border-radius: 7px; font-size: 12px; margin-top: 28px; }
+  .auth-hint { font-size: 10px; line-height: 1.9; margin-top: 18px; }
+  .auth-footnote { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); color: #919b86; font-size: 9px; line-height: 1.9; display: flex; align-items: flex-start; gap: 7px; }
+  .auth-footnote .ui-icon { width: 14px; height: 14px; margin-top: 2px; }
+  @keyframes welcome-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @media (min-width: 1600px) { .conversation-surface > main { padding-top: 55px; } .welcome-intro { margin-bottom: 38px; } .service-card { padding: 22px 18px; } }
+  @media (max-width: 1250px) {
+    .workspace { flex-direction: column-reverse; }
+    .workspace-rail { flex: 0 0 auto; width: auto; padding: 10px 30px; border-left: 0; border-bottom: 1px solid var(--border); overflow: visible; }
+    .rail-guide, .rail-safety { display: none; }
+    .workspace-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0; padding: 0; border: 0; }
+    .workspace-tools .clock-badge { width: auto; min-height: 30px; }
+    .workspace-tools .hitl-entry { margin-left: auto; }
+    .container, .input-box { max-width: 840px; }
+    .welcome h2 { font-size: 40px; }
+  }
+  @media (max-width: 860px) {
+    .chat-column > header { padding: 14px 20px; min-height: 72px; }
+    .sidebar { padding-top: 0; }
+    .workspace-rail { padding: 9px 20px; }
+    .container, .input-box { padding: 0 28px; }
+    .conversation-surface > main { padding-top: 28px; }
+    .auth-story { padding: 30px 8%; }
+    .auth-story h1 { font-size: 38px; }
+    .auth-art { transform: scale(.8); margin: 5px auto; width: 240px; }
+    .auth-story-content { padding: 35px 0; }
+  }
+  @media (max-width: 640px) {
+    .chat-column > header { padding: 12px 14px; gap: 7px; }
+    header .brand-text { flex-basis: 120px; min-width: 110px; }
+    header h1 { font-size: 13px; }
+    header .sub { font-size: 9px; }
+    header .header-tools { gap: 4px; }
+    #modeBadge { max-width: 125px; overflow: hidden; }
+    #modeBadgeText { overflow: hidden; text-overflow: ellipsis; }
+    .mode-badge { font-size: 9px; padding: 6px; }
+    .workspace-rail { padding: 8px 14px; }
+    .workspace-tools { gap: 7px; }
+    .workspace-tools .clock-badge { font-size: 9px; }
+    .workspace-tools > label { font-size: 0; }
+    .workspace-tools .role-select { font-size: 9px; padding: 6px; max-width: 83px; }
+    .workspace-tools .hitl-entry { font-size: 9px; padding: 8px; }
+    .container, .input-box { padding: 0 20px; }
+    .conversation-surface > main { padding-top: 26px; }
+    .welcome h2 { font-size: 32px; letter-spacing: .5px; margin-top: 16px; }
+    .welcome-intro { font-size: 12px; margin-bottom: 22px; }
+    .service-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+    .service-card { padding: 14px 12px; }
+    .service-icon { margin-bottom: 12px; width: 29px; height: 29px; }
+    .service-card h4 { font-size: 13px; }
+    .service-card p { font-size: 11px; }
+    .feature-story { padding: 17px 14px; gap: 11px; flex-wrap: wrap; }
+    .feature-story .story-art { display: none; }
+    .story-copy { min-width: 160px; }
+    .story-copy h3 { font-size: 12px; }
+    .story-copy p { font-size: 10px; }
+    .welcome-footnote { margin-top: 15px; line-height: 1.8; }
+    .composer textarea { font-size: 12px; }
+    .conversation-surface > footer { padding-bottom: max(14px, env(safe-area-inset-bottom)); padding-top: 7px; }
+    .composer { padding: 12px; }
+    .composer-toolbar { margin-top: 7px; }
+    .hint { font-size: 8px; line-height: 1.8; }
+    .settings-overlay, .confirm-overlay { padding: 12px; }
+    .settings-panel { max-height: 92dvh; }
+    .settings-panel > header { padding: 16px; }
+    .settings-body { padding: 18px; }
+    .settings-panel > footer { padding: 14px; gap: 6px; }
+    .settings-panel > footer .btn { padding: 9px 10px; font-size: 11px; }
+    .settings-row { gap: 8px; }
+    .auth-gate { display: flex; flex-direction: column; justify-content: flex-start; padding: 0; }
+    .auth-story { min-height: 0; width: 100%; flex: 0 0 auto; padding: 23px 28px 27px; }
+    .auth-story-brand { font-size: 16px; }
+    .auth-story-content { padding: 30px 0 0; margin: 0; }
+    .auth-kicker, .auth-art, .auth-story-footer, .auth-story-content > p { display: none; }
+    .auth-story h1 { font-size: 29px; margin: 0; letter-spacing: 2px; }
+    .auth-story h1 br { display: initial; }
+    .auth-story h1 span { white-space: nowrap; }
+    .auth-card { width: calc(100% - 56px); max-width: 370px; padding: 30px 0; margin: 0 auto; }
+    .auth-brand { margin-bottom: 23px; }
+    .auth-brand h2 { font-size: 23px; }
+    .auth-brand .auth-overline { display: none; }
+    .auth-footnote { margin-top: 25px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+  }
+
 </style>
 </head>
 <body>
+<svg class="icon-defs" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs><symbol id="icon-brand" viewBox="0 0 24 24"><path d="m5 8 7-4 7 4-7 4-7-4Z"/><path d="m5 12 7 4 7-4M5 16l7 4 7-4"/></symbol><symbol id="icon-spark" viewBox="0 0 24 24"><path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/></symbol><symbol id="icon-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z"/><path d="M7 10h10M7 14h6"/></symbol><symbol id="icon-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></symbol><symbol id="icon-transfer" viewBox="0 0 24 24"><path d="M4 7h16m-5-5 5 5-5 5M20 17H4m5-5-5 5 5 5"/></symbol><symbol id="icon-chart" viewBox="0 0 24 24"><path d="M4 3v17h17M8 15v-4m5 4V7m5 8V4"/></symbol><symbol id="icon-wealth" viewBox="0 0 24 24"><path d="m3 17 6-6 4 3 8-10M15 4h6v6M4 21h16"/></symbol><symbol id="icon-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20M6 15h4"/></symbol><symbol id="icon-subscription" viewBox="0 0 24 24"><path d="M20 7a9 9 0 0 0-15-2L2 8m0-5v5h5M4 17a9 9 0 0 0 15 2l3-3m0 5v-5h-5"/></symbol><symbol id="icon-gift" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v9h14v-9M12 8v13M12 8H8a3 3 0 1 1 3-3l1 3Zm0 0h4a3 3 0 1 0-3-3l-1 3Z"/></symbol><symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 2 8 4v6c0 5-8 10-8 10S4 17 4 12V6l8-4Z"/><path d="m8 12 3 3 5-6"/></symbol><symbol id="icon-leaf" viewBox="0 0 24 24"><path d="M20 3C7 2 2 8 5 15s16 5 15-12Z"/><path d="M3 22 15 10"/></symbol><symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></symbol></defs></svg>
 <!-- ==================== 登录 / 注册门禁 ====================
      默认就显示：不管 /api/auth/me 是 401 还是一直没回答，用户看到的都是这张卡片，
      而不是白屏。门禁刻意做成不可关闭（没有关闭按钮，也不响应 Esc），
      只有在 /api/auth/me 或登录接口返回成功后 startApp() 才会把 #app 露出来。 -->
 <div class="auth-gate" id="authGate" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+  <section class="auth-story" aria-label="Bank Agent 简介">
+    <div class="auth-story-brand"><span class="brand-mark"><svg class="ui-icon" aria-hidden="true"><use href="#icon-brand"></use></svg></span><div>Bank Agent<small>YOUR EVERYDAY BANKING PARTNER</small></div></div>
+    <div class="auth-story-content"><div class="auth-kicker">LESS EFFORT. MORE LIFE.</div>
+      <h1>懂你的每一句，<br><span>照顾每一笔。</span></h1>
+      <p>从日常转账到生活心意，<br>让银行服务，跟上你的生活节奏。</p>
+      <div class="auth-art" aria-hidden="true"><span class="auth-orbit"></span><span class="auth-orbit"></span><span class="auth-orbit"></span><span class="auth-orbit"></span><span class="auth-art-center"><svg class="ui-icon" aria-hidden="true"><use href="#icon-brand"></use></svg></span></div>
+    </div>
+    <div class="auth-story-footer"><span>为每一次托付，认真思考。</span><span>AI BANKING · SANDBOX</span></div>
+  </section>
   <div class="auth-card">
     <div class="auth-brand">
-      <div class="logo" aria-hidden="true">银</div>
-      <h2 id="authTitle">银行智能 Agent 测试</h2>
+      <div class="auth-overline">WELCOME TO BANK AGENT</div>
+      <h2 id="authTitle">让日常，简单一点。</h2>
+      <p>登录你的智能银行工作台，继续安心处理每一笔。</p>
     </div>
     <!-- 页签用标准的 tablist/tab 语义，键盘 Tab 可直接在「登录 / 注册」之间移动 -->
     <div class="auth-tabs" role="tablist" aria-label="登录或注册">
@@ -1073,6 +1338,7 @@
       <button type="submit" class="auth-submit" id="authSubmit">登录</button>
       <div class="auth-hint" id="authHint">还没有账号？切换到上方「注册」页签，填账号名与密码即可创建。</div>
     </form>
+    <div class="auth-footnote"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shield"></use></svg><span>本项目为银行服务沙箱演示，仅使用合成数据，<br>不涉及真实资金与交易。</span></div>
   </div>
 </div>
 
@@ -1080,10 +1346,7 @@
 <div class="app" id="app" hidden>
   <!-- ==================== 左侧：会话侧边栏 ==================== -->
   <aside class="sidebar" id="sidebar" aria-label="会话侧边栏">
-    <div class="sidebar-head">
-      <h2>会话</h2>
-      <span class="grow"></span>
-    </div>
+    <div class="sidebar-head"><span class="brand-mark"><svg class="ui-icon" aria-hidden="true"><use href="#icon-brand"></use></svg></span><div class="sidebar-wordmark">Bank Agent<small>智能银行 · 从容生活</small></div></div>
     <button type="button" class="new-chat" id="newSessionBtn" title="开始一个新会话">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round">
@@ -1092,10 +1355,18 @@
       </svg>
       新建会话
     </button>
+    <nav class="sidebar-nav" aria-label="工作台导航">
+      <button type="button" class="sidebar-link" id="assistantNav"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chat"></use></svg>智能助手<span class="nav-tail">↗</span></button>
+      <button type="button" class="sidebar-link" id="servicesNav"><svg class="ui-icon" aria-hidden="true"><use href="#icon-grid"></use></svg>探索服务<span class="nav-tail">06</span></button>
+    </nav>
+    <div class="sidebar-label">最近会话 <span aria-hidden="true">/</span> RECENT</div>
     <div class="session-list" id="sessionList"></div>
     <!-- 会话操作失败的提示位：不写进对话记录，也不落库 -->
     <div class="sidebar-alert" id="sidebarAlert" role="status" hidden></div>
-    <div class="sidebar-foot">历史会话保存在服务端数据库中，重启服务后仍在。</div>
+    <div class="sidebar-foot"><div class="sidebar-note"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shield"></use></svg>沙箱演示 · 每一步，由你掌控</div>
+      <div class="account-row"><span class="account-avatar"><svg class="ui-icon" aria-hidden="true"><use href="#icon-user"></use></svg></span><div class="account-details">      <span class="auth-user" id="authUser" aria-label="当前登录账号" title="当前登录账号" hidden></span>
+      <small>PERSONAL WORKSPACE</small></div><button type="button" class="auth-logout" id="logoutBtn" title="退出当前账号" hidden>退出登录</button>
+</div></div>
   </aside>
   <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
 
@@ -1114,8 +1385,8 @@
     <div class="logo">银</div>
     <!-- 标题区：单行截断，宽度有下限（见样式表 header .brand-text 的注释） -->
     <div class="brand-text">
-      <h1>银行智能 Agent 测试</h1>
-      <div class="sub">自然语言对话 · 路由到 R1 转账 / R2 账单 / R3 理财 / R4 卡片 / R5 订阅 / R6 生日联动</div>
+      <h1>智能银行助手</h1>
+      <div class="sub">你的日常金融事务，一句话就好。</div>
     </div>
     <!-- 右侧工具组：整组不可压缩，窄窗口下整组折到第二行 -->
     <div class="header-tools">
@@ -1123,25 +1394,8 @@
         <span class="dot"></span><span id="modeBadgeText">读取中…</span>
       </span>
       <!-- 演示时钟徽标：常态显示业务时间，点击弹出操作面板 -->
-      <button type="button" class="mode-badge clock-badge" id="clockBadge" aria-haspopup="dialog" aria-label="演示时钟，点击打开面板">
-        <span class="dot"></span><span class="clock-frozen-icon" id="clockFrozenIcon" hidden>⏸</span>
-        <span id="clockBadgeText">读取时钟…</span><span class="clock-offset" id="clockOffset" hidden></span>
-      </button>
-      <!-- 操作身份：只影响按钮可用性，权限以后端 403 为准 -->
-      <select class="role-select" id="roleSelect" aria-label="当前操作身份" title="切换操作身份（权限以后端校验为准）">
-        <option value="user">普通用户</option>
-        <option value="risk_reviewer">复核员</option>
-        <option value="ops_admin">运维</option>
-      </select>
-      <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
-        人工复核<span class="count" id="hitlCount" hidden>0</span>
-      </button>
-      <button type="button" class="hitl-entry" id="mfaEntry" aria-haspopup="dialog" aria-label="待确认的高风险操作">
-        高风险确认<span class="count" id="mfaCount" hidden>0</span>
-      </button>
+      <!-- 顶栏工具组只保留模型接入设置；时钟 / 操作身份 / 复核入口已移到右侧工作台栏 -->
       <!-- 当前登录账号 + 退出登录：未登录时都隐藏（由 applySessionUser 控制） -->
-      <span class="auth-user" id="authUser" aria-label="当前登录账号" title="当前登录账号" hidden></span>
-      <button type="button" class="auth-logout" id="logoutBtn" title="退出当前账号" hidden>退出登录</button>
       <button class="icon-btn" id="settingsBtn" title="模型接入设置" aria-label="模型接入设置">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
            stroke-linecap="round" stroke-linejoin="round">
@@ -1155,7 +1409,8 @@
   <!-- 旧版后端警示条：/health/live 未返回 api_version 时由 refreshModeBadge() 显示（默认隐藏） -->
   <div class="stale-banner" id="staleBackendBanner" role="alert" hidden>检测到后端服务是旧版本（未提供模型接入接口）：请重启服务后刷新页面 —— 在 Struct_of_Agent 目录执行 python web_test/server.py（或运行 web_test\restart_server.ps1）</div>
 
-  <main id="scroll">
+  <div class="workspace"><div class="conversation-surface">
+  <main id="scroll" aria-label="与银行智能助手对话">
     <div class="container" id="chat"></div>
   </main>
 
@@ -1265,18 +1520,45 @@
   <footer>
     <div class="input-box">
       <div class="composer">
-        <textarea id="input" rows="1" placeholder="输入你的需求，例如：给李四转账200元"></textarea>
-        <button id="send" title="发送">
+        <textarea id="input" rows="1" aria-label="输入你的银行业务需求" placeholder="说说你的需求，剩下的我们一起完成…"></textarea>
+        <div class="composer-toolbar"><span class="composer-caption"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spark"></use></svg>自然语言 · 智能协作</span>
+        <button id="send" title="发送" aria-label="发送消息">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round">
-            <path d="M22 2 11 13"></path>
-            <path d="M22 2 15 22 11 13 2 9z"></path>
+            <path d="M12 19V5m-6 6 6-6 6 6"></path>
           </svg>
-        </button>
+        </button></div>
       </div>
-      <div class="hint">Enter 发送 · Shift + Enter 换行 · 会话记录保存在服务端数据库中（重启服务后仍在）</div>
+      <div class="hint">Enter 发送 · Shift + Enter 换行　｜　AI 辅助处理，重要信息请核对 · 沙箱演示</div>
     </div>
   </footer>
+  </div>
+  <aside class="workspace-rail" aria-label="服务指南与工作台工具">
+    <div class="rail-guide"><div class="rail-eyebrow">A LITTLE GUIDANCE</div><h2 class="rail-title">每一步，都心中有数。</h2>
+      <div class="guide-step"><span class="step-number">01</span><div><h3>说说你的需求</h3><p>像聊天一样表达，<br>我会找到合适的服务。</p></div></div>
+      <div class="guide-step"><span class="step-number">02</span><div><h3>一起确认细节</h3><p>涉及资金或账户变动，<br>先核对，再由你确认。</p></div></div>
+      <div class="guide-step"><span class="step-number">03</span><div><h3>清楚看到结果</h3><p>处理进度与执行回执，<br>都留在这段对话里。</p></div></div>
+    </div>
+    <div class="rail-safety"><svg class="ui-icon" aria-hidden="true"><use href="#icon-leaf"></use></svg><h3>智能，也有分寸。</h3><p>查询可以轻松完成。重要操作需要你的确认，高风险操作还会追加验证或人工复核。</p></div>
+    <div class="workspace-tools">      <button type="button" class="mode-badge clock-badge" id="clockBadge" aria-haspopup="dialog" aria-label="演示时钟，点击打开面板">
+        <span class="dot"></span><span class="clock-frozen-icon" id="clockFrozenIcon" hidden>⏸</span>
+        <span id="clockBadgeText">读取时钟…</span><span class="clock-offset" id="clockOffset" hidden></span>
+      </button>
+      <!-- 操作身份：只影响按钮可用性，权限以后端 403 为准 -->
+<label>操作身份      <select class="role-select" id="roleSelect" aria-label="当前操作身份" title="切换操作身份（权限以后端校验为准）">
+        <option value="user">普通用户</option>
+        <option value="risk_reviewer">复核员</option>
+        <option value="ops_admin">运维</option>
+      </select></label>
+      <button type="button" class="hitl-entry" id="hitlEntry" aria-haspopup="dialog" aria-label="人工复核队列">
+        人工复核<span class="count" id="hitlCount" hidden>0</span>
+      </button>
+      <!-- 高风险确认入口（阶段 4 D04）：随复核入口一起放在工作台栏 -->
+      <button type="button" class="hitl-entry" id="mfaEntry" aria-haspopup="dialog" aria-label="待确认的高风险操作">
+        高风险确认<span class="count" id="mfaCount" hidden>0</span>
+      </button>
+</div>
+  </aside></div>
   </div><!-- /.chat-column -->
 </div><!-- /.app -->
 
@@ -1365,6 +1647,16 @@
     </div>
   </section>
 </div>
+
+<template id="welcomeTemplate"><section class="welcome" aria-label="银行智能助手服务首页">
+    <div class="welcome-eyebrow"><svg class="ui-icon" aria-hidden="true"><use href="#icon-spark"></use></svg>YOUR PERSONAL BANKING AGENT</div>
+    <h2>把繁琐留给我，<br>把时间<em>留给生活。</em></h2>
+    <p class="welcome-intro">你好，我是银行智能助手。<br>转账、看账单，或是为在意的人安排一份心意，从这里开始。</p>
+    <div class="section-heading"><h3>今天，有什么可以帮你？</h3><span>6 个场景 · 随心开启</span></div>
+    <div class="service-grid" id="serviceGrid"><button type="button" class="service-card" data-prompt="我想给张三转账100元"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-transfer"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>智能转账</h4><p>转账、定时转账与 AA 收款</p></button><button type="button" class="service-card" data-prompt="看看我这个月的消费分类"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chart"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>账单洞察</h4><p>消费分类、异常与收支报告</p></button><button type="button" class="service-card" data-prompt="帮我做个风险评估"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-wealth"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>理财规划</h4><p>了解风险，找到适合的选择</p></button><button type="button" class="service-card" data-prompt="查看我的卡片信息"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-card"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>卡片管理</h4><p>申请、额度与卡片安全管理</p></button><button type="button" class="service-card" data-prompt="识别一下我的订阅扣费"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-subscription"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>订阅管家</h4><p>梳理自动扣费与续费提醒</p></button><button type="button" class="service-card" data-prompt="帮妈妈安排生日礼物，预留1000元预算"><span class="service-icon"><svg class="ui-icon" aria-hidden="true"><use href="#icon-gift"></use></svg></span><span class="card-arrow" aria-hidden="true">↗</span><h4>生活心意</h4><p>生日预算、鲜花与蛋糕安排</p></button></div>
+    <article class="feature-story"><span class="story-art"><svg class="ui-icon" aria-hidden="true"><use href="#icon-gift"></use></svg></span><div class="story-copy"><small>MADE FOR LIFE</small><h3>一份心意，也可以安排得刚刚好。</h3><p>从生日预算到鲜花蛋糕，把惦记变成周全的计划。</p></div><button type="button" class="story-button" data-prompt="帮妈妈安排生日礼物，预留1000元预算">一起安排 ↗</button></article>
+    <p class="welcome-footnote"><svg class="ui-icon" aria-hidden="true"><use href="#icon-shield"></use></svg>查询轻松完成，重要操作始终由你确认。</p>
+  </section></template>
 
 <script>
   const chatEl = document.getElementById('chat');
@@ -1980,6 +2272,8 @@
   }
 
   function addMessage(role, text, meta) {
+    const welcome = chatEl.querySelector('.welcome');
+    if (welcome) welcome.remove();
     const wrap = document.createElement('div');
     wrap.className = 'message ' + role;
 
@@ -2794,8 +3088,9 @@
     const width = Math.min(296, Math.max(220, window.innerWidth - 20));
     const left = Math.max(10, Math.min(window.innerWidth - width - 10, rect.right - width));
     box.style.left = Math.round(left) + 'px';
-    box.style.top = Math.round(rect.bottom + 8) + 'px';
     renderClockPanel();
+    const top = Math.max(10, Math.min(rect.bottom + 8, window.innerHeight - box.offsetHeight - 10));
+    box.style.top = Math.round(top) + 'px';
     loadClock().catch(function () {});
     const first = box.querySelector('button:not([disabled])');
     if (first) { try { first.focus(); } catch (err) { /* 忽略 */ } }
@@ -4658,17 +4953,8 @@
   /** 欢迎语：只在会话没有历史消息时显示，属于界面提示、不落库。 */
   function showWelcome() {
     clearChat();
-    addMessage('assistant',
-      '你好，我是银行智能助手。你可以用自然语言告诉我需求，例如：\n' +
-      '· 转账：给张三转账100元\n' +
-      '· 账单：看看我这个月的消费分类\n' +
-      '· 理财：申购稳健增利90天1000元\n' +
-      '· 卡片：帮我冻结我的卡片\n' +
-      '· 订阅：帮我取消腾讯视频的自动续费\n' +
-      '· 生日联动：帮妈妈安排生日礼物，预留1000元预算\n' +
-      '· 搜索：今天北京天气怎么样\n\n' +
-      '我会自动路由到对应的 Agent（转账 → R1 / 账单 → R2 / 理财 → R3 / 卡片 → R4 / 订阅 → R5 / 生日联动 → R6 / 其他 → 通用搜索）为你处理。\n\n' +
-      '左侧可以新建会话或回到历史会话；点击右上角齿轮按钮可配置模型接入（填写 Base URL、API Key 与模型名），保存后即时生效；联网搜索是可选功能，不配置也不影响转账、账单、理财、卡片、订阅与生日联动。');
+    chatEl.appendChild($('welcomeTemplate').content.cloneNode(true));
+    scrollEl.scrollTop = 0;
   }
 
   /** 渲染历史消息：复用聊天气泡与元信息样式。 */
@@ -4884,9 +5170,34 @@
     }
   }
 
+  // Scene suggestions are editable drafts; they never submit a banking action.
+  chatEl.addEventListener('click', function (event) {
+    const suggestion = event.target.closest('[data-prompt]');
+    if (!suggestion) return;
+    inputEl.value = suggestion.dataset.prompt;
+    autoResize();
+    inputEl.focus();
+  });
+  $('assistantNav').addEventListener('click', function () {
+    if (window.innerWidth <= SIDEBAR_MOBILE_MAX) applySidebarCollapsed(true);
+    inputEl.focus();
+  });
+  $('servicesNav').addEventListener('click', async function () {
+    if (!chatEl.querySelector('.welcome')) {
+      const session = await createSession();
+      if (!session || !chatEl.querySelector('.welcome')) return;
+    }
+    if (window.innerWidth <= SIDEBAR_MOBILE_MAX) applySidebarCollapsed(true);
+    const grid = $('serviceGrid');
+    if (grid) {
+      grid.scrollIntoView({ block: 'nearest' });
+      grid.querySelector('button').focus({ preventScroll: true });
+    }
+  });
+
   sendBtn.addEventListener('click', () => send());
   inputEl.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
       e.preventDefault();
       send();
     }
