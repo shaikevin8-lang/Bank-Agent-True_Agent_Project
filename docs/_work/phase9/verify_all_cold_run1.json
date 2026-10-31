@@ -1,0 +1,53 @@
+{
+  "ok": true,
+  "failed": 0,
+  "warned": 0,
+  "passed": 6,
+  "base_url": "http://127.0.0.1:18000",
+  "generated_at": "2026-10-31T22:13:13+08:00",
+  "duration_ms": 1991,
+  "steps": [
+    {
+      "name": "live",
+      "status": "ok",
+      "ok": true,
+      "detail": "status=ok model_mode=mock search_configured=False api_version=2026-10-28.login-auth features=9",
+      "duration_ms": 62
+    },
+    {
+      "name": "ready",
+      "status": "ok",
+      "ok": true,
+      "detail": "就绪：checks 通过（db,migration,audit,circuit_breaker）ready=ready",
+      "duration_ms": 43
+    },
+    {
+      "name": "capabilities",
+      "status": "ok",
+      "ok": true,
+      "detail": "enabled=True writes_enabled=True degraded=False open=0 half_open=0 total=0 items=0 code_compute_enabled=True",
+      "duration_ms": 271
+    },
+    {
+      "name": "circuit-state",
+      "status": "ok",
+      "ok": true,
+      "detail": "来源=/health/circuit-breaker?session_id=verify-all open=0 half_open=0 total=0 items=0",
+      "duration_ms": 18
+    },
+    {
+      "name": "code-sandbox",
+      "status": "ok",
+      "ok": true,
+      "detail": "status=ok available=True adapter=http mode=auto selfcheck(network=False, credentials=0, mounts=[])；隔离要求：network=false 且 credentials=0（已达标）",
+      "duration_ms": 42
+    },
+    {
+      "name": "six-scenarios",
+      "status": "ok",
+      "ok": true,
+      "detail": "六场景全部命中：R1→R1(rule)，R2→R2(rule)，R3→R3(rule)，R4→R4(rule)，R5→R5(rule)，R6→R6(rule)",
+      "duration_ms": 1555
+    }
+  ]
+}

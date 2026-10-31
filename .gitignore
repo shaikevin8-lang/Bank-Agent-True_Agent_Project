@@ -48,3 +48,5 @@ packages/
 *.pem
 secrets/
 local_settings.*
+# 阶段 9 提交打包产物（scripts/package_release.ps1 生成，zip 不入库）
+dist/
