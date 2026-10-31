@@ -465,23 +465,38 @@ def index() -> FileResponse:
 
 
 @app.post("/api/chat")
-def chat(request: ChatRequest) -> dict:
+def chat(request: ChatRequest) -> Any:
     """接收一条自然语言消息，路由到子 Agent 并返回统一结果，同时写入会话库。
 
     Args:
         request: 对话请求（message + session_id）。
 
     Returns:
-        统一契约字典（reply / blocked / moderation / tasks / trace / agent）。
+        统一契约字典（reply / blocked / moderation / tasks / trace / agent）；
+        调度器抛异常时返回 500 统一响应包（``INTERNAL_001``）。
 
     Note:
         这里是最后一道**兜底**净化：``reply`` 在返回客户端与落库前都再过一次
         :func:`sanitize_reply`，用于防御被替换 / 自定义的 supervisor（例如测试替身
         或第三方实现直接吐出 Markdown / JSON）。净化器幂等，正常路径下是空操作。
+
+        异常必须在这里翻译成统一响应包：否则 FastAPI 会返回默认的纯文本 500，
+        错误码逃出「8 码封闭集」（``INTERNAL_001`` 才是内部错误的唯一出口），
+        前端只能显示「请求失败（HTTP 500）」。响应里明确告知**不重放**，
+        避免用户因为看不到结果而手工重复提交。
     """
-    result = get_supervisor().chat(request.message, request.session_id)
-    result["reply"] = sanitize_reply(result.get("reply") or "")
-    _record_turn(request.session_id, request.message, result)
+    try:
+        result = get_supervisor().chat(request.message, request.session_id)
+        result["reply"] = sanitize_reply(result.get("reply") or "")
+        _record_turn(request.session_id, request.message, result)
+    except Exception as error:  # noqa: BLE001 - 兜底翻译，避免裸 500 逃出错误码封闭集
+        print(f"[web_test] 对话处理失败：{error!r}")
+        traceback.print_exc()
+        return _fail(
+            "对话服务内部错误，本次请求未返回结果；请不要直接重试，先查看服务日志",
+            "INTERNAL_001",
+            500,
+        )
     return result
 
 

@@ -19,12 +19,12 @@
 | 4 | 安全设计文档 | 十章 + 威胁模型 + 五件套对照 | `docs/AI_Banking_Agent_安全设计文档.md`：760 行 / 中文 12 228 字；10 章 + 55 子节 + T-01…T-10 | ✅ |
 | 5 | 答辩 PPT | ≤10 min | 全仓 `*.pptx`/`*.ppt` 实测 **0** 个 | ⏭ 跳过（用户决定） |
 | 6 | 演示视频 | ≤5 min | 全仓 `*.mp4/*.mov/*.mkv/*.avi` 实测 **0** 个 | ⏭ 跳过（用户决定） |
-| 7 | 源代码 + README + GitHub 地址 | 可访问的真实地址 | `git ls-files` **381** 文件（Struct_of_Agent 164 / tests 133 / docs 52 / migrations 11 / 根 11 / docker 5 / scripts 5），Python **289** 文件 / **61 114** 行；README 290 行，`<owner>` 占位 **0** 处，已写入真实地址 `https://github.com/GB01011/Bank-Agent` | ✅ |
-| 8 | 部署说明 | 启动/迁移/重置/故障/离线 | `docs/AI_Banking_Agent_部署运维说明.md`：417 行 / 中文 3 797 字；15 章 + 15 子节 | ✅ |
-| 9 | 测试用例 | DOC-TEST-001 + `tests/` | `docs/AI_Banking_Agent_测试文档.md` 624 行 / 10 章；`test_*.py` **122** 个（unit 38 / contract 35 / integration 27 / security 22）+ 前端 `.mjs` **5** 个；`pytest --collect-only` 收集 **2 240** 条 | ✅ |
+| 7 | 源代码 + README + GitHub 地址 | 可访问的真实地址 | `git ls-files` **410** 文件（Struct_of_Agent 164 / tests 135 / docs 57 / migrations 11 / 根 11 / docker 5 / scripts 5），Python **298** 文件 / **81 217** 行；README **290** 行 / 中文 **4 433** 字，`<owner>` 占位 **0** 处，已写入真实地址 `https://github.com/GB01011/Bank-Agent`（主分支 `True_Agent_Project`） | ✅ |
+| 8 | 部署说明 | 启动/迁移/重置/故障/离线 | `docs/AI_Banking_Agent_部署运维说明.md`：**421** 行 / 中文 3 905 字；15 章 + 15 子节 | ✅ |
+| 9 | 测试用例 | DOC-TEST-001 + `tests/` | `docs/AI_Banking_Agent_测试文档.md` **625** 行 / 10 章；`test_*.py` **124** 个（unit 39 / contract 36 / integration 27 / security 22）+ 前端 `.mjs` **5** 个；`pytest --collect-only` 收集 **2 269** 条 | ✅ |
 | 10 | 安全自评报告 | 三色 + 五机制 + 已知风险 | `docs/AI_Banking_Agent_安全自评报告.md`：456 行 / 中文 10 338 字；12 章 + 32 子节；`[截图位]` 4 处（审阅时补图，非缺口） | ✅ |
 | 11 | 可重置合成演示环境 | 一键复位 | 迁移 **9** 个版本（单头 `0008_confirmation_grant`）；seed `Struct_of_Agent/db/seed.py` + `seed_scenarios.py`；`db.ps1` 的 `RESET-DEMO-DATA` 令牌 → `db/reset.py`；compose 命名卷 + 一次性 `migrate` 服务 | ✅ |
-| 12 | 文档禁用词 | 交付文档无 TODO | 四份交付文档 + 总架构文档命中 **0**；全 `docs/` 口径 42 处 / 7 文件（均为阶段 1–5 的过程记录与大纲），见 §5.5 | ✅（附边界） |
+| 12 | 文档禁用词 | 交付文档无 TODO | 四份交付文档 + 总架构文档命中 **0**；全 `docs/` 口径 **8 文件 / 23 处**（排除 `_work/` 为 **6 文件 / 12 处**，词表 `TODO|待补充|待定`），均为阶段 1–5 过程记录、大纲与复审取证，见 §5.5 | ✅（附边界） |
 
 **缺失项**：无硬缺失。唯 5、6 两项（PPT / 视频）为阶段 7 延后，本轮不做。
 
@@ -116,12 +116,12 @@
 
 | 命令 | 范围 | 实测 | 判定 |
 | --- | --- | --- | --- |
-| `.\.venv\Scripts\python.exe -m pytest tests -q -m "not pg and not integration"` | 快跑子集 | **1820 passed / 0 failed / 4 skipped / 418 deselected**，80.35 s | ✅ |
-| `.\.venv\Scripts\python.exe -m pytest tests -q` | 全量（无 PG 配置） | **1916 passed / 0 failed / 326 skipped**，92.09 s（1916+326 = 2242 = 1820+4+418，计数自洽） | ✅ |
+| `.\.venv\Scripts\python.exe -m pytest tests -q -m "not pg and not integration"` | 快跑子集 | **1847 passed / 0 failed / 4 skipped / 420 deselected**，66.90 s（复审修复后台数） | ✅ |
+| `.\.venv\Scripts\python.exe -m pytest tests -q` | 全量（无 PG 配置） | **1916 passed / 0 failed / 326 skipped**，92.09 s（阶段 9 实测；复审修复轮**未重跑全量**——该命令会拆掉彩排用的 compose 栈，见 §5.3。修复涉及的 13 处均有专项用例覆盖并在快跑中执行） | ✅（含说明） |
 | `node tests/frontend/<case>.mjs` × 5 | 前端 | 97/97、75/75、183/183、145/145、85/85 = **585 断言全过**，exit 0 | ✅ |
-| `pytest tests/security -q` | 安全目录 | **436 passed**，9.27 s | ✅ |
-| `pwsh scripts/check_repo_hygiene.ps1` | 仓库卫生 | **PASS**（索引 381 条，6 项全 OK） | ✅ |
-| `pwsh scripts/check_error_codes.ps1` | 错误码封闭性 | `{"passed":true,"scanned_files":44,"unknown":[],"codes_found":9 项}` | ✅ |
+| `pytest tests/security -q` | 安全目录 | **438 passed**，8.45 s（复审修复后） | ✅ |
+| `powershell -File scripts/check_repo_hygiene.ps1` | 仓库卫生 | **PASS**（索引 **410** 条，6 项全 OK） | ✅ |
+| `powershell -File scripts/check_error_codes.ps1` | 错误码封闭性 | `{"passed":true,"scanned_files":52,"unknown":[],"codes_found":9 项}` | ✅ |
 | `python -m alembic heads` | 迁移单头 | `0008_confirmation_grant (head)` | ✅ |
 
 **skip 定性（不写成通过）**：326 条 skip 中绝大多数是「未设置 `BANK_AGENT_TEST_DB_URL`」的真实 PostgreSQL 集成用例（**PG 集成本轮未取证**，见 §5.4）；`test_graph_sdk.py` 1 条缺可选依赖 `langgraph-checkpoint-postgres`；`test_local_dev.py` 1 条为 POSIX `TIME_WAIT`，Windows 不适用。
@@ -152,10 +152,10 @@
 
 | 位置 | 历史自述 | 当前实测 | 原因 |
 | --- | --- | --- | --- |
-| 开发文档 §J.1（README） | 279 行 / 4 264 字 | 290 行 / 4 410 字 | 阶段 8 补充部署章节 + 阶段 9 换真实仓库地址 |
-| 开发文档 §阶段 8 卡（部署说明） | 414 行 | 417 行 | 阶段 8 收尾补 UTF-8/BOM 与排障段 |
-| 开发文档 §J.1（错误码脚本） | 扫描 41 份 Markdown | 44 份 | 阶段 8/9 新增 `部署运维说明.md` 等三份 |
-| 全 `docs/` 禁用词 | — | 42 处 / 7 文件 | 均为阶段 1–5 过程记录与 `文档构建大纲.md` 的「待补充」；四份交付文档与总架构文档为 0 |
+| 开发文档 §J.1（README） | 279 行 / 4 264 字 | **290 行 / 4 433 字** | 阶段 8 补充部署章节 + 阶段 9 换真实仓库地址 + 复审删「SHA-256 链」表述 |
+| 开发文档 §阶段 8 卡（部署说明） | 414 行 | **421 行** | 阶段 8 收尾补 UTF-8/BOM 与排障段 + 复审补 `db.ps1 reset` 演示复位入口 |
+| 开发文档 §J.1（错误码脚本） | 扫描 41 份 Markdown | **52 份** | 阶段 8/9 新增三份 + 复审新增 `docs/_work/review/` 五份取证 |
+| 全 `docs/` 禁用词（`TODO`/`待补充`/`待定`） | — | **8 文件 / 23 处**（排除 `_work/` 为 6 文件 / 12 处） | 均为阶段 1–5 过程记录、`文档构建大纲.md` 的「待补充」与复审取证；四份交付文档与总架构文档为 0 |
 
 历史条目按「当时事实」保留不改写，当前值以本报告为准。
 
@@ -176,10 +176,15 @@
 ### 6.2 冷启动到打包的复现步骤（三行）
 
 ```powershell
-docker compose up -d --build; .\.venv\Scripts\python.exe scripts\verify_all.py   # 期望 {"failed":0}
-.\.venv\Scripts\python.exe -m pytest tests -q -m "not pg and not integration"     # 期望 failed==0
-pwsh scripts\check_repo_hygiene.ps1; pwsh scripts\package_release.ps1             # 期望 PASS + dist/*.zip
+# 0) 本机 5432/8000 可能被占用时，先用 .env 插值换宿主端口（示例 15432/18000），据此设基址
+docker compose up -d --build
+.\.venv\Scripts\python.exe scripts\verify_all.py --base-url http://127.0.0.1:18000   # 期望 {"failed":0}
+.\.venv\Scripts\python.exe -m pytest tests -q -m "not pg and not integration"       # 期望 failed==0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_repo_hygiene.ps1 # 期望 PASS
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Tag local # 期望 dist\*.zip
 ```
+
+> 三处易踩的坑（复审实测）：① `verify_all.py` 默认基址是 **8000**，宿主该端口被占时必须显式给 `--base-url`；② 宿主端口冲突要用 `.env` 的 `BANK_AGENT_PG_PORT` / `BANK_AGENT_API_PORT` 插值覆盖，不要改冻结端口常量；③ 本机**没有 `pwsh`**，脚本一律用 `powershell -File` 调用（PS 5.1 要求脚本带 UTF-8 BOM，仓库内脚本已带）。
 
 ### 6.3 终验结论
 
@@ -188,7 +193,32 @@ pwsh scripts\check_repo_hygiene.ps1; pwsh scripts\package_release.ps1           
 | 交付物 | 10/12 项达标，2 项（PPT/视频）按用户决定延后；无硬缺失 |
 | 发布阻断 | PRD §11 八条**全部通过**，无 P0 缺路径、无确认前写入、无越权成功、无重复副作用、无盲重放、页面与事实一致、审计无缺失、提交包洁净 |
 | 彩排 | 冷启动可复现（两轮）、`verify_all` 6/6、注入→熔断 3 轮稳定、复位 18/18、沙箱隔离达标 |
-| 质量门禁 | 快跑 1820 / 全量 1916，失败 0；前端 585 断言；卫生与错误码脚本通过；迁移单头 |
-| 遗留 | app 外网未隔离（配置事实而非网络事实）、PG 集成未取证、全量测试与彩排互斥、审计无哈希链、日累计缺口未实现 —— 均已在 §5 登记，**不对外宣称已具备** |
+| 质量门禁 | 快跑 **1847**（复审修复后）/ 全量 1916（阶段 9 实测），失败 0；安全目录 438；前端 585 断言；卫生（索引 410）与错误码（52 份）脚本通过；迁移单头 |
+| 遗留 | app 外网未隔离（配置事实而非网络事实）、PG 集成未取证、全量测试与彩排互斥、审计无哈希链、日累计缺口未实现、红档补偿在无 HITL 库时转人工、`timeout_s`/`idempotency_key`/rollback 无对外 API、沙箱拒绝未写审计 —— 均已在 §5 与开发文档附录 L.5 登记，**不对外宣称已具备** |
 
 > 本报告与 `AI_Banking_Agent_安全自评报告.md` §2 风险表、`AI_Banking_Agent_安全设计文档.md` §9 残余风险为同一口径；三处冲突时以本报告的实测数字为准。
+
+---
+
+## 7. 复审修复登记（2026-11-01）
+
+阶段 9 交付后，用户要求回头复审「阶段 0–9 是否按开发文档要求完成、是否有 bug」（阶段 7 按要求跳过）。复审由五个**只读**子代理分工完成（0+1 / 2+3 / 4+5 / 6+8 / 9，取证见 `docs/_work/review/`），结论是：**各项能力真实存在、无造假**；阶段 0 通过，阶段 1–6、8、9 共发现 **13 处真缺陷**与若干文档口径不符，其中 3 处属安全语义缺陷：
+
+1. **确认请求越权可见/可撤销**（`web_test/api_confirm.py`）：`/pending`、`GET /{id}`、`DELETE /{id}` 只做角色判定、`session_id` 由请求自报 —— 任意 `user` 角色可读到他人确认请求的 `tool_name` 与参数摘要，并可直接撤销。已改为按认证主体（`X-Operator` → uuid5 归属主体）过滤与校验，`reviewer`/`ops_admin` 保留审核视图，撤销传真实 `user_id`。
+2. **补偿假成功**（`supervisor.py` + `common/plan.py`）：工具回执 `rejected`/`confirm_required` 仍被记为 `compensation="ok"` 并写 `plan.compensated` 审计。已加回执归一化与统一失败判据，失败改记 `plan.compensation_failed` 并转人工。
+3. **补偿绕过安全门**（`supervisor.py`）：补偿只过熔断闸门、不过 HITL 策略/建案/参数消毒/审计，且补偿入参恒为空。已改为走 `hitl.intercept()`（与写路径同一道门）+ 从节点参数派生补偿入参。
+
+其余 10 项为熔断器并发/持久化语义（复位撞主键、半开放行两次、并发计数丢失、判定缓存只写不读）、流式执行非拓扑序、`unfreeze_card` 工具缺失、确认凭据先消费后迁移、`/api/chat` 异常逃出 8 码封闭集、打包脚本重复收录中间件；另有 5 类文档问题（对外宣称「审计 SHA-256 链」但代码无链、部署说明缺演示复位入口、编号口径不一致、`file:line` 漂移、自评口令残留表述过时）已全部对齐。**逐项修法与回归用例**见 `AI_Banking_Agent_缺失内容补齐开发文档.md` 附录 L。
+
+修复后复测（同一台机器 / 仓库 `venv`）：
+
+| 项 | 结果 |
+| --- | --- |
+| 快跑门禁 | **1847 passed / 4 skipped / 420 deselected / 0 failed**，66.90 s（复审前 1820） |
+| 安全目录 | **438 passed**，8.45 s |
+| 用例收集 | **2269** 条 |
+| 前端 `.mjs` × 5 | 585 断言全部通过 |
+| 仓库卫生 / 错误码 | `check_repo_hygiene.ps1` **PASS**（索引 410）；`check_error_codes.ps1` `scanned_files=52, unknown=[]` |
+
+> 本轮**未重跑全量 pytest**：`tests/integration/test_sandbox_isolation.py` 的模块级 `finally` 会 `docker compose down -v`，与彩排栈互斥（§5.3）。修复涉及的每条路径都有专项用例，且都在快跑门禁内执行。
+

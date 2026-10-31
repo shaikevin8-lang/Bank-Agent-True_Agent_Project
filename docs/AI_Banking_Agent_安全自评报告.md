@@ -20,7 +20,7 @@
 
 | # | 风险 | 影响 | 处置 | 状态 |
 |---|---|---|---|---|
-| 1 | `bank_local` 在 git 历史：`start_server.vbs`（第 28 行 DSN）与 `restart_server.ps1`（第 129 行）的口令字面量已随历史分发 | 提交包内含明文口令；口令随历史分发，无法通过删除当前文件消除 | 脚本改读 `BANK_AGENT_DB_URL`（进程环境变量或仓库根 `.env`），缺失即 fail-fast、不回落任何内置默认值（阶段 0 外置）；声明该口令为演示环境本地口令、非生产凭据；阶段 8 容器化改由 `.env` 注入连接串；赛前**不重写 git 历史**（决策 5），**赛后轮换口令** | **缓解** |
+| 1 | `bank_local` 在 git 历史：`ea5e7bd` 的 `start_server.vbs` 连接串常量行与 `restart_server.ps1`（第 129 行）的口令字面量已随历史分发（阶段 0 `f1e9ea7` 已删除这两行，当前 HEAD 全仓检索无命中） | 提交包内含明文口令；口令随历史分发，无法通过删除当前文件消除 | 脚本改读 `BANK_AGENT_DB_URL`（进程环境变量或仓库根 `.env`），缺失即 fail-fast、不回落任何内置默认值（阶段 0 外置）；声明该口令为演示环境本地口令、非生产凭据；阶段 8 容器化改由 `.env` 注入连接串；赛前**不重写 git 历史**（决策 5），**赛后轮换口令** | **缓解** |
 | 2 | R3–R6 仍落 SQLite（`web_test/data/r3-r6.db`） | 与 R1/R2 的 PostgreSQL 不是同一事务边界，跨域补偿与审计一致性弱于 PG | 本轮**标边界**：明确 SQLite 仅承载演示期本地运行数据、不入库、不参与审计链；后续迁 PostgreSQL（决策 6） | **部分缓解** |
 | 3 | 模型为本地 mock | 无法证明对真实模型的注入鲁棒性与幻觉率；模型行为可控是演示前提 | 声明为 mock；保留模型网关切换能力（`common/model_manager.py` + 运行时配置），切换真实端点需显式配置 | **边界声明** |
 | 4 | 银行 / 礼品写沙箱为 mock | 未验证真实银行接口的失败模式与幂等语义 | 合成数据、无真实接口；写操作一律走沙箱适配器，未知结果「先查后决」 | **边界声明** |
@@ -34,11 +34,11 @@
 以下每一条均为对当前仓库的实测结论，未核实的推断不写入本节。
 
 - **文内不含真实字面量**：本报告及后续文档统一用 `bank:<口令>` 与 `BANK_AGENT_DB_URL` 指代，不写真实口令值。
-- **索引中无密钥/数据库/缓存文件**：`git ls-files` 共 221 条，按 `.env`／`*.db`／`*.log`／`__pycache__` 过滤**无任何命中**；`*.vbs`／`*.ps1` 的在册文件仅 4 个（`start_server.vbs`、`start_local.ps1`、`Struct_of_Agent/web_test/restart_server.ps1`、`scripts/db.ps1`）。
+- **索引中无密钥/数据库/缓存文件**：`git ls-files` 共 410 条（2026-11-01 复测），按 `.env`／`*.db`／`*.log`／`__pycache__` 过滤**无任何命中**；`*.vbs`／`*.ps1` 的在册文件共 8 个（`start_server.vbs`、`start_local.ps1`、`Struct_of_Agent/web_test/restart_server.ps1`、`scripts/db.ps1`、`scripts/verify_code_sandbox.ps1`、`scripts/check_repo_hygiene.ps1`、`scripts/check_error_codes.ps1`、`scripts/package_release.ps1`）。
 - **`.env` 被 `.gitignore` 忽略**：规则含 `.env`、`.env.*`、`*.env`、`*.key`、`*.pem`、`secrets/`；同时以 `!.env.example` 显式放行模板，允许「只变量名、无真实值」的模板入库。
 - **`.env.example` 模板已落地并入库**：仓库根存在该模板，内容只有注释、变量名与示例值（`BANK_AGENT_DB_URL=postgresql+psycopg://USER:PASSWORD@127.0.0.1:5432/bank_agent_legacy`、`PYTHONIOENCODING`），经检索不含任何真实口令；`.gitignore` 的 `!.env.example` 例外保证模板能入库，而 `.env` 恒被忽略。
 - **工作区三个启动脚本已无口令字面量**：在 `*.vbs`／`*.ps1` 中检索口令字面量（`git grep -n -F "bank:<口令>" -- "*.vbs" "*.ps1"`）**无输出**。具体实现：`start_server.vbs` 按脚本位置推导根目录、读进程环境变量或仓库根 `.env` 的 `BANK_AGENT_DB_URL`，缺失时打印错误并 `WScript.Quit 1`；`restart_server.ps1` 取值优先级为「已有环境变量 → `.env` → 直接失败」；`start_local.ps1` 对同名键做前置检查，缺失直接 `exit 1`。三者都不再回落到内置默认连接串。
-- **已提交版本（HEAD）仍含口令字面量 2 处**：`start_server.vbs:28`、`Struct_of_Agent/web_test/restart_server.ps1:129` 的 DSN 明文存在于当前 commit，更早历史同样存在。这正是清单第 1 项「残留」的事实依据；处置为披露 + 外置 + 赛后轮换，赛前不重写历史（决策 5）。
+- **历史提交内仍含口令字面量 2 处（当前 HEAD 已 0 处）**：`ea5e7bd` 的 `start_server.vbs` 连接串常量行与 `Struct_of_Agent/web_test/restart_server.ps1:129` 的 DSN 明文仍可从历史提交取出；阶段 0 `f1e9ea7` 已把两处改为读 `BANK_AGENT_DB_URL`（缺失即 fail-fast），因此风险是「历史包可见」而不是「当前代码可见」。这正是清单第 1 项「残留」的事实依据；处置为披露 + 外置 + 赛后轮换，赛前不重写历史（决策 5）。
 - **服务端 fail-fast 底座一致**：`Struct_of_Agent/db/session.py` 的 `get_database_url()` 在 `BANK_AGENT_DB_URL`／`DATABASE_URL` 均缺失时抛 `DatabaseConfigError`（"未配置数据库连接…"），并拒绝非 PostgreSQL 方言；脚本层 fail-fast 与之口径相同。
 - **应用不自行读取 `.env`**：全仓库无 `dotenv`／`load_dotenv` 引用，`.env` 仅由上述启动脚本解析后注入为子进程环境变量。故「阶段 8 改走 `.env`」的实际含义是**由容器编排注入环境变量**，而非应用自动加载 `.env` 文件。
 - **防回归脚本已存在并入库**：`scripts/check_repo_hygiene.ps1`（T0.4）共 6 项检查——索引无 `__pycache__`/`*.pyc`/`*.db`/`*.log`/`.pytest_cache`/`.venv`/`node_modules`；索引无 `.env`/`*.env`（放行 `.env.example`）；索引无 `apps/`、`packages/`；无硬编码本机绝对路径；`*.vbs`/`*.ps1` 无明文口令字面量；工作树提示不计 FAIL。
@@ -68,7 +68,7 @@
 | 检查项 | 命令 / 方法 | 实测结果 |
 |---|---|---|
 | 工作区脚本内口令字面量 | `git grep -n -F "bank:<口令>" -- "*.vbs" "*.ps1"` | 无输出（exit=1） |
-| 已提交版本内口令字面量 | 同一条命令限定 `HEAD` 版本 | 2 处：`start_server.vbs:28`、`restart_server.ps1:129` |
+| 历史提交内口令字面量 | 限定历史提交 `ea5e7bd` | 2 处（`start_server.vbs` 连接串行、`restart_server.ps1:129`）；**当前 HEAD 为 0 处** |
 | 索引中的密钥/数据库/缓存文件 | `git ls-files` 过滤 `.env`／`*.db`／`*.log`／`__pycache__` | 221 条索引，0 命中 |
 | `.env` 是否被忽略 | `.gitignore` 规则 + `git check-ignore` | 已忽略；`!.env.example` 放行模板 |
 | `.env.example` 是否含真实值 | `Test-Path` + 检索口令字面量 | 存在，无口令字面量 |

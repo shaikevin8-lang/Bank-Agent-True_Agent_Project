@@ -1053,6 +1053,42 @@ def is_reversible(node: PlanNode, *, tool_name: str | None = None) -> bool:
     return bool(rule and rule.reversible)
 
 
+#: 回执里表示「这个动作没有真正做成」的状态集合（补偿成功判定用，复审 B02）。
+RECEIPT_FAILURE_STATUSES: frozenset[str] = frozenset(
+    {
+        "failed",
+        "error",
+        "unknown",
+        "rejected",
+        "blocked",
+        "hitl_required",
+        "confirm_required",
+        "manual_review",
+        "timeout",
+    }
+)
+
+
+def receipt_failed(receipt: Any) -> bool:
+    """判断工具回执是否表示失败。
+
+    回滚过去只把 ``blocked`` / ``failed`` 两个键当失败（复审 B02）：各域写工具
+    其实用 ``status`` 表达结果，于是工具明确 ``rejected`` / ``confirm_required``
+    时仍被记成「补偿成功」并写 ``plan.compensated`` 审计，页面状态与沙箱事实不一致。
+
+    Args:
+        receipt: 工具回执（任意类型）。
+
+    Returns:
+        是否失败。
+    """
+    if not isinstance(receipt, Mapping):
+        return False
+    if receipt.get("blocked") is True or receipt.get("failed") is True:
+        return True
+    return str(receipt.get("status") or "").strip().lower() in RECEIPT_FAILURE_STATUSES
+
+
 # ---------------------------------------------------------------------------
 # 事件载荷
 # ---------------------------------------------------------------------------
@@ -1502,11 +1538,9 @@ class PlanExecutor:
                 continue
             try:
                 receipt = self._compensate(node)
-                ok = not (
-                    isinstance(receipt, Mapping)
-                    and (receipt.get("blocked") or receipt.get("failed"))
-                )
-                if not ok:
+                # 判据必须覆盖 status（复审 B02）：只认 blocked/failed 会把工具的
+                # rejected / confirm_required / manual_review 当成补偿成功。
+                if receipt_failed(receipt):
                     raise RuntimeError(str(dict(receipt).get("message") or "补偿回执失败"))
             except Exception as exc:  # noqa: BLE001 - 补偿失败必须升级处理
                 node.status = STATUS_NEEDS_HUMAN

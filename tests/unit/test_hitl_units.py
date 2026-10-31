@@ -94,7 +94,7 @@ def _case(
 
 
 class _FakeResult:
-    """假 ``Result``：只实现 ``scalars()``。"""
+    """假 ``Result``：实现 ``scalars()`` 与 ``scalar_one()``。"""
 
     def __init__(self, rows: list[HitlCase]) -> None:
         self._rows = rows
@@ -102,6 +102,14 @@ class _FakeResult:
     def scalars(self) -> list[HitlCase]:
         """返回预置的行。"""
         return list(self._rows)
+
+    def scalar_one(self) -> int:
+        """返回预置标量（``_append_event`` 里的 ``max(seq)``）。
+
+        重放顺序修复（先做状态迁移、后消费确认凭据）后，批准路径会先写迁移审计，
+        替身必须能应答 ``scalar_one()``；给 0 表示「当天还没有事件」。
+        """
+        return 0
 
 
 class _FakeSession:
@@ -1525,7 +1533,7 @@ def test_decide_case_approve_on_open_case_auto_claims_and_replays(
     record_scope = _ScriptedSession(_Result(rows=[case]))
     scopes = [retry_scope, decide_scope, record_scope]
     monkeypatch.setattr(hitl, "session_scope", lambda: _fake_scope(scopes.pop(0)))
-    monkeypatch.setattr(hitl, "_check_user_confirmation", lambda _case: None)
+    monkeypatch.setattr(hitl, "_check_user_confirmation", lambda _case, **_kw: None)
     monkeypatch.setattr(hitl_replay, "replay", lambda _case: dict(execution))
     monkeypatch.setenv(hitl.CLAIM_TTL_ENV, "300")
 

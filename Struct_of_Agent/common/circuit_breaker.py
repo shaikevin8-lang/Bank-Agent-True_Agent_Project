@@ -32,7 +32,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from sqlalchemy import Engine, text
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from db import audit as db_audit
 from db.session import create_db_engine, get_database_url, session_scope
@@ -903,12 +903,46 @@ def _load(
     return snapshot
 
 
-def _persist(snapshot: Snapshot, *, previous: Snapshot | None) -> Snapshot:
+def _empty_snapshot_like(snapshot: Snapshot) -> Snapshot:
+    """按给定快照的作用域键造一条 ``closed`` 空快照（``version=0``，库里无行）。
+
+    Args:
+        snapshot: 提供作用域键的快照。
+
+    Returns:
+        ``version=0`` 的 ``closed`` 快照。
+    """
+    return Snapshot(
+        tenant_id=snapshot.tenant_id,
+        subject_type=snapshot.subject_type,
+        subject_id=snapshot.subject_id,
+        capability=snapshot.capability,
+        state=STATE_CLOSED,
+        window_started_at=None,
+        updated_at=_now(),
+        version=0,
+    )
+
+
+def _persist(
+    snapshot: Snapshot,
+    *,
+    previous: Snapshot | None,
+    rebuild: Callable[[Snapshot], Snapshot | None] | None = None,
+) -> Snapshot:
     """写入状态（乐观锁冲突重试 1 次，仍失败按 open 处理）。
+
+    冲突重试**不再原样重放目标快照**：``rebuild`` 会用最新已落库状态重算目标，
+    从而保证「半开只放行一次」「失败计数不丢更新」这类依赖前态的迁移在并发下
+    仍然成立（复审 B02/B03）。插入撞主键（两个请求同时新建行）按同一路径重试，
+    第二次改为带版本号的 UPDATE，而不是直接 fail-closed（复审 B03 的第二半）。
 
     Args:
         snapshot: 目标状态。
         previous: 写入前的状态；``None`` 表示此前没有行。
+        rebuild: 冲突时按最新状态重算目标状态的函数；返回 ``None`` 表示此时
+            无需再写（新状态已达成目标），直接以最新状态返回。缺省时退化为
+            仅提升版本号的重放，只允许用于「幂等终态」写入。
 
     Returns:
         已落库的状态。
@@ -917,35 +951,157 @@ def _persist(snapshot: Snapshot, *, previous: Snapshot | None) -> Snapshot:
         CircuitOpenError: 存储不可用或连续版本冲突（fail-closed）。
     """
     expected = previous.version if previous is not None and previous.version > 0 else None
+    target = snapshot
     for attempt in range(2):
         try:
-            stored = get_store().put(snapshot, expected_version=expected)
-        except _ConcurrentUpdate as exc:
-            logger.warning("熔断状态乐观锁冲突（第 %s 次）：%s", attempt + 1, exc)
-            if attempt == 0:
-                latest = get_store().get(snapshot.key)
-                expected = latest.version if latest is not None else None
-                snapshot = Snapshot(**{**snapshot.__dict__, "version": (latest.version + 1) if latest else 1})
-                continue
-            raise CircuitOpenError(
-                snapshot.capability,
-                STATE_OPEN,
-                retry_after=backoff_for(0),
-                reason_code=snapshot.reason_code,
-                message="安全状态写入冲突，写操作已按 fail-closed 拒绝",
-            ) from exc
+            stored = get_store().put(target, expected_version=expected)
+        except (_ConcurrentUpdate, IntegrityError) as exc:
+            logger.warning("熔断状态写入冲突（第 %s 次）：%s", attempt + 1, exc)
+            if attempt > 0:
+                raise CircuitOpenError(
+                    target.capability,
+                    STATE_OPEN,
+                    retry_after=backoff_for(0),
+                    reason_code=target.reason_code,
+                    message="安全状态写入冲突，写操作已按 fail-closed 拒绝",
+                ) from exc
+            latest = get_store().get(target.key)
+            base = latest if latest is not None else _empty_snapshot_like(target)
+            if rebuild is not None:
+                rebuilt = rebuild(base)
+                if rebuilt is None:
+                    _cache_drop(target.key)
+                    _cache_put(base)
+                    return base
+                target = rebuilt
+            else:
+                target = Snapshot(**{**target.__dict__, "version": base.version + 1})
+            expected = base.version if base.version > 0 else None
+            continue
         except SQLAlchemyError as exc:
             raise CircuitOpenError(
-                snapshot.capability,
+                target.capability,
                 STATE_OPEN,
                 retry_after=backoff_for(0),
-                reason_code=snapshot.reason_code,
+                reason_code=target.reason_code,
                 message="安全状态写入失败，写操作已按 fail-closed 拒绝",
             ) from exc
-        _cache_drop(snapshot.key)
+        _cache_drop(target.key)
         _cache_put(stored)
         return stored
     raise CircuitOpenError(snapshot.capability, STATE_OPEN, reason_code=snapshot.reason_code)
+
+
+def _closed_from(
+    base: Snapshot,
+    *,
+    reason_code: str | None = None,
+    reason: str | None = None,
+    moment: datetime,
+) -> Snapshot:
+    """按 ``base`` 的作用域键造一条「全清」的 ``closed`` 目标状态。
+
+    Args:
+        base: 前态快照（提供作用域键与版本号）。
+        reason_code: 目标原因码。
+        reason: 目标原因（截断到 512 字符）。
+        moment: 本次写入的业务时刻。
+
+    Returns:
+        目标快照（``version=base.version+1``）。
+    """
+    return Snapshot(
+        tenant_id=base.tenant_id,
+        subject_type=base.subject_type,
+        subject_id=base.subject_id,
+        capability=base.capability,
+        state=STATE_CLOSED,
+        failure_count=0,
+        window_started_at=None,
+        opened_at=None,
+        cooldown_until=None,
+        half_open_at=None,
+        open_level=0,
+        reason_code=reason_code,
+        reason=(reason.strip()[:512] or None) if reason else None,
+        version=base.version + 1,
+        updated_at=moment,
+    )
+
+
+def _failure_target(
+    base: Snapshot,
+    *,
+    reason_code: str,
+    detail: str,
+    immediate: bool,
+    moment: datetime,
+) -> tuple[Snapshot, bool, int, int]:
+    """按 ``base`` 状态计算「记一次写失败」之后的目标状态。
+
+    抽成纯函数是为了让首次写入与并发冲突后的重算走**同一套判定**：
+    冲突重放必须基于最新状态重新判窗口/计数/阈值，否则并发下会丢计数
+    或让半开被放行两次（复审 B02/B03）。
+
+    Args:
+        base: 前态快照（首次写入时来自库读取，冲突重试时来自最新落库状态）。
+        reason_code: 失败原因码。
+        detail: 失败详情（截断到 512 字符）。
+        immediate: 是否零容忍立即开启。
+        moment: 本次判定的业务时刻。
+
+    Returns:
+        ``(目标快照, 是否开启, 累计失败次数, 开启层级)``。
+    """
+    window = timedelta(seconds=window_seconds())
+    previous_state = base.state
+    count = base.failure_count
+    window_started = base.window_started_at
+    if window_started is None or moment - window_started > window:
+        # 半开试探失败不重置计数：试探本身就是「上一次开启原因仍未消除」的证据，
+        # 若在这里把计数抹回 0，300 s 窗口过期后就再也凑不满阈值（缺陷 D01-W1）。
+        if previous_state != STATE_HALF_OPEN:
+            count = 0
+        window_started = moment
+    count += 1
+    zero_tolerance = immediate or reason_code in IMMEDIATE_REASONS
+    # 半开阶段只放行一次试探：这次试探失败就必定回到 open 并升级退避，
+    # 即使累计次数还没到阈值（例如零容忍原因开启、失败次数本就低于阈值）。
+    tripped = zero_tolerance or count >= failure_threshold() or previous_state == STATE_HALF_OPEN
+    reason = detail[:512] or None
+    if not tripped:
+        target = Snapshot(
+            **{
+                **base.__dict__,
+                "state": STATE_CLOSED,
+                "failure_count": count,
+                "window_started_at": window_started,
+                "reason_code": reason_code,
+                "reason": reason,
+                "version": base.version + 1,
+                "updated_at": moment,
+            }
+        )
+        return target, False, count, base.open_level
+    level = 0 if previous_state == STATE_CLOSED else min(base.open_level + 1, len(BACKOFF_SECONDS) - 1)
+    cooldown = backoff_for(level)
+    target = Snapshot(
+        **{
+            **base.__dict__,
+            "state": STATE_OPEN,
+            "failure_count": count,
+            "window_started_at": window_started,
+            "opened_at": moment,
+            "cooldown_until": moment + timedelta(seconds=cooldown),
+            "half_open_at": None,
+            "open_level": level,
+            "reason_code": reason_code,
+            "reason": reason,
+            "version": base.version + 1,
+            "updated_at": moment,
+        }
+    )
+    return target, True, count, level
 
 
 def _emit(snapshot: Snapshot, previous_state: str, *, audit_action: str = "safety.circuit.transition", **extra: Any) -> None:
@@ -1034,47 +1190,71 @@ def require_closed(*, tenant_id: uuid.UUID | str, user_id: uuid.UUID | str | Non
     """
     if not is_enabled():
         return
-    snapshot = _load(tenant_id, user_id, capability, use_cache=False)
-    moment = _now()
+    # 快路径：先读 5 s 判定缓存（阶段 1 卡面「判定读 DB 5 s 缓存」）。命中 ``closed``
+    # 直接放行；非 ``closed`` 时改用无缓存的权威读，避免陈旧缓存造成误放行/误拒绝。
+    snapshot = _load(tenant_id, user_id, capability, use_cache=True)
     if snapshot.state == STATE_CLOSED:
         return
-    if snapshot.state == STATE_OPEN:
-        remaining = snapshot.retry_after(moment)
-        if remaining is not None:
-            raise CircuitOpenError(
-                capability,
-                STATE_OPEN,
-                retry_after=remaining,
-                reason_code=snapshot.reason_code,
+    snapshot = _load(tenant_id, user_id, capability, use_cache=False)
+    if snapshot.state == STATE_CLOSED:
+        return
+
+    def claim(base: Snapshot) -> Snapshot | None:
+        """按最新状态判定「这一次是否由我取用半开试探」，并给出待写目标。
+
+        Args:
+            base: 最新已落库状态。
+
+        Returns:
+            待写目标状态；``None`` 表示别的写入方已把状态恢复到 ``closed``，
+            本次无需再写且应当放行。
+
+        Raises:
+            CircuitOpenError: 仍在冷却期，或半开试探已被别人取用。
+        """
+        moment = _now()
+        if base.state == STATE_CLOSED:
+            return None
+        if base.state == STATE_OPEN:
+            remaining = base.retry_after(moment)
+            if remaining is not None:
+                raise CircuitOpenError(
+                    capability,
+                    STATE_OPEN,
+                    retry_after=remaining,
+                    reason_code=base.reason_code,
+                )
+            return Snapshot(
+                **{
+                    **base.__dict__,
+                    "state": STATE_HALF_OPEN,
+                    "half_open_at": moment,
+                    "version": base.version + 1,
+                    "updated_at": moment,
+                }
             )
-        trial = Snapshot(
-            **{
-                **snapshot.__dict__,
-                "state": STATE_HALF_OPEN,
-                "half_open_at": moment,
-                "version": snapshot.version + 1,
-                "updated_at": moment,
-            }
+        if base.half_open_at is None:
+            return Snapshot(
+                **{**base.__dict__, "half_open_at": moment, "version": base.version + 1, "updated_at": moment}
+            )
+        raise CircuitOpenError(
+            capability,
+            STATE_HALF_OPEN,
+            retry_after=None,
+            reason_code=base.reason_code,
+            message=f"能力 {capability} 正在半开试探，请等待试探结果后再试",
         )
-        stored = _persist(trial, previous=snapshot)
-        _emit(stored, STATE_OPEN, trace_id=None)
-        logger.info("熔断器 %s 冷却到期，进入半开试探", capability)
+
+    previous_state = snapshot.state
+    trial = claim(snapshot)
+    if trial is None:  # pragma: no cover - 上面已判过 closed
         return
-    # half_open：只放行第一次试探
-    if snapshot.half_open_at is None:
-        trial = Snapshot(
-            **{**snapshot.__dict__, "half_open_at": moment, "version": snapshot.version + 1, "updated_at": moment}
-        )
-        stored = _persist(trial, previous=snapshot)
-        _emit(stored, STATE_CLOSED, trace_id=None)
+    stored = _persist(trial, previous=snapshot, rebuild=claim)
+    if stored.state != STATE_HALF_OPEN:
+        # 并发写入方已把状态恢复到 closed：本次放行，但不伪造状态迁移事件。
         return
-    raise CircuitOpenError(
-        capability,
-        STATE_HALF_OPEN,
-        retry_after=None,
-        reason_code=snapshot.reason_code,
-        message=f"能力 {capability} 正在半开试探，请等待试探结果后再试",
-    )
+    _emit(stored, previous_state, trace_id=None)
+    logger.info("熔断器 %s 冷却到期，进入半开试探", capability)
 
 
 def record_success(*, tenant_id: uuid.UUID | str, user_id: uuid.UUID | str | None, capability: str) -> Snapshot:
@@ -1093,25 +1273,22 @@ def record_success(*, tenant_id: uuid.UUID | str, user_id: uuid.UUID | str | Non
         # 从未失败过的健康路径：不写库，保持零开销。
         return snapshot
     previous_state = snapshot.state
-    moment = _now()
-    recovered = Snapshot(
-        tenant_id=snapshot.tenant_id,
-        subject_type=snapshot.subject_type,
-        subject_id=snapshot.subject_id,
-        capability=capability,
-        state=STATE_CLOSED,
-        failure_count=0,
-        window_started_at=None,
-        opened_at=None,
-        cooldown_until=None,
-        half_open_at=None,
-        open_level=0,
-        reason_code=None,
-        reason=None,
-        version=snapshot.version + 1,
-        updated_at=moment,
-    )
-    stored = _persist(recovered, previous=snapshot)
+
+    def rebuild(base: Snapshot) -> Snapshot | None:
+        """并发冲突时按最新状态重算「恢复 closed」的目标状态。
+
+        Args:
+            base: 最新已落库状态。
+
+        Returns:
+            目标状态；已经是健康 ``closed`` 时返回 ``None``（无需再写）。
+        """
+        if base.state == STATE_CLOSED and base.failure_count == 0 and base.opened_at is None:
+            return None
+        return _closed_from(base, moment=_now())
+
+    recovered = _closed_from(snapshot, moment=_now())
+    stored = _persist(recovered, previous=snapshot, rebuild=rebuild)
     _emit(stored, previous_state)
     logger.info("熔断器 %s 恢复 closed（此前 %s）", capability, previous_state)
     return stored
@@ -1157,68 +1334,44 @@ def record_failure(
             updated_at=_now(),
         )
     snapshot = _load(tenant_id, user_id, capability, use_cache=False)
-    moment = _now()
-    window = timedelta(seconds=window_seconds())
     previous_state = snapshot.state
-    count = snapshot.failure_count
-    window_started = snapshot.window_started_at
-    if window_started is None or moment - window_started > window:
-        # 半开试探失败不重置计数：试探本身就是「上一次开启原因仍未消除」的证据，
-        # 若在这里把计数抹回 0，300 s 窗口过期后就再也凑不满阈值（缺陷 D01-W1）。
-        if previous_state != STATE_HALF_OPEN:
-            count = 0
-        window_started = moment
-    count += 1
-    zero_tolerance = immediate or reason_code in IMMEDIATE_REASONS
-    # 半开阶段只放行一次试探：这次试探失败就必定回到 open 并升级退避，
-    # 即使累计次数还没到阈值（例如零容忍原因开启、失败次数本就低于阈值）。
-    tripped = zero_tolerance or count >= failure_threshold() or previous_state == STATE_HALF_OPEN
+    target = _failure_target(
+        snapshot,
+        reason_code=reason_code,
+        detail=detail,
+        immediate=immediate,
+        moment=_now(),
+    )[0]
 
-    if not tripped:
-        pending = Snapshot(
-            **{
-                **snapshot.__dict__,
-                "state": STATE_CLOSED,
-                "failure_count": count,
-                "window_started_at": window_started,
-                "reason_code": reason_code,
-                "reason": detail[:512] or None,
-                "version": snapshot.version + 1,
-                "updated_at": moment,
-            }
+    def rebuild(base: Snapshot) -> Snapshot:
+        """并发冲突时按最新状态重算「记一次失败」的目标（复审 B03：计数不丢）。
+
+        Args:
+            base: 最新已落库状态。
+
+        Returns:
+            记失败后的目标状态。
+        """
+        return _failure_target(
+            base,
+            reason_code=reason_code,
+            detail=detail,
+            immediate=immediate,
+            moment=_now(),
+        )[0]
+
+    stored = _persist(target, previous=snapshot, rebuild=rebuild)
+    if stored.state == STATE_OPEN:
+        _emit(stored, previous_state, trace_id=trace_id)
+        logger.error(
+            "熔断器开启 %s（reason=%s count=%s level=%s）",
+            capability,
+            reason_code,
+            stored.failure_count,
+            stored.open_level,
         )
-        stored = _persist(pending, previous=snapshot)
-        logger.warning("熔断器 %s 记失败 %s/%s（%s）", capability, count, failure_threshold(), reason_code)
-        return stored
-
-    level = 0 if previous_state == STATE_CLOSED else min(snapshot.open_level + 1, len(BACKOFF_SECONDS) - 1)
-    cooldown = backoff_for(level)
-    opened = Snapshot(
-        **{
-            **snapshot.__dict__,
-            "state": STATE_OPEN,
-            "failure_count": count,
-            "window_started_at": window_started,
-            "opened_at": moment,
-            "cooldown_until": moment + timedelta(seconds=cooldown),
-            "half_open_at": None,
-            "open_level": level,
-            "reason_code": reason_code,
-            "reason": detail[:512] or None,
-            "version": snapshot.version + 1,
-            "updated_at": moment,
-        }
-    )
-    stored = _persist(opened, previous=snapshot)
-    _emit(stored, previous_state, trace_id=trace_id)
-    logger.error(
-        "熔断器开启 %s（reason=%s count=%s level=%s cooldown=%ss）",
-        capability,
-        reason_code,
-        count,
-        level,
-        cooldown,
-    )
+    else:
+        logger.warning("熔断器 %s 记失败 %s/%s（%s）", capability, stored.failure_count, failure_threshold(), reason_code)
     return stored
 
 
@@ -1276,26 +1429,28 @@ def reset(
         raise ValueError("复位必须署名")
     snapshot_row = _load(tenant_id, user_id, capability, use_cache=False)
     previous_state = snapshot_row.state
-    moment = _now()
-    cleared = Snapshot(
-        tenant_id=snapshot_row.tenant_id,
-        subject_type=snapshot_row.subject_type,
-        subject_id=snapshot_row.subject_id,
-        capability=capability,
-        state=STATE_CLOSED,
-        failure_count=0,
-        window_started_at=None,
-        opened_at=None,
-        cooldown_until=None,
-        half_open_at=None,
-        open_level=0,
+    cleared = _closed_from(
+        snapshot_row,
         reason_code=REASON_OPERATOR_RESET,
-        reason=reason.strip()[:512],
-        version=snapshot_row.version + 1,
-        updated_at=moment,
+        reason=reason,
+        moment=_now(),
     )
-    previous = snapshot_row if snapshot_row.version > 1 or previous_state != STATE_CLOSED else None
-    stored = _persist(cleared, previous=previous)
+
+    def rebuild(base: Snapshot) -> Snapshot:
+        """并发冲突时按最新状态重算复位目标（复审 B02）。
+
+        Args:
+            base: 最新已落库状态。
+
+        Returns:
+            复位后的目标状态。
+        """
+        return _closed_from(base, reason_code=REASON_OPERATOR_RESET, reason=reason, moment=_now())
+
+    # ``version == 0`` 才是「库里没有这一行」；其余一律带版本号 UPDATE。
+    # 之前用「version > 1 或状态非 closed」判定会把「已落库一次计数但仍是 closed
+    # 且 version == 1」的行误判成无行，走 INSERT 撞主键 → 复位端点 503（复审 B01）。
+    stored = _persist(cleared, previous=snapshot_row, rebuild=rebuild)
     _emit(
         stored,
         previous_state,

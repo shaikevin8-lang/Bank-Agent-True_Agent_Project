@@ -53,6 +53,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import timedelta
 from typing import Any, Iterable
@@ -63,12 +64,15 @@ from pydantic import BaseModel, Field
 
 from common import confirm, hitl, param_guard
 from web_test.api_common import (
+    DEFAULT_OPERATOR,
     ROLE_OPS_ADMIN,
     ROLE_RISK_REVIEWER,
     ROLE_USER,
     ok,
     resolve_actor,
 )
+
+logger = logging.getLogger(__name__)
 
 #: 业务路由：内部不设 prefix，由下面两次 ``include_router`` 分别注入两个前缀，
 #: 保证同一份实现同时响应 ``/api/v1/confirm/*`` 与 ``/api/confirm/*``。
@@ -80,6 +84,9 @@ _core = APIRouter()
 SELF_ROLES: tuple[str, ...] = (ROLE_USER, ROLE_RISK_REVIEWER, ROLE_OPS_ADMIN)
 #: 模拟短信面板：★ 只给演示者。普通用户若能读，就等于把验证码发给了「攻击者」。
 DEMO_ROLES: tuple[str, ...] = (ROLE_RISK_REVIEWER, ROLE_OPS_ADMIN)
+
+#: 主体命名空间：把 ``X-Operator`` 署名确定性地映射成主体 UUID（见 :func:`_operator_subject`）。
+_OPERATOR_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "bank-agent:operator")
 
 ERROR_VALIDATION = "VALIDATION_001"
 ERROR_CONFLICT = "CONFLICT_001"
@@ -195,7 +202,16 @@ def _fail_confirm(error: Exception, fallback: str = "确认请求失败") -> JSO
     code = str(getattr(error, "error_code", "") or ERROR_VALIDATION)
     status = STATUS_BY_CODE.get(code, 400)
     detail = str(getattr(error, "detail", "") or "").strip()
-    message = detail or str(error).strip() or fallback
+    domain_error = isinstance(error, getattr(confirm, "ConfirmError", ()))
+    if detail:
+        message = detail
+    elif domain_error:
+        message = str(error).strip() or fallback
+    else:
+        # 非领域异常（驱动/网络/未知 bug）：只回兜底文案，内部信息仅进日志，
+        # 避免把栈消息、SQL、驱动报错透给前端（复审 BUG-4）。
+        logger.warning("%s：%s", fallback, error, exc_info=True)
+        message = fallback
     data: dict[str, Any] = {"reason": _reason_of(error)}
     attempts_left = getattr(error, "attempts_left", None)
     if isinstance(attempts_left, int):
@@ -305,6 +321,85 @@ def _session_id_of(raw: str, request: Request) -> str:
     if explicit:
         return explicit
     return (request.headers.get("X-Session-Id") or "").strip()
+
+
+def _operator_key(actor: Any) -> str:
+    """取调用者的**主体署名**（``X-Operator`` 去空白），缺省视为匿名。
+
+    Args:
+        actor: :func:`web_test.api_common.resolve_actor` 解析出的身份。
+
+    Returns:
+        署名；缺失/匿名时返回空串。
+    """
+    operator = str(getattr(actor, "operator", "") or "").strip()
+    if not operator or operator == DEFAULT_OPERATOR:
+        return ""
+    return operator
+
+
+def _operator_subject(actor: Any) -> uuid.UUID | None:
+    """把调用者署名映射成稳定的主体 UUID（落库用，``user_id`` 必须是 UUID）。
+
+    同一个 ``X-Operator`` 永远映射到同一个 UUID，不同署名互不相同——这样既能
+    在数据库里表达「这条确认请求属于谁」，又不需要引入真实账号体系。
+
+    Args:
+        actor: 调用者身份。
+
+    Returns:
+        主体 UUID；匿名调用返回 ``None``。
+    """
+    key = _operator_key(actor)
+    if not key:
+        return None
+    return uuid.uuid5(_OPERATOR_NAMESPACE, key)
+
+
+def _owned_by(actor: Any, request_obj: Any) -> bool:
+    """判断调用者能否访问该确认请求（FR-COM-004「仅本人可见」）。
+
+    归属以**主体署名**为准：建请求时把 ``X-Operator`` 映射成主体 UUID 落进
+    ``user_id``，之后读取 / 提交验证码 / 撤销都要求主体一致（复审 BUG-1：此前
+    只校验角色，任何 ``user`` 只要报出别人的 ``session_id`` 就能读到别人的确认
+    请求，甚至把它撤销掉）。``risk_reviewer`` / ``ops_admin`` 属演示与审核角色，
+    可查看任一条目。
+
+    ★ 不使用「请求自报的 ``session_id``」作归属依据——``session_id`` 由调用方
+    自报、可伪造，拿它判归属等于没有校验。
+
+    Args:
+        actor: 调用者身份。
+        request_obj: 确认请求（``ConfirmationRequest``）。
+
+    Returns:
+        是否允许访问。
+    """
+    if actor.may(DEMO_ROLES):
+        return True
+    owner = getattr(request_obj, "user_id", None)
+    caller = _operator_subject(actor)
+    if owner is None or caller is None:
+        # 无署名的历史行 / 匿名调用：普通用户一律不可见，避免「谁都能读」。
+        return False
+    return str(owner) == str(caller)
+
+
+def _forbidden_request(action: str) -> JSONResponse:
+    """确认请求归属校验失败时的 403 ``AUTHZ_001``。
+
+    Args:
+        action: 被拒绝的动作描述。
+
+    Returns:
+        统一响应包形式的 403 响应。
+    """
+    return _fail(
+        f"确认请求不属于当前用户，无权{action}",
+        ERROR_AUTHZ,
+        403,
+        {"reason": "request_not_owned"},
+    )
 
 
 def _grant_id_for(request_obj: Any) -> str | None:
@@ -496,7 +591,7 @@ def create_confirm_request(payload: ConfirmRequestBody, request: Request) -> JSO
             tool_name=tool_name,
             args=args,
             tenant_id=tenant_id,
-            user_id=None,
+            user_id=_operator_subject(actor),
             session_id=session_id,
         )
     except Exception as error:  # noqa: BLE001 - 领域异常统一映射
@@ -546,6 +641,12 @@ def submit_confirm_mfa(payload: MfaBody, request: Request) -> JSONResponse:
             400,
             {"reason": "not_found"},
         )
+
+    target, problem = _load_request(parsed)
+    if problem is not None:
+        return problem
+    if not _owned_by(actor, target):
+        return _forbidden_request("提交该请求的验证码")
 
     try:
         grant = confirm.submit_mfa(
@@ -619,6 +720,8 @@ def list_pending_confirmations(
     except Exception as error:  # noqa: BLE001
         return _fail_confirm(error, "查询待确认项失败")
 
+    # 归属过滤（复审 BUG-1）：普通用户只看到属于自己的条目；审核员/运维可见全部。
+    rows = [row for row in rows if _owned_by(actor, row)]
     items = [_public(row) for row in rows]
     return JSONResponse(
         content=ok(f"当前会话有 {len(items)} 项待确认", {"items": items, "total": len(items)})
@@ -640,6 +743,8 @@ def get_confirm_request(request_id: str, request: Request) -> JSONResponse:
     request_obj, problem = _load_request(request_id)
     if problem is not None:
         return problem
+    if not _owned_by(actor, request_obj):
+        return _forbidden_request("读取该确认请求")
     return JSONResponse(content=ok("确认请求详情", _public(request_obj)))
 
 
@@ -664,11 +769,16 @@ def cancel_confirm_request(request_id: str, request: Request) -> JSONResponse:
             400,
             {"reason": "not_found"},
         )
+    target, problem = _load_request(parsed)
+    if problem is not None:
+        return problem
+    if not _owned_by(actor, target):
+        return _forbidden_request("取消该确认请求")
     try:
         request_obj = confirm.cancel_request(
             parsed,
             tenant_id=hitl.default_tenant_id(),
-            user_id=None,
+            user_id=getattr(target, "user_id", None),
         )
     except Exception as error:  # noqa: BLE001
         return _fail_confirm(error, "取消确认请求失败")

@@ -27,6 +27,7 @@ import inspect
 import json
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any
 
 from common.agent import CommonAgent
@@ -66,6 +67,39 @@ _ROUTE_PATTERNS: dict[str, list[str]] = {
 
 # 摘要器缓存哨兵：区分「尚未构造」与「构造结果为 None（无可用模型）」
 _SUMMARIZER_UNSET: Any = object()
+
+# 工具回执里表示「没做成」的状态集合。
+# 各域写工具用 status 表达结果，补偿路径必须据此判定失败，不能一律当成功（复审 B02）。
+REJECTED_TOOL_STATUSES: frozenset[str] = frozenset(
+    {
+        "rejected",
+        "failed",
+        "error",
+        "blocked",
+        "confirm_required",
+        "hitl_required",
+        "manual_review",
+        "unknown",
+    }
+)
+
+# 节点参数里的编排元数据键：派生补偿参数时必须剔除，避免把编排字段当工具入参（复审 B03）。
+PARAM_META_KEYS: frozenset[str] = frozenset(
+    {
+        "tool",
+        "compensation_args",
+        "agent",
+        "intent",
+        "node_id",
+        "depends_on",
+        "irreversible",
+        "compensating_action",
+        "risk_level",
+        "requires_confirmation",
+        "timeout_s",
+        "idempotency_key",
+    }
+)
 
 
 # 各 Agent 能力说明（供 LLM 调度器生成计划时参考）
@@ -622,6 +656,9 @@ class SupervisorAgent:
     def _plan_gate(self, node: plan_dag.PlanNode) -> dict[str, Any] | None:
         """执行前的熔断门禁（工具层 HITL 之外的第一道闸）。
 
+        熔断判定的契约是 **fail-closed**：熔断基础设施不可用时按「已开启」处理，
+        宁可不执行也不能放行（复审 B03 记录旧实现异常即放行）。
+
         Args:
             node: 节点。
 
@@ -635,28 +672,50 @@ class SupervisorAgent:
             from common import hitl
 
             return hitl.breaker_gate(tool)
-        except Exception:  # noqa: BLE001 - 门禁自身异常不阻断编排
-            logger.debug("计划门禁不可用，跳过 tool=%s", tool)
-            return None
+        except Exception as exc:  # noqa: BLE001 - fail-closed
+            logger.error("计划门禁不可用，按熔断处理 tool=%s：%s", tool, exc)
+            return {
+                "blocked": True,
+                "reason_code": "NOT_READY_001",
+                "reply": f"{tool} 的熔断状态不可判定，已按未就绪拒绝执行。",
+            }
 
     def _compensation_gate(self, node: plan_dag.PlanNode) -> dict[str, Any] | None:
-        """补偿动作的熔断门禁（补偿本身也是写操作）。
+        """补偿动作的安全门禁：与正常写路径**同一个** :func:`hitl.intercept`。
+
+        补偿也是写操作，必须走同一道门（复审 B04）：过去只调
+        ``hitl.breaker_gate``，绕过策略判定、建案、红色二次确认、参数剥离与审计。
+        门禁放行时把**闸门处理后的参数**回写到 ``compensation_args``，让随后
+        :meth:`_compensate_node` 用同一份参数执行（``intercept`` 会原地补上
+        ``confirmed`` / ``mfa_code`` 哨兵，服务端注入不能被丢掉）。
 
         Args:
             node: 待补偿节点。
 
         Returns:
-            阻断回执或 ``None``。
+            阻断回执或 ``None``（``None`` 表示放行）。
         """
         tool = self._compensation_tool(node)
         if not tool:
             return None
+        arguments = self._compensation_arguments(node)
         try:
             from common import hitl
 
-            return hitl.breaker_gate(tool)
-        except Exception:  # noqa: BLE001 - 门禁自身异常不阻断补偿判定
-            return None
+            blocked = hitl.intercept(tool, arguments)
+        except Exception as exc:  # noqa: BLE001 - 闸门故障一律 fail-closed
+            logger.error("补偿门禁不可用，按 fail-closed 拒绝补偿 tool=%s：%s", tool, exc)
+            return {
+                "blocked": True,
+                "status": "rejected",
+                "reason_code": "NOT_READY_001",
+                "reply": f"补偿工具 {tool} 的安全闸门不可用，已转人工处理。",
+            }
+        if blocked:
+            return blocked
+        if isinstance(node.params, dict):
+            node.params["compensation_args"] = dict(arguments)
+        return None
 
     def _invoke_tool(self, agent_name: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """直接调用某模块已注册的写工具（补偿用，绕过 LLM）。
@@ -667,7 +726,7 @@ class SupervisorAgent:
             arguments: 工具参数。
 
         Returns:
-            统一回执字典。
+            归一化回执：``status`` 只会是 ``ok`` 或 ``rejected``（复审 B02）。
 
         Raises:
             RuntimeError: 该模块未注册此工具。
@@ -676,17 +735,67 @@ class SupervisorAgent:
         for tool in getattr(agent, "_tools", None) or []:
             if getattr(tool, "name", None) == tool_name:
                 raw = tool.invoke(arguments)
-                return {"status": "ok", "tool": tool_name, "message": str(raw)[:500]}
+                return self._normalize_receipt(tool_name, raw)
         raise RuntimeError(f"模块 {agent_name} 未注册补偿工具 {tool_name}")
 
-    def _compensate_node(self, node: plan_dag.PlanNode) -> dict[str, Any]:
-        """执行单节点补偿（走熔断门禁 + 直接工具调用）。
+    @staticmethod
+    def _normalize_receipt(tool_name: str, raw: Any) -> dict[str, Any]:
+        """把各域工具回执归一成 ``ok`` / ``rejected``。
+
+        各域写工具用 ``status`` 表达结果（``accepted`` / ``processing`` /
+        ``noop`` / ``rejected`` / ``confirm_required`` / ``manual_review``）。
+        补偿路径过去一律返回 ``{"status": "ok"}``，于是工具明确拒绝时仍被记成
+        「补偿成功」并写 ``plan.compensated`` 审计（复审 B02）。
+
+        Args:
+            tool_name: 工具名。
+            raw: 工具原始返回值。
+
+        Returns:
+            归一化回执（拒绝时带 ``blocked=True``，执行器据此升级人工）。
+        """
+        payload = raw if isinstance(raw, Mapping) else {}
+        tool_status = str(payload.get("status") or "").strip().lower()
+        blocked = bool(payload.get("blocked")) or tool_status in REJECTED_TOOL_STATUSES
+        message = payload.get("reason") or payload.get("message") or raw
+        receipt: dict[str, Any] = {
+            "status": "rejected" if blocked else "ok",
+            "tool": tool_name,
+            "message": str(message)[:500],
+        }
+        if tool_status:
+            receipt["tool_status"] = tool_status
+        if blocked:
+            receipt["blocked"] = True
+        return receipt
+
+    @classmethod
+    def _compensation_arguments(cls, node: plan_dag.PlanNode) -> dict[str, Any]:
+        """推导补偿工具所需的参数。
+
+        旧实现读 ``params["compensation_args"]``，而全仓没有任何地方写这个键，
+        于是补偿恒以 ``{}`` 调用工具；真实工具会因缺参抛校验错误（复审 B03）。
 
         Args:
             node: 待补偿节点。
 
         Returns:
-            补偿回执。
+            补偿工具参数（显式 ``compensation_args`` 优先，否则由节点参数派生）。
+        """
+        params = node.params if isinstance(node.params, Mapping) else {}
+        explicit = params.get("compensation_args")
+        if isinstance(explicit, Mapping) and explicit:
+            return dict(explicit)
+        return {key: value for key, value in params.items() if key not in PARAM_META_KEYS}
+
+    def _compensate_node(self, node: plan_dag.PlanNode) -> dict[str, Any]:
+        """执行单节点补偿（走工具层闸门 + 直接工具调用）。
+
+        Args:
+            node: 待补偿节点。
+
+        Returns:
+            补偿回执（``status`` 为 ``ok`` 或 ``rejected``）。
 
         Raises:
             RuntimeError: 无补偿工具或工具不可用（由执行器升级为零容忍失败）。
@@ -694,8 +803,9 @@ class SupervisorAgent:
         tool = self._compensation_tool(node)
         if tool is None:
             raise RuntimeError("没有可用的自动化补偿工具")
-        params = node.params if isinstance(node.params, dict) else {}
-        arguments = dict(params.get("compensation_args") or {})
+        # 安全闸门已在 :meth:`_compensation_gate` 里走过（同一个 ``hitl.intercept``），
+        # 这里只负责用**闸门处理后的参数**真正执行补偿动作。
+        arguments = self._compensation_arguments(node)
         return self._invoke_tool(node.agent, tool, arguments)
 
     def _node_runner(
@@ -720,6 +830,7 @@ class SupervisorAgent:
                 node.agent, self._resolve_agent(node.agent), node.intent, session_id, history
             )
             outcomes[node.node_id] = result
+            self._remember_executed_tool(node, result)
             trace = result.get("trace") or {}
             if result.get("blocked") or trace.get("failed"):
                 return {
@@ -730,6 +841,27 @@ class SupervisorAgent:
             return {"status": "ok"}
 
         return runner
+
+    @staticmethod
+    def _remember_executed_tool(node: plan_dag.PlanNode, result: dict[str, Any]) -> None:
+        """把节点实际调用过的写工具记进节点参数，供回滚解析补偿目标。
+
+        回滚靠 :meth:`_node_tool` 从 ``params["tool"]`` 取原工具名，再查
+        ``plan_dag.COMPENSATIONS``；但计划节点由路由生成，通常不带 ``tool``，
+        于是补偿规则永远匹配不到、只能落到人工（复审 B02）。这里在执行成功后
+        把轨迹里最后一个工具名回填，让补偿规则真正可达。
+
+        Args:
+            node: 已执行节点。
+            result: 子 Agent 统一契约结果。
+        """
+        params = node.params if isinstance(node.params, dict) else None
+        if params is None or params.get("tool"):
+            return
+        trace = result.get("trace") or {}
+        tools = [str(name) for name in (trace.get("tools") or []) if name]
+        if tools:
+            params["tool"] = tools[-1]
 
     @staticmethod
     def _node_status_from(result: dict[str, Any]) -> str:
@@ -771,6 +903,27 @@ class SupervisorAgent:
                 "plan_reason": reason,
             },
         }
+
+    @staticmethod
+    def _execution_order(plan: plan_dag.Plan) -> list[str]:
+        """流式路径的节点执行顺序：优先拓扑序，成环时回退声明序。
+
+        流式执行过去按 ``plan.node_ids`` 的声明序迭代（复审 B04）：只要 LLM 给出的
+        节点声明顺序与依赖方向不一致（``n1 depends_on n2`` 而 n1 写在前面），
+        n1 就会因为「上游还没跑」被误判为级联跳过；而同一次对话的非流式路径走
+        :class:`plan_dag.PlanExecutor` 按拓扑序执行，两条路径语义不一致。
+
+        Args:
+            plan: 计划。
+
+        Returns:
+            节点 ID 顺序（拓扑序；成环时为声明序，由执行期校验兜底）。
+        """
+        try:
+            return plan_dag.topological_order(plan)
+        except plan_dag.PlanCycleError:
+            logger.error("计划 %s 存在依赖环，流式执行回退声明序", plan.plan_id)
+            return list(plan.node_ids)
 
     def _needs_human_result(self, node: plan_dag.PlanNode) -> dict[str, Any]:
         """为待人工处理的节点造一条统一契约结果。
@@ -1096,7 +1249,8 @@ class SupervisorAgent:
         # 逐块直发会把半截标记漏给前端，故由 ReplyStreamFilter 持有未完成标记，
         # 等 flush() 时再收尾。任务结束后立即丢弃该 index 的过滤器。
         filters: dict[int, ReplyStreamFilter] = {}
-        for index, node_id in enumerate(list(plan.node_ids)):
+        # 拓扑序执行（复审 B04）：与 PlanExecutor 的批处理路径保持同一语义。
+        for index, node_id in enumerate(self._execution_order(plan)):
             node = plan.node(node_id)
             if node.status in plan_dag.TERMINAL_STATUSES:
                 continue

@@ -1,4 +1,4 @@
-# AI Banking Agent —— 测试文档（DOC-TEST-001）
+﻿# AI Banking Agent —— 测试文档（DOC-TEST-001）
 
 > **本文档按阶段增量补全，当前覆盖：阶段 1–5 的完整测试体系——测试策略、四层分层与判定表、用例编号规范、评测集、红队、故障注入、性能指标、CI 与本地运行。**
 
@@ -111,6 +111,7 @@
 | `PERF` | 性能指标 | §7 的口径与命令 | TC-PERF-001~006 |
 
 > `SC` 域沿用手工用例的场景层级写法：**TC-SC-R1-01** 表示「R1 智能转账的第 1 条自动化路径」，与 `用户测试用例.md` 的 `R1-01` 一一对读；自动化用例只在路径口径上对读，不复述手工输入文案。
+> **编号区间口径**：上表「编号区间」是**域内主用例的编号覆盖范围**，不等于「该域只有这么多用例」。阶段 5 收尾与阶段 7–9 复查追加的用例沿用所属域的编号规则，但不再逐个占用新号（避免外部引用错位），因此实际收集数会大于区间上界。当前实测（`pytest --collect-only`，2026-11-01）：`test_sandbox_escape.py` **49** 条、`test_code_compute.py` **42** 条（`CC` 区间上界 016）、`test_mfa_grant.py` **24** 条（`CF` 区间上界 019）、`test_confirm_api.py` **14** 条、`test_privilege_escalation.py` **41** + `test_hitl_units.py` **119**（`PE` 区间上界 008）、`test_circuit_breaker_units.py` **32**（`CB` 区间上界 010）。核对用例总数一律以 `pytest --collect-only` 为准，不以本表区间反推。
 
 ### 3.2 期望结果的三种合法形态
 
@@ -135,7 +136,7 @@
 | 意图评测集 | **≥60** 条（输入 → 期望路由/场景） | `tests/unit/test_intent_model.py` 内的表驱动数据集（每条含 `user_input`、`expect_router`、`expect_scenario`、`note`） | `tests/unit/test_intent_model.py` | 追加表行并跑该文件；新场景需同时在 §3.1 的 `SC` 域补路径编号 |
 | 注入评测集 | **≥40** 条（负向 ≥30 + 正向 ≥10，防误杀） | `tests/security/injection_corpus.yaml`（含 `id` / `text` / `expect` / `category` / `note`；当前 57 负向 + 16 正向） | `tests/security/test_injection_corpus.py`（TC-INJ-001~009） | 在 `injection_corpus.yaml` 追加条目（`id` 唯一）；负向必须写明命中的层（L1/L2），正向必须写明「为什么不拦」 |
 | 六场景路径矩阵 | R1..R6 各 **≥4** 条、合计 **≥24** 条；四类路径齐备：成功 / 缺失歧义 / 权限阻断 / 失败未知取消 | `tests/integration/test_full_scenario_r1.py` … `test_full_scenario_r6.py` | 同名文件内的用例，编号 TC-SC-R*-0N | 每补一条路径同时更新 §5.1 的门槛计数与 `docs/AI_Banking_Agent_缺失内容补齐开发文档.md` 附录 I 的清单 |
-| 沙箱逃逸语料 | **≥22** 条（当前 49 条，负向 43） | `tests/security/test_sandbox_escape.py` 内的参数化载荷表 | 同文件（TC-SBX-001~040） | 新增载荷必须落到 `R00`–`R40` 的某条规则；新增规则须先改冻结文档 |
+| 沙箱逃逸语料 | **≥22** 条（当前 49 条，负向 43） | `tests/security/test_sandbox_escape.py` 内的参数化载荷表 | 同文件（TC-SBX-001~049） | 新增载荷必须落到 `R00`–`R40` 的某条规则；新增规则须先改冻结文档 |
 | 熔断语料 | **≥8** 条 | `tests/security/test_circuit_breaker_guard.py` 的参数化载荷表 | 同文件（TC-CB-001~010） | 新增载荷需覆盖「门禁顺序」或「记账口径」之一 |
 
 > **门槛是下限不是目标**：语料只增不减；删除条目必须在修订记录里写明原因与替代断言。
@@ -156,7 +157,7 @@
 | 安全模块覆盖率 | 行覆盖 **≥80%** | `tests --cov=Struct_of_Agent` | `hitl` / `circuit_breaker` / `content_moderation` / `code_compute` / `audit` 五个模块各自 ≥80% |
 | 六场景 | R1..R6 各 ≥4 条路径，合计 ≥24 | `tests/integration/test_full_scenario_r1..r6.py` | 成功 / 缺失歧义 / 权限阻断 / 失败未知取消四类齐备 |
 
-### 5.2 代码沙箱逃逸（TC-SBX-001~040）
+### 5.2 代码沙箱逃逸（TC-SBX-001~049）
 
 #### 5.2.1 负向清单（30 条）
 

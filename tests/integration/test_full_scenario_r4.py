@@ -629,3 +629,62 @@ def test_user_cancel_unfreezes_card_via_compensation() -> None:
         assert rollback.to_dict()["plan"]["nodes"][0]["compensation"] == "ok"
     finally:
         P.clear_audit()
+
+
+def test_unfreeze_card_is_a_real_compensation_target() -> None:
+    """TC-R4-07 解冻：``freeze_card`` 的补偿落点工具真实存在且行为正确（复审 D1）。
+
+    ``COMPENSATIONS`` 把 ``freeze_card`` 映射到 ``unfreeze_card``，此前全仓没有这个
+    工具，补偿必然失败；本用例锁定工具的四处分支（待确认 / 解冻成功 / 未冻结幂等 /
+    挂失不可解冻 / 卡不存在）以及映射可达性。
+    """
+    frozen = _build_env(cards=[_card(status="frozen", status_label=_STATUS_LABELS["frozen"])])
+
+    # ① 红色动作：未确认 → confirm_required，且不改状态、不落单。
+    pending = frozen.tools["unfreeze_card"].invoke({"card_id": CARD_ID})
+    assert pending["status"] == "confirm_required"
+    assert pending["risk_level"] == "red"
+    assert pending["requires_mfa"] is True
+    assert "set_status" not in frozen.store.calls
+    assert frozen.store.cards[CARD_ID]["status"] == "frozen"
+
+    # ② 已确认 + 正确 MFA → 解冻为 active，回执标记可逆。
+    done = frozen.tools["unfreeze_card"].invoke(
+        {"card_id": CARD_ID, "confirmed": True, "mfa_code": "123456"}
+    )
+    assert done["status"] == "accepted"
+    assert done["action"] == "unfreeze_card"
+    assert done["reversible"] is True
+    assert frozen.store.cards[CARD_ID]["status"] == "active"
+
+    # ③ 未冻结再解冻：noop 幂等，不重复写状态。
+    calls_before = list(frozen.store.calls)
+    again = frozen.tools["unfreeze_card"].invoke(
+        {"card_id": CARD_ID, "confirmed": True, "mfa_code": "123456"}
+    )
+    assert again["status"] == "noop"
+    new_calls = frozen.store.calls[len(calls_before) :]
+    assert "set_status" not in new_calls
+    assert "save_request" not in new_calls
+
+    # ④ 已挂失：不可解冻，明确要求先补卡。
+    lost = _build_env(cards=[_card(status="lost", status_label=_STATUS_LABELS["lost"])])
+    rejected = lost.tools["unfreeze_card"].invoke(
+        {"card_id": CARD_ID, "confirmed": True, "mfa_code": "123456"}
+    )
+    assert rejected["status"] == "rejected"
+    assert "补卡" in rejected["reason"]
+
+    # ⑤ 卡不存在：明确 rejected，不新建卡片。
+    missing = frozen.tools["unfreeze_card"].invoke(
+        {"card_id": "CARD-NOPE", "confirmed": True, "mfa_code": "123456"}
+    )
+    assert missing["status"] == "rejected"
+    assert "CARD-NOPE" not in frozen.store.cards
+
+    # ⑥ 补偿映射可达：``freeze_card → unfreeze_card``。
+    rule = P.compensation_for("freeze_card")
+    assert rule is not None
+    assert rule.action == "card.unfreeze"
+    assert rule.tool_name == "unfreeze_card"
+    assert rule.reversible is True

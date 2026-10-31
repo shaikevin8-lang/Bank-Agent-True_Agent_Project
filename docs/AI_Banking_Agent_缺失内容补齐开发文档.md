@@ -282,7 +282,7 @@ Plan(plan_id, version, goal, nodes[], edges[], created_at, replan_count<=2, orig
 门禁     → 只读 grant_id：校验存在/未用/未过期/主体匹配/fingerprint 一致/未熔断 → 置 used_at + 审计 confirm.grant_consumed
 ```
 
-- `hitl.py:1080` 改为**忽略**模型传入的 `confirmed`/`mfa_code`（保留字段但记 `deprecated_param_ignored` 审计），只认 `confirmation_grant_id`；
+- `hitl.py:1080` 改为**忽略**模型传入的 `confirmed`/`mfa_code`（保留字段但记 `security.confirmation_argument_ignored` 审计；本文档早期写作 `deprecated_param_ignored`，实现与契约文档以 `security.confirmation_argument_ignored` 为准），只认 `confirmation_grant_id`；
 - `hitl_replay.py` 移除 `_REPLAY_EXTRA.confirmed=True` 与 `_FALLBACK_MFA`，只注入 `grant_id`；恢复时 grant 过期 → 要求用户重新确认，**绝不自动续签**；
 - 幂等键与 grant 一律服务端生成；
 - 新表（`0008_confirmation_grant.py`）：`app.confirmation_request(request_id, tenant, user, session, tool_name, args_fingerprint, args_redacted, risk_level, mfa_required, mfa_code_hash, attempts, expires_at, status)`、`app.confirmation_grant(grant_id, request_id, tenant, user, tool_name, args_fingerprint, token_hash, issued_at, expires_at, used_at, revoked_at)`；启动时清理 `expires_at < now()-1h`。
@@ -518,7 +518,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 1. `record_consumption`（R2 记账）不属 6 项写能力白名单，不进熔断——它不改资金流向。
 2. 只读工具恒放行，熔断期间查询/对账不受影响。
 3. 前端 `fetch` 包装刻意跳过 SSE，若 `NOT_READY_001` 只出现在 `/api/chat/stream` 的流式事件里，气泡不会标红，但 15 s 轮询仍会把横幅拉起来。
-4. `reset()` 的 `expected_version` 校验在 `user_id` 为空（租户级视角）时，理论上可能取到同租户其它主体的版本行而误判 409；带 session 的复位路径不受影响。
+4. `reset()` **不接收 `expected_version` 参数**（本文档早期误记为它有该参数，已在复审中更正）：复位只要求 `reason` + operator 双必填，落库走「读当前行 → 版本 +1 → 带版本条件更新」；并发复位若撞版本，按一次重读重算处理，不产生主键冲突，也不会误判 409。
 
 ## 附录 F. 阶段 2 实施完成清单（2026-10-30）
 
@@ -744,7 +744,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 夹具 `grant_factory` | `tests/conftest.py` | `issue(tool_name, args=None, *, tenant_id=None, user_id=None, session_id="default")` 造一次性确认凭据：红色动作走 `demo_sms` + `submit_mfa`；用例结束 `clear_demo_codes()` |
 | 夹具 `sandbox_client` | `tests/conftest.py` | 指向代码沙箱的 `httpx.Client`，默认 `http://127.0.0.1:8022`（可用 `BANK_AGENT_CODE_SANDBOX_URL` 覆盖）；健康检查失败即 `pytest.skip`，用到它的用例自动带 `slow` |
 | 目录分层 | `tests/unit/`、`tests/contract/`、`tests/security/`、`tests/integration/` | 用 `git mv` 迁移，保留文件历史；`tests/` 根只保留 `tests/conftest.py` 一个文件 |
-| 迁移对照 | `docs/AI_Banking_Agent_测试文档.md` §9 | 每个旧扁平文件名 → 新分层路径的完整对照表（unit 12 行 / contract 18 行 / security 10 行 / integration 15 行） |
+| 迁移对照 | `docs/AI_Banking_Agent_测试文档.md` §9 | 每个旧扁平文件名 → 新分层路径的完整对照表（映射表 unit 14 行 / contract 20 行 / security 11 行 / integration 13 行——这是「旧扁平文件 → 新分层路径」的对照行数，不等于当前用例文件数，见下方注记） |
 
 四层目录的文件清单：
 
@@ -755,6 +755,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | `tests/security/` | `test_injection_corpus`（+ `injection_corpus.yaml`）、`test_mfa_grant`、`test_sandbox_escape`、`test_circuit_breaker_guard`、`test_compensation_guard`、`test_content_moderation`、`test_privilege_escalation`（新）、`test_idempotency_dup`（新）、`test_unknown_result_no_retry`（新）、`test_audit_immutable`（新） |
 | `tests/integration/` | `test_db_postgres_core`、`test_db_postgres_import`、`test_db_runtime`、`test_context_memory_pg`、`test_auth_store`、`test_clock_settlement`、`test_circuit_persistence`、`test_sandbox_isolation`、`test_full_scenario_r6`、`test_full_scenario_r1`…`test_full_scenario_r5`（新）、`test_compose_smoke`（新） |
 | `tests/frontend/` | `test_auth_gate.mjs`、`test_mfa_ui.mjs`、`test_settings_panel.mjs`、`test_sidebar.mjs`、`test_confirm_card.mjs`（新）——由 node 驱动，不进 `pytest` 收集 |
+> 上表是阶段 5 收口当时的清单。阶段 6–9 又向四层追加了用例（`test_deployment`、`test_verify_all_script`、`test_health_code_sandbox`、`test_compensation_receipts`、`test_server_internal_error`、`test_full_scenario_r4`/`r6` 扩展等）。截至 2026-11-01 实测各层文件数：`tests/unit` **39**、`tests/contract` **36**、`tests/security` **24**、`tests/integration` **29**、`tests/frontend` **6**（另有 `tests/conftest.py` 1 个），合计 135 个测试文件；核对命令 `git ls-files tests`。
 
 本阶段新增的用例文件与覆盖点：
 
@@ -844,9 +845,9 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | D08 | 核心算法说明 | `docs/AI_Banking_Agent_核心算法说明.md`（DOC-ALG-001） | 1 092 行 / 12 258 中文字；ALG-1…ALG-11 十一节，每节六段齐全 |
 | D09 | 安全设计文档 | `docs/AI_Banking_Agent_安全设计文档.md`（DOC-SEC-001） | 761 行 / 12 228 中文字；10 章 + 51 个子节 |
 | D09 | 安全自评报告（增量修订） | `docs/AI_Banking_Agent_安全自评报告.md`（v0.6） | 456 行 / 10 338 中文字；新增 §10 三色实现、§11 五机制自评、§12 实测覆盖 |
-| D06 | README 定稿 | `README.md` | 279 行 / 4 264 中文字；11 章定稿，`TODO` 字样清零 |
+| D06 | README 定稿 | `README.md` | 290 行 / 4 433 中文字（2026-11-01 复测；阶段 6 当时为 279 行 / 4 264 字）；11 章定稿，`TODO` 字样清零 |
 | D06 | DOC-ARCH 图引用 | `docs/AI_Banking_Agent_项目开发总架构文档.md` | 6 处 `![](diagrams/export/…)` + 图题与 3–4 行说明（行 61/82/124/137/151/207） |
-| D06 | 错误码封闭性脚本 | `scripts/check_error_codes.ps1` | 扫描 41 份 Markdown；stdout 仅 JSON；未知码 exit 1 |
+| D06 | 错误码封闭性脚本 | `scripts/check_error_codes.ps1` | 扫描 52 份 Markdown（2026-11-01 复测；阶段 6 当时为 41 份，阶段 9 为 47 份）；stdout 仅 JSON；未知码 exit 1 |
 
 ### J.2 D07 架构图
 
@@ -919,7 +920,7 @@ $cfg  = '{"executablePath":"C:\\Program Files\\Google\\Chrome\\Application\\chro
 2. **图由 mermaid 源生成，未做手工美化**：FIG-06 为超高图（784×2634），在 `--size` 下会被压扁，故不设宽度上限；评审演示需要单页视图时请用 SVG 缩放。
 3. **安全文档不声明「防篡改存储」**：受限于 J.5 #2，摘要字段只能证明「参数/凭据未被改动」，不能证明「历史事件未被内鬼篡改」；该差距在自评报告 §11.3 明写为部分满足。
 4. **日累计额度控制缺口显式公开**：1000–10 000 元区间单笔不强制 MFA，属本轮未实现的风险策略缺口（R-13），答辩口径须与文档一致，不得口头夸大。
-5. **README 的 GitHub 地址仍为 `<owner>` 形式**：实际仓库地址在阶段 9 提交前替换，替换不改变本文档任何结论。
+5. **README 的 GitHub 地址**：阶段 6 当时仍为 `<owner>` 占位，已在阶段 9 替换为真实地址 `https://github.com/GB01011/Bank-Agent`（主分支 `True_Agent_Project`）；替换不改变本文档任何结论。
 
 ## 附录 K. 阶段 9 实施完成清单（2026-10-31）
 
@@ -935,12 +936,12 @@ $cfg  = '{"executablePath":"C:\\Program Files\\Google\\Chrome\\Application\\chro
 | 4 | 安全设计文档 | 十章 + 威胁模型 + 五件套对照 | 760 行 / 中文 12 228 字 / 10 章 + 55 子节 + T-01…T-10 | ✅ |
 | 5 | 答辩 PPT | ≤10 min | 全仓 `*.pptx`/`*.ppt` = **0** | ⏭ 阶段 7 延后（K.8） |
 | 6 | 演示视频 | ≤5 min | 全仓 `*.mp4/*.mov/*.mkv/*.avi` = **0** | ⏭ 阶段 7 延后（K.8） |
-| 7 | 源代码 + README + GitHub 地址 | 可访问真实地址 | `git ls-files` **381**→本轮 **403**（新增阶段 8/9 文件）；Python 289 文件 / 61 114 行；README 290 行 / 中文 4 410 字；`<owner>` 占位 **0** 处，已写入 `https://github.com/GB01011/Bank-Agent` | ✅ |
+| 7 | 源代码 + README + GitHub 地址 | 可访问真实地址 | `git ls-files` **410**（阶段 6 快照 381 → 阶段 9 首版 403 → 本轮复审补回归用例与取证后 410）；Python **298** 文件 / **81 217** 行；README **290** 行 / 中文 **4 433** 字；`<owner>` 占位 **0** 处，已写入 `https://github.com/GB01011/Bank-Agent` | ✅ |
 | 8 | 部署说明 | 启动/迁移/重置/故障/离线 | `docs/AI_Banking_Agent_部署运维说明.md` 417 行 / 中文 3 797 字 / 15 章 + 15 子节 | ✅ |
 | 9 | 测试用例 | DOC-TEST-001 + `tests/` | `测试文档.md` 624 行 / 10 章；`test_*.py` **122**（unit 38 / contract 35 / integration 27 / security 22）+ 前端 `.mjs` **5**；收集 **2 240** 条 | ✅ |
 | 10 | 安全自评报告 | 三色 + 五机制 + 已知风险 | 456 行 / 中文 10 338 字 / 12 章 + 32 子节；`[截图位]` 4 处属人工待补图位 | ✅ |
 | 11 | 可重置合成演示环境 | 一键复位 | 迁移 9 版本（单头 `0008_confirmation_grant`）；seed ×2；`db.ps1` 的 `RESET-DEMO-DATA` 令牌；compose 命名卷 + 一次性 `migrate` | ✅ |
-| 12 | 文档禁用词 | 交付文档无 TODO | 四份交付文档 + 总架构文档命中 **0**；全 `docs/` 42 处 / 7 文件（均为阶段 1–5 过程记录与大纲） | ✅（附边界） |
+| 12 | 文档禁用词 | 交付文档无 TODO | 四份交付文档 + 总架构文档命中 **0**；全 `docs/` 口径 **8 文件 / 23 处**（排除 `_work/` 为 **6 文件 / 12 处**），均为阶段 1–5 过程记录、大纲与复审取证（词表 `TODO|待补充|待定`，2026-11-01 实测） | ✅（附边界） |
 
 **硬缺失：无。** 5、6 两项为阶段 7 延后，不计失败。
 
@@ -1012,7 +1013,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Tag phas
 2. **app 容器未做外网隔离**：`app_net` 为普通 bridge 有 NAT 出口。演示期无数据外泄（无真实凭据、模型走本地 Mock），但「禁止真实出站」目前是**配置事实**（无可外发 Key）而非**网络事实**。对外口径按「无真实出站凭据」表述，不得宣称网络层封禁；整改方向为独立 `internal` egress 或 sidecar 代理。
 3. **全量测试会拆同项目 compose 栈**：`tests/integration/test_sandbox_isolation.py:123` 模块级 `finally` 执行 `docker compose down --remove-orphans --volumes`。故「并行跑全量 pytest」与「彩排容器栈」互斥（本轮彩排期间栈被拆一次，重启后重跑得到等价 Run A/Run B）。操作建议：二者串行，或给该用例独立 compose project 名。
 4. **PG 集成验收未取证**：本机未设 `BANK_AGENT_TEST_DB_URL`，`tests/integration/` 的 PG 用例全 skip；迁移/RLS 实跑证据仍停在阶段 5 记录。
-5. **文档口径漂移**：阶段 8 卡面自述 `.env.example` 162 行 / 部署说明 414 行，本轮实测 191 / 417 行，已就地更正；`README` 290 行 / 4 410 字与错误码扫描 44 份为当前值，阶段 6 附录 J.1 的 279 / 4 264 / 41 份为当时快照，保留不改写。
+5. **文档口径漂移与复审更正**：阶段 8 卡面自述 `.env.example` 162 行 / 部署说明 414 行 → 阶段 9 实测 191 / 421 行；`README` 本轮复测 290 行 / 4 433 字；错误码扫描本轮 52 份（阶段 6 快照 41、阶段 9 首版 47）。阶段 6 附录 J.1 的 279 / 4 264 / 41 份作为**当时快照**保留不改写；凡「快照值」与「当前值」并存处，对外一律引用附录 L.4 的复测值。
 6. **审计链无 `prev_hash`**：仍为 append-only + 同事务 + 摘要字段，不宣称防篡改存储（沿用附录 J.5 #2）。
 7. **日累计额度缺口（R-13）**：1000–10 000 元区间单笔不强制 MFA，本轮未实现，答辩口径须与文档一致。
 8. **自评报告 4 处 `[截图位]`**：属人工待补图位，非内容缺口。
@@ -1020,3 +1021,67 @@ powershell -ExecutionPolicy Bypass -File .\scripts\package_release.ps1 -Tag phas
 ### K.8 阶段 7 延后说明
 
 答辩 PPT（≤10 min）与演示视频（≤5 min）本轮按用户决定跳过，不写入本轮交付。补齐路径已预留：`scripts/package_release.ps1` 会自动收集 `docs/deliverables/` 下的 `*.pptx` / `*.mp4` / `*.pdf` 并写入 MANIFEST，补齐后重打即可形成含媒体件的提交包；`终验报告.md` §1.1 第 5、6 项保留 ⏭ 标记，补齐后改为 ✅ 即可，不影响其余结论。
+
+## 附录 L. 阶段 0–9 复审与修复（2026-11-01）
+
+用户要求在阶段 9 之后回头**复审阶段 0–6、8、9 是否按本文件的要求完成、是否有 bug**（阶段 7 按要求跳过），并把问题修好。本附录登记复审方法、修复项、复测数字与新增偏差，作为阶段卡的追补。
+
+### L.1 复审范围与方法
+
+- **范围**：阶段 0、1、2、3、4、5、6、8、9（阶段 7 跳过）。五个**只读**复审子代理分工：0+1、2+3、4+5、6+8、9，产出 `docs/_work/review/stage0_1.md`、`stage2_3.md`、`stage4_5.md`、`stage6_8.md`、`stage9.md`（随本次提交入库）。
+- **方法**：逐条对照本文件阶段卡验收项与附录 E–K 的自述 → 定位到代码 `file:line` → 在活栈（`http://127.0.0.1:18000`，容器五服务）或 pytest 中复现 → 定性为「真 bug / 文档不符 / 边界」。复审期禁止动作：`docker compose down`、全量 pytest（会拆栈，见 K.7 #3）、`tests/integration/test_sandbox_isolation.py`。
+- **结论**：阶段 0 通过；阶段 1–6、8、9 的能力**都真实存在**（无伪造、无空壳），但有 **13 处真缺陷**与若干文档口径不符，其中 3 处属安全语义缺陷（确认请求越权可见、补偿假成功、补偿绕过安全门），已全部修复并补回归用例；文档不符项已就地更正。
+
+### L.2 已修复的代码缺陷（13 项）
+
+| # | 缺陷 | 位置 | 修法 | 回归用例 |
+| --- | --- | --- | --- | --- |
+| 1 | 复位撞主键：行已落库但 `closed` 且 `version == 1` 时被当成「库里无行」→ INSERT → 主键冲突 → 复位端点 503 | `common/circuit_breaker.py::reset` | `_persist()` 统一以 `version == 0` 判「无行」，复位一律带版本条件更新 | `tests/unit/test_circuit_breaker_units.py::test_reset_on_persisted_closed_row_updates_instead_of_insert` |
+| 2 | 半开探针并发放行两次：冲突重试原样重放旧目标快照 | `common/circuit_breaker.py::_persist` / `require_closed` | 新增 `rebuild(latest)` 回调，冲突后按最新行重算目标（已复位→放行不写；已被占用半开→拒绝） | `::test_concurrent_half_open_probe_is_granted_once` |
+| 3 | 并发失败计数丢更新；无行时两并发都 INSERT | `common/circuit_breaker.py::record_failure` | 抽出纯函数 `_failure_target()`，冲突后基于最新行重算计数与触发 | `::test_concurrent_failure_count_is_not_lost`、`::test_insert_race_falls_back_to_update` |
+| 4 | 5 s 判定缓存只写不读 | `common/circuit_breaker.py::require_closed` | 快路径改 `use_cache=True`，非 closed 时再权威读 | 同上文件 |
+| 5 | 补偿假成功：工具返回 `rejected`/`confirm_required` 仍记 `compensation="ok"` + 审计 `plan.compensated` | `supervisor.py::_invoke_tool`、`common/plan.py::rollback` | 新增 `_normalize_receipt()` 归一失败状态；`plan.receipt_failed()` 统一判据 | `tests/unit/test_compensation_receipts.py`（17）、`tests/security/test_compensation_guard.py` |
+| 6 | 补偿参数恒为空（`compensation_args` 全仓无写入点）→ 真实工具 `invoke({})` 必抛校验错 | `supervisor.py::_compensate_node` | 新增 `_compensation_arguments()` 从节点 `params` 派生；`_node_runner` 落 `params["tool"]` 让补偿映射可达 | 同上 |
+| 7 | 补偿绕过安全门（只过 `breaker_gate`，无策略判定/建案/参数消毒/审计） | `supervisor.py::_compensation_gate` | 改走 `hitl.intercept()`（与写路径同一道门），异常 fail-closed；`_plan_gate` 同步 fail-closed | `test_full_scenario_r6.py`（含新增「闸门要求批准 → 补偿被阻断」用例） |
+| 8 | 流式执行按声明序而非拓扑序（`n1 depends_on n2` 时 n1 被误跳） | `supervisor.py::chat_stream` | 新增 `_execution_order()`（`plan_dag.topological_order`，环则回退声明序） | `tests/unit/test_plan_dag.py`、`tests/contract/test_plan_sse.py` |
+| 9 | `freeze_card` 的补偿指向不存在的工具 `unfreeze_card`（全仓零命中） | `R4/tools/card_tools.py` | 新增 `unfreeze_card`（frozen→active，红档确认，`lost` 拒绝，未冻结幂等 noop）并注册 | `tests/integration/test_full_scenario_r4.py::test_unfreeze_card_is_a_real_compensation_target` |
+| 10 | 确认凭据先消费后迁移：`consume_grant` 独立提交在前，`_apply_transition` 抛版本冲突时「案件没批准、凭据已烧」 | `common/hitl.py::decide_case` | 两阶段：迁移前 `_check_user_confirmation(validate_only=True)`（无凭据直接拒绝、不改状态），迁移成功后才真正消费 | `tests/security/test_mfa_grant.py` 新增 2 条 |
+| 11 | 确认请求越权可见/可撤销：`/pending`、`GET /{id}`、`DELETE /{id}` 只做角色判定，`session_id` 由请求自报 | `web_test/api_confirm.py` | 按认证主体（`X-Operator` → uuid5 归属主体）过滤与校验，`reviewer`/`ops_admin` 保留审核视图；撤销传真实 `user_id`；`_fail_confirm` 不再透传内部异常文案 | `tests/contract/test_confirm_api.py::test_other_user_cannot_read_or_cancel_confirm_request`、`tests/security/test_privilege_escalation.py` |
+| 12 | `/api/chat` 未捕获异常 → FastAPI 默认 500 纯文本，逃出 8 码封闭集 | `web_test/server.py::chat` | 包 try/except → 500 `INTERNAL_001` 统一信封，失败不记半成品 turn，日志不外泄 | `tests/contract/test_server_internal_error.py`（3） |
+| 13 | 打包脚本把解包中间件 `repo.zip` 一并打进成品（3.4 MB 重复副本） | `scripts/package_release.ps1` | 解包后立即删中间件 + 压缩前防御性清理 | 重打包实测 6.75 MB → 3.24 MB |
+
+### L.3 文档口径更正（对外口径与代码对齐）
+
+1. **删除「审计 SHA-256 链」的不实宣称**：`README.md` 两处（第 5 章安全机制、第 8 章覆盖率表）与 `AI_Banking_Agent_项目开发总架构文档.md` 第 155 行原称「每条事件带前序摘要形成 SHA-256 链、篡改可检出」，但 `db/audit.py` 只有 `append_event`，无 `prev_hash`/链校验。改为「触发器强制 append-only；SHA-256 前序摘要链尚未落地，已在安全设计 §6.2 与安全自评 R-14 登记为残余风险」。
+2. **补演示复位入口**：`AI_Banking_Agent_部署运维说明.md` §6 与 §8 增补 `.\scripts\db.ps1 reset --env demo --confirm RESET-DEMO-DATA`（唯一「只重置演示数据、不动结构、不清审计」的入口；此前只写会连审计一起清空的 `down -v`）。
+3. **测试文档编号口径**：`AI_Banking_Agent_测试文档.md` §3.1 增加「编号区间 ≠ 用例数」注记并列出各域实测收集数；`TC-SBX` 区间在 §5.2 与 §4 写作 `001~040` 与 §3.1 的 `001~049` 矛盾，统一为 `001~049`。
+4. **本文件自身**：附录 E.4-4（`reset()` 并无 `expected_version` 参数）、阶段 4 卡面审计名（`deprecated_param_ignored` → `security.confirmation_argument_ignored`）、附录 I.1（迁移对照行数 14/20/11/13 + 四层实测文件数）、附录 J.1（README 290 行 / 4 433 字、错误码扫描 52 份）、附录 J.7（GitHub 地址已替换为真实地址）、附录 K.1 第 7/12 项、K.7 #5 均已就地更正。
+5. **`file:line` 漂移**：`AI_Banking_Agent_核心算法说明.md` 两处（`Edge.__post_init__` 实为 `plan.py:340`；`backoff_for` 实为 `plan.py:377`）、`AI_Banking_Agent_安全自评报告.md` 的 `start_server.vbs` 行号（28 → 34–59）已更正。
+
+### L.4 本轮复测数字（2026-11-01，Windows + 仓库 venv）
+
+| 项 | 结果 |
+| --- | --- |
+| 快跑门禁 `pytest tests -q -m "not pg and not integration"` | **1847 passed / 4 skipped / 420 deselected / 0 failed**，66.9 s（复审前基线 1820 passed） |
+| 用例收集 `pytest --collect-only` | **2269** 条（`tests/security` 438、`tests/contract` 461） |
+| 熔断内核 | `test_circuit_breaker_units.py` **32 passed**（新增 4 条并发/行语义回归） |
+| 补偿链 | `test_compensation_receipts.py` **17 passed**；`test_full_scenario_r6.py` + `test_compensation_guard.py` **16 passed**；`test_full_scenario_r4.py` **7 passed** |
+| 确认与越权 | `test_mfa_grant.py` **24 passed**；`test_confirm_api.py` **14 passed**；`test_privilege_escalation.py` **41 passed** |
+| 服务端兜底 | `test_server_internal_error.py` **3 passed** |
+| 仓库卫生 | `check_repo_hygiene.ps1` **PASS**（索引 **410** 条，6 项全 OK） |
+| 错误码封闭性 | `check_error_codes.ps1` → `{"passed":true,"scanned_files":52,"unknown":[]}` |
+| 仓库规模 | `git ls-files` **410**；Python **298** 文件 / **81 217** 行；README **290** 行 / 中文 **4 433** 字 |
+
+> 4 条 skip 与全量口径的 326 条 skip 性质不变（缺 `BANK_AGENT_TEST_DB_URL` 的真实 PG 用例、`langgraph-checkpoint-postgres` 缺失、POSIX `TIME_WAIT`），属环境缺失而非失败；PG 集成仍未取证（K.7 #4）。
+
+### L.5 复审新增的偏差登记（补 K.7）
+
+1. **红档补偿在「无 HITL 数据库」环境会转人工**：补偿与写路径同走 `hitl.intercept`，`HITL_POLICY` 中 `always=True` 的工具（`cancel_workflow`/`freeze_card`/`report_loss` 等）在 HITL 不可用时按 fail-closed 拒绝 → 自动补偿成立的前提是闸门放行。对外口径：「补偿与写入同一道安全门；需要人工批准时转人工，不自动执行」。
+2. **R6 自动撤单的前提**：`place_gift_orders` 的补偿落点 `cancel_workflow` 在订单已 `ordered` 时返回 `rejected`，现在会被判为**补偿失败并转人工**（此前误记为成功）；演示中的「自动撤单」只覆盖未履约订单。
+3. **阶段 3 卡面的三处差距按边界登记**：`PlanNode.timeout_s` 仍只声明不执法；`idempotency_key` 未下传到工具层（仅编排层进程内去重）；`rollback`/`resume`/`replan` 无对外 HTTP API（仅编排层可达，前端无回退入口）。
+4. **沙箱拒绝未写审计**：`code_compute.py` 与沙箱侧对 `rejected` 均无 audit 调用（阶段 2 卡面写「拒绝并审计」），按边界登记，未在本轮补实现。
+5. **审计链无 `prev_hash`**：沿用 K.7 #6，本轮只更正文档宣称，不补实现。
+
+### L.6 提交与打包
+
+本轮修复以**一次提交**入库（代码 + 回归用例 + 复审取证 + 文档更正），提交信息按本文件 §3 的格式约定书写；提交后用 `scripts/package_release.ps1` 重打提交包，包内 `MANIFEST.txt` 记录该提交的分支与哈希。

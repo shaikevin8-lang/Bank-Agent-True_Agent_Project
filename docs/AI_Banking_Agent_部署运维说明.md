@@ -176,6 +176,7 @@ docker compose run --rm migrate
 .\scripts\db.ps1 current    # 打印当前迁移版本
 .\scripts\db.ps1 check      # 校验迁移版本与 schema 一致
 .\scripts\db.ps1 verify     # 迁移/数据结构一致性校验
+.\scripts\db.ps1 reset --env demo --confirm RESET-DEMO-DATA  # 只重置演示数据（不动结构，不清审计）
 ```
 
 - 演示数据只有 `demo-tenant`（租户）/ `demo-user`（主体），**没有预置网页登录账号**。登录前需自助注册：
@@ -245,8 +246,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify_code_sandbox.
 | --- | --- | --- |
 | 停服务、**保留数据** | `docker compose down` | 卷 `bank_agent_pgdata` 保留，再次 `up -d` 数据仍在 |
 | 停服务、**清库重来** | `docker compose down -v` | 卷删除；下次 `up -d --build` 由 `migrate` 重新迁移 + 播种 |
+| **只重置演示数据（不动库结构）** | `.\scripts\db.ps1 reset --env demo --confirm RESET-DEMO-DATA` | 按 `demo` 场景重灌演示业务数据；**这是唯一带确认令牌的复位入口**，不会像 `down -v` 连审计一起清空 |
 | 只重启应用 | `docker compose restart app` | 不清数据，进程内状态（如运行时模型配置）丢失 |
 | 跟踪日志 | `docker compose logs -f app` | 实时输出；排查时同时看 `db`、`code-sandbox` |
+
+> 复位令牌是字面量 `RESET-DEMO-DATA`（`scripts/db.ps1:44-49`、`scripts/db.py reset`），缺令牌或令牌不符一律拒绝执行；演示现场若只想把业务数据回到初始态，用这一条而不是 `down -v`。
 
 冷启动复现（评审现场推荐顺序）：`docker compose down -v` → `docker compose up -d --build` → `docker compose ps -a` 全 healthy 且 `migrate` exited(0) → `python scripts/verify_all.py`。
 

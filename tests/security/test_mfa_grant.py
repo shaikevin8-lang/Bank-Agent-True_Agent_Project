@@ -428,3 +428,149 @@ def test_intercept_injects_server_side_confirmation_after_approval(
 
     assert args["confirmed"] is True
     assert args["mfa_code"] == "000000", "必须用哨兵码，而不是模型给的 999999"
+
+
+# ---------------------------------------------------------------------------
+# 7. 决策顺序（复审 BUG-2）：状态机迁移失败不得烧掉用户凭据
+# ---------------------------------------------------------------------------
+
+
+class _DecideCase:
+    """``decide_case`` 用到的案件替身：只暴露决策路径真正读写的字段。"""
+
+    def __init__(self) -> None:
+        """构造一个已认领、带用户确认凭据的案件。"""
+        self.id = uuid4()
+        self.public_id = "CASE-DECIDE-1"
+        self.status = hitl.STATUS_CLAIMED
+        self.decision: dict[str, Any] = {}
+        self.proposal: dict[str, Any] = {
+            "tool_name": "transfer",
+            "args": {"amount_fen": 1000, "payee": "6222****0001"},
+            "user_confirmation": {"grant_id": "grant-abc"},
+        }
+        self.session_id = "sess-yellow"
+        self.tenant_id = TENANT
+        self.decision_note = ""
+        self.info_request_note = ""
+        self.assignee = "reviewer-1"
+        self.claimed_at = None
+        self.claim_expires_at = None
+
+
+class _DecideSession:
+    """会话替身：只把 ``flush`` 记进顺序表。"""
+
+    def __init__(self, order: list[str]) -> None:
+        """记录顺序表。
+
+        Args:
+            order: 共享的顺序记录表。
+        """
+        self.order = order
+
+    def flush(self) -> None:
+        """记录一次 flush。"""
+        self.order.append("flush")
+
+
+def _patch_decide(
+    monkeypatch: pytest.MonkeyPatch,
+    case: _DecideCase,
+    order: list[str],
+    transition: Any,
+) -> None:
+    """把 ``decide_case`` 依赖的 DB 会话与状态机全部替换成可观测替身。
+
+    Args:
+        monkeypatch: pytest 补丁器。
+        case: 案件替身。
+        order: 共享的顺序记录表。
+        transition: ``_apply_transition`` 的替身。
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _scope() -> Any:
+        yield _DecideSession(order)
+
+    monkeypatch.setattr(hitl, "session_scope", _scope)
+    monkeypatch.setattr(hitl, "_sweep_in", lambda *_a, **_kw: [])
+    monkeypatch.setattr(hitl, "_load_case", lambda *_a, **_kw: case)
+    monkeypatch.setattr(hitl, "_retry_pending_approval", lambda *_a, **_kw: None)
+    monkeypatch.setattr(hitl, "_apply_transition", transition)
+    monkeypatch.setattr(hitl, "record_execution", lambda case_id, execution: case)
+    monkeypatch.setattr(hitl, "_replay", lambda _case: {"state": "done", "ok": True})
+
+
+def test_approve_does_not_burn_grant_when_transition_fails(
+    store: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """状态机迁移抛 ``VersionConflict`` 时，用户确认凭据必须原封不动（BUG-2）。
+
+    Args:
+        store: 内存确认凭据存储（夹具）。
+        monkeypatch: pytest 补丁器。
+    """
+    order: list[str] = []
+    case = _DecideCase()
+
+    def _transition(session: Any, case_obj: Any, action: str, **_kwargs: Any) -> None:
+        order.append("approve" if action == hitl.ACTION_APPROVE else action)
+        if action == hitl.ACTION_APPROVE:
+            raise hitl.VersionConflict(
+                "案件已被他人修改",
+                data={"case_no": case_obj.public_id, "expected_version": 1},
+            )
+
+    def _consume(**_kwargs: Any) -> Any:
+        order.append("consume")
+        raise AssertionError("迁移失败时不得消费用户确认凭据")
+
+    _patch_decide(monkeypatch, case, order, _transition)
+    monkeypatch.setattr(confirm, "consume_grant", _consume)
+
+    with pytest.raises(hitl.VersionConflict):
+        hitl.decide_case(
+            case.public_id,
+            decision="approve",
+            actor=hitl.Actor(role="risk_reviewer", operator="reviewer-1"),
+            expected_version=1,
+        )
+
+    assert order == ["approve"], "迁移失败时只应发生迁移尝试，凭据与写入都不得发生"
+    assert case.proposal["user_confirmation"]["grant_id"] == "grant-abc", "凭据存档不得被清空或改写"
+
+
+def test_approve_consumes_grant_only_after_transition_succeeds(
+    store: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """正常批准的顺序必须是「先迁移、后消费凭据」。
+
+    Args:
+        store: 内存确认凭据存储（夹具）。
+        monkeypatch: pytest 补丁器。
+    """
+    order: list[str] = []
+    case = _DecideCase()
+
+    def _transition(session: Any, case_obj: Any, action: str, **_kwargs: Any) -> None:
+        order.append("approve" if action == hitl.ACTION_APPROVE else action)
+
+    def _consume(**kwargs: Any) -> Any:
+        order.append("consume")
+        return SimpleNamespace(grant_id=kwargs.get("grant_id"))
+
+    _patch_decide(monkeypatch, case, order, _transition)
+    monkeypatch.setattr(confirm, "consume_grant", _consume)
+
+    outcome = hitl.decide_case(
+        case.public_id,
+        decision="approve",
+        actor=hitl.Actor(role="risk_reviewer", operator="reviewer-1"),
+    )
+
+    assert order == ["approve", "consume", "flush"], "必须先迁移状态机、再消费凭据"
+    assert outcome.case is case
+    assert case.proposal["user_confirmation"]["confirmed"] is True
+    assert case.proposal["user_confirmation"]["grant_id"] == "grant-abc"

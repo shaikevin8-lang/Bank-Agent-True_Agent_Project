@@ -248,3 +248,60 @@ def test_alias_prefix_behaves_the_same(client: TestClient) -> None:
     assert data["grant_id"]
     listed = _data(client.get(f"/api/confirm/pending?session_id={SESSION_A}", headers=USER_HEADERS))
     assert listed["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 归属隔离（复审 BUG-1）：报出别人的 session_id 也读不到、撤不掉别人的确认请求
+# ---------------------------------------------------------------------------
+
+ATTACKER_HEADERS = {"X-Role": "user", "X-Operator": "mallory.user"}
+
+
+def test_other_user_cannot_read_or_cancel_confirm_request(client: TestClient) -> None:
+    """确认请求按主体隔离：越权读 / 提交验证码 / 撤销一律 403，且原请求不受影响。"""
+    created = _create_red(client, SESSION_A)
+    request_id = str(created["request_id"])
+
+    # ① 攻击者拿别人的 session_id 列待确认项：看不到任何条目。
+    leaked = _data(
+        client.get(f"/api/v1/confirm/pending?session_id={SESSION_A}", headers=ATTACKER_HEADERS)
+    )
+    assert leaked["total"] == 0, leaked
+    assert leaked["items"] == []
+
+    # ② 直接按 ID 读取：403（且不回显请求内容）。
+    denial = _fail(
+        client.get(f"/api/v1/confirm/{request_id}", headers=ATTACKER_HEADERS), 403, "AUTHZ_001"
+    )
+    assert denial["reason"] == "request_not_owned"
+
+    # ③ 替别人提交验证码：403（连尝试都不算，不会消耗次数）。
+    _fail(
+        client.post(
+            "/api/v1/confirm/mfa",
+            json={"request_id": request_id, "code": "123456"},
+            headers=ATTACKER_HEADERS,
+        ),
+        403,
+        "AUTHZ_001",
+    )
+
+    # ④ 撤销别人的请求：403，且请求仍然待确认。
+    _fail(client.delete(f"/api/v1/confirm/{request_id}", headers=ATTACKER_HEADERS), 403, "AUTHZ_001")
+    still_there = _data(
+        client.get(f"/api/v1/confirm/pending?session_id={SESSION_A}", headers=USER_HEADERS)
+    )
+    assert still_there["total"] == 1
+    assert still_there["items"][0]["request_id"] == request_id
+
+    # ⑤ 审核员属演示/审核角色，可以查看全部（后台需要）。
+    reviewer_view = _data(
+        client.get(f"/api/v1/confirm/pending?session_id={SESSION_A}", headers=REVIEWER_HEADERS)
+    )
+    assert reviewer_view["total"] == 1
+
+    # ⑥ 本人读得到、也撤得掉。
+    mine = _data(client.get(f"/api/v1/confirm/{request_id}", headers=USER_HEADERS))
+    assert mine["request_id"] == request_id
+    revoked = _data(client.delete(f"/api/v1/confirm/{request_id}", headers=USER_HEADERS))
+    assert revoked["status"] == confirm.STATUS_REVOKED

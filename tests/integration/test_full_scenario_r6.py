@@ -125,13 +125,29 @@ def test_scenario_order_placed_exactly_once(env: dict[str, Any]) -> None:
     assert env["r6"].intents.count("下单生日蛋糕") == 1
 
 
-def test_scenario_rollback_cancels_order_then_releases_reservation(env: dict[str, Any]) -> None:
-    """回滚：逆拓扑序先撤单、后释放预留，两次都走 ``cancel_workflow``。"""
+def test_scenario_rollback_cancels_order_then_releases_reservation(
+    env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """回滚：逆拓扑序先撤单、后释放预留，两次都走 ``cancel_workflow``。
+
+    补偿必须过**同一道** :func:`hitl.intercept` 闸门（铁律①）。集成环境没有
+    HITL 数据库，真实闸门会 fail-closed，所以这里把闸门替换成「已批准」，
+    并断言闸门**确实被调用**——旧实现只过 ``breaker_gate``，本断言会立刻失败。
+    """
+    gated: list[str] = []
+
+    def approved(tool_name: str, args: Any = None) -> None:
+        """模拟「案件已批准、闸门放行」并记录被闸门检查的补偿工具。"""
+        gated.append(tool_name)
+        return None
+
+    monkeypatch.setattr(hitl, "intercept", approved)
     supervisor: SupervisorAgent = env["supervisor"]
     supervisor.chat("查上月餐饮支出，超800就订蛋糕，预算500", SESSION)
 
     result = supervisor.rollback_plan(SESSION, reason="user_cancelled")
 
+    assert gated == ["cancel_workflow", "cancel_workflow"]  # 补偿确实过了安全闸门
     cancel = env["r6"].tool("cancel_workflow")
     assert len(cancel.calls) == 2  # 两个写节点各补偿一次
     assert [item["result"] for item in result.compensated] == ["ok", "ok", "irreversible"]
@@ -150,6 +166,31 @@ def test_scenario_rollback_cancels_order_then_releases_reservation(env: dict[str
     assert [event["node_id"] for event in compensated] == ["n3", "n2"]
     assert actions.count(P.AUDIT_COMPENSATED) == 2
     assert P.AUDIT_IRREVERSIBLE in actions  # 只读节点转人工也留痕
+
+
+def test_scenario_rollback_is_blocked_when_gate_requires_approval(
+    env: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """铁律①：闸门要求人工批准时，补偿**一次都不许**执行，并留阻断审计。"""
+    monkeypatch.setattr(
+        hitl,
+        "intercept",
+        lambda tool_name, args=None: {
+            "status": "hitl_required",
+            "tool": tool_name,
+            "reason_code": "high_risk_write",
+            "message": "该操作需人工复核",
+        },
+    )
+    supervisor: SupervisorAgent = env["supervisor"]
+    supervisor.chat("查上月餐饮支出，超800就订蛋糕，预算500", SESSION)
+
+    result = supervisor.rollback_plan(SESSION, reason="user_cancelled")
+
+    assert env["r6"].tool("cancel_workflow").calls == []  # 闸门未放行 → 绝不发补偿
+    assert [item["result"] for item in result.compensated[:2]] == ["blocked", "blocked"]
+    assert result.status == "needs_human"
+    assert P.recent_audit(P.AUDIT_COMPENSATION_BLOCKED)
 
 
 def test_scenario_resume_does_not_replay_completed_nodes(env: dict[str, Any]) -> None:

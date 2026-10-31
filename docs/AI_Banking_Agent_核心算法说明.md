@@ -206,7 +206,7 @@ def extract_and_validate(user_input, raw_tasks, raw_tool_calls):
 ### 参数来源
 
 - `Struct_of_Agent/supervisor.py: _decorate_tasks:385`、`_sequential_tasks:406`、`build_plan:423`：节点元数据规约与两类降级回退。
-- `Struct_of_Agent/common/plan.py: build_plan:701`、`_adjacency:779`、`validate:895`、`PlanNode.__post_init__:395`、`Edge.__post_init__:327`、`RISK_LEVELS`/`NODE_STATUSES`/`EDGE_KINDS`：字段枚举与引用完整性校验。
+- `Struct_of_Agent/common/plan.py: build_plan:701`、`_adjacency:779`、`validate:895`、`PlanNode.__post_init__:395`、`Edge.__post_init__:340`、`RISK_LEVELS`/`NODE_STATUSES`/`EDGE_KINDS`：字段枚举与引用完整性校验。
 - `Struct_of_Agent/common/param_guard.py: SENSITIVE_KEYS:22`（15 键）、`ALLOWED_GRANT_KEY:43 = "confirmation_grant_id"`、`_GRANT_TOKEN_RE:55 = r"^[A-Za-z0-9_-]{43}$"`、`AUDIT_PARAM_INJECTION:46 = "security.param_injection_attempt"`、`VIOLATION_PARAM_INJECTION:49 = "param_injection"`、`sanitize:112`。
 - `Struct_of_Agent/common/agent.py: _tools_node:143`：`tool_calls` 解析、未知工具回执、异常转 `{"error": ...}`。
 - `Struct_of_Agent/common/plan.py: PlanNode.timeout_s` 默认 `30.0`（节点级墙钟预算，属结构化字段的一部分）。
@@ -770,7 +770,7 @@ FUNCTION record_success(...):
 
 ### 参数来源
 
-- `Struct_of_Agent/common/circuit_breaker.py: DEFAULT_THRESHOLD = 3`（:59）、`DEFAULT_COOLDOWN_SECONDS = 60`（:60）、`DEFAULT_WINDOW_SECONDS = 300`（:61）、`DEFAULT_CACHE_TTL_SECONDS = 5.0`（:62）、`BACKOFF_SECONDS = (60, 120, 240, 480, 900)`（:64）、`backoff_for(level):390`。
+- `Struct_of_Agent/common/circuit_breaker.py: DEFAULT_THRESHOLD = 3`（:59）、`DEFAULT_COOLDOWN_SECONDS = 60`（:60）、`DEFAULT_WINDOW_SECONDS = 300`（:61）、`DEFAULT_CACHE_TTL_SECONDS = 5.0`（:62）、`BACKOFF_SECONDS = (60, 120, 240, 480, 900)`（:64）、`backoff_for(level):377`。
 - 状态与主体：`STATE_CLOSED="closed"`、`STATE_OPEN="open"`、`STATE_HALF_OPEN="half_open"`、`SUBJECT_USER="user"`、`SUBJECT_TENANT="tenant"`。
 - 原因码：`REASON_WRITE_TOOL_FAILURE="write_tool_failure"`、`REASON_PROMPT_INJECTION="prompt_injection"`、`REASON_PRIVILEGE_VIOLATION="privilege_violation"`、`REASON_AUDIT_FAILURE="audit_failure"`、`REASON_UNKNOWN_RESULT="unknown_result"`、`REASON_OPERATOR_RESET="operator_reset"`；`IMMEDIATE_REASONS = frozenset({"privilege_violation", "audit_failure"})`。
 - 能力表：`CAPABILITIES`（6 项）、`WRITE_TOOL_CAPABILITIES`（20 个工具名，覆盖 R1 转账 6 个、R3 理财 2 个、R4 卡片 6 个、R5 订阅 2 个、R6 礼品 3 个、以及 `cancel_workflow`）；错误码 `ERROR_CIRCUIT_OPEN="NOT_READY_001"`。

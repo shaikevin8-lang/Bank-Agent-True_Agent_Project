@@ -1859,7 +1859,7 @@ class DecisionOutcome:
     replay: bool = False
 
 
-def _check_user_confirmation(case: HitlCase) -> None:
+def _check_user_confirmation(case: HitlCase, *, validate_only: bool = False) -> None:
     """批准前**消费**用户侧确认凭据（人工批准不能代替用户确认，D04）。
 
     这是全链路唯一消费凭据的地方：建案时只登记候选，用户可以在案件等待期间
@@ -1867,8 +1867,14 @@ def _check_user_confirmation(case: HitlCase) -> None:
     置为已用并写回案件存档。凭据无效/过期/已用/跨会话一律拒绝，**绝不续签**
     ——续签等于替用户确认。
 
+    调用分两步（复审 BUG-2）：批准路径先以 ``validate_only=True`` 做**只校验不消费**
+    的前置检查（找不到候选凭据就直接拒绝，连状态迁移都不发生），状态迁移成功之后
+    才真正消费。这样既不会出现「案件没批准、凭据却被烧掉」，也不会出现
+    「案件已批准、凭据其实没有」——后者会让没有用户确认的写操作被放行。
+
     Args:
         case: 待批准的案件（已 attach 到当前事务，写回会随 flush 落库）。
+        validate_only: 为 ``True`` 时只解析并确认「存在可用凭据」，不消费、不改写案件。
 
     Raises:
         UserConfirmationMissing: 没有可用凭据，或凭据校验不通过。
@@ -1898,6 +1904,9 @@ def _check_user_confirmation(case: HitlCase) -> None:
                 data={"case_no": case.public_id, "user_confirmation": confirmation},
             )
         grant_id = str(candidate.grant_id)
+    if validate_only:
+        logger.info("案件 %s 已有可用确认凭据 %s（仅校验，未消费）", case.public_id, grant_id)
+        return
     try:
         consumed = confirm.consume_grant(
             grant_id=grant_id,
@@ -2005,14 +2014,16 @@ def decide_case(
                     "allowed_actions": allowed_actions(case.status),
                 },
             )
-        if action == ACTION_APPROVE:
-            _check_user_confirmation(case)
         if action in {ACTION_REJECT, ACTION_REQUEST_INFO} and not (note or "").strip():
             raise InvalidTransition(
                 f"{action} 必须填写理由（note）",
                 data={"case_no": case.public_id, "allowed_actions": allowed_actions(case.status)},
             )
         moment = business_now()
+        if action == ACTION_APPROVE:
+            # 批准前置校验（**只校验、不消费**）：没有用户确认凭据就直接拒绝，
+            # 连自动认领与状态迁移都不会发生（复审 BUG-2）。
+            _check_user_confirmation(case, validate_only=True)
         if case.status == STATUS_OPEN and action in {ACTION_APPROVE, ACTION_REJECT}:
             # 审核员未认领就直接决策：按 A1 §5.3 先显式认领，保证责任到人。
             _apply_transition(session, case, ACTION_CLAIM, actor=actor, note="决策前自动认领", moment=moment)
@@ -2028,6 +2039,13 @@ def decide_case(
             expected_version=expected_version,
             moment=moment,
         )
+        if action == ACTION_APPROVE:
+            # 用户侧确认凭据必须在状态机迁移**之后**才消费（复审 BUG-2）：
+            # ``_check_user_confirmation`` 内部的 ``confirm.consume_grant`` 是独立提交，
+            # 若先消费再迁移，一旦迁移抛 ``VersionConflict`` / ``InvalidTransition``，
+            # 就会出现「案件没批准、凭据却被烧掉」，用户被迫重新确认。放在迁移之后、
+            # 外层事务提交之前，迁移失败时凭据原封不动（外层回滚连带丢弃本事务写入）。
+            _check_user_confirmation(case)
         payload = dict(case.decision or {})
         payload.update(
             {

@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from common import circuit_breaker as cb
 
@@ -734,3 +734,184 @@ def test_disabled_switch_short_circuits_everything(monkeypatch: pytest.MonkeyPat
     assert cb.require_closed(tenant_id=TENANT, user_id=USER, capability=cb.CAP_TRANSFER) is None
     assert cb.guard_write_tool("smart_transfer", tenant_id=TENANT, user_id=USER) is None
     assert store.get(result.key) is None
+
+
+# ---------------------------------------------------------------------------
+# 并发与行语义回归（复审 B01 / B02 / B03）
+# ---------------------------------------------------------------------------
+
+
+class _SqlLikeStore:
+    """按 PostgreSQL 行语义包装内存存储：唯一键 INSERT 冲突 + 一次性并发窗口。
+
+    ``MemoryStore.put`` 对 ``expected_version=None`` 是无条件覆盖，因此真实库上
+    「行已存在却走 INSERT」的主键冲突在单测里永远暴露不出来。本包装把
+    ``expected_version is None`` 且行已存在的情形还原成 :class:`IntegrityError`。
+
+    Attributes:
+        inner: 被包装的内存存储。
+        integrity_errors: 触发 INSERT 主键冲突的次数。
+    """
+
+    def __init__(self, inner: Any, advance: Any = None) -> None:
+        """初始化包装器；``advance`` 为「另一个进程在我读完之后抢先写入」的回调。"""
+        self.inner = inner
+        self.advance = advance
+        self.once = advance is not None
+        self.integrity_errors = 0
+
+    def get(self, key: tuple[Any, ...]) -> Any:
+        """转发读请求；首次读取后触达一次并发窗口。"""
+        row = self.inner.get(key)
+        if self.once:
+            self.once = False
+            self.advance(self.inner, row)
+        return row
+
+    def list(self, tenant_id: uuid.UUID, user_id: uuid.UUID | None = None) -> Any:
+        """转发查询请求。"""
+        return self.inner.list(tenant_id, user_id)
+
+    def append_event(self, event: dict[str, Any]) -> None:
+        """转发事件追加。"""
+        self.inner.append_event(event)
+
+    def put(self, snapshot: Any, *, expected_version: int | None) -> Any:
+        """按真实库语义写入：无版本号但行已存在即主键冲突。"""
+        if expected_version is None and self.inner.get(snapshot.key) is not None:
+            self.integrity_errors += 1
+            raise IntegrityError(
+                "INSERT INTO app.circuit_breaker_state",
+                {},
+                Exception("duplicate key value violates unique constraint"),
+            )
+        return self.inner.put(snapshot, expected_version=expected_version)
+
+
+def _key(capability: str = cb.CAP_TRANSFER) -> tuple[Any, ...]:
+    """构造用户级作用域键。"""
+    return (TENANT, cb.SUBJECT_USER, cb._as_uuid(USER), capability)
+
+
+def test_reset_on_persisted_closed_row_updates_instead_of_insert(clock: Any, store: Any) -> None:
+    """复审 B01：行已存在（closed 且 version==1）时 ``reset`` 必须走 UPDATE。
+
+    旧实现用「``version > 1`` 或状态非 closed」猜「有没有行」，把
+    「记过一次失败但仍 closed」的行误判成不存在，于是 INSERT 撞主键 →
+    复位端点 503，operator 无法复位。
+    """
+    # Arrange：先落一行 closed/version=1，再把存储换成真实库语义
+    strict = _SqlLikeStore(store)
+    cb.configure_store(strict)
+    first = _fail()
+    assert (first.state, first.failure_count, first.version) == (cb.STATE_CLOSED, 1, 1)
+    cb.clear_cache()
+
+    # Act
+    stored = cb.reset(
+        tenant_id=TENANT,
+        user_id=USER,
+        capability=cb.CAP_TRANSFER,
+        operator_id="ops.reviewer",
+        reason="复审回归：闭环保留计数时复位",
+    )
+
+    # Assert
+    assert strict.integrity_errors == 0
+    assert (stored.state, stored.failure_count, stored.version) == (cb.STATE_CLOSED, 0, 2)
+    assert stored.reason_code == cb.REASON_OPERATOR_RESET
+    assert store.get(_key()).version == 2
+    assert store.events[-1]["audit_action"] == "safety.circuit.reset"
+
+
+def test_insert_race_falls_back_to_update(clock: Any, store: Any) -> None:
+    """复审 B03：无行时两方并发新建，撞主键后应改走 UPDATE，而不是直接 fail-closed。"""
+    cb.clear_cache()
+
+    def advance(inner: Any, row: Any) -> None:
+        """模拟另一个进程在我读出「无行」之后抢先插入一行（计数 1）。"""
+        assert row is None
+        inner.put(
+            cb.Snapshot(
+                tenant_id=TENANT,
+                subject_type=cb.SUBJECT_USER,
+                subject_id=cb._as_uuid(USER),
+                capability=cb.CAP_TRANSFER,
+                state=cb.STATE_CLOSED,
+                failure_count=1,
+                window_started_at=cb._now(),
+                reason_code=cb.REASON_WRITE_TOOL_FAILURE,
+                version=1,
+                updated_at=cb._now(),
+            ),
+            expected_version=None,
+        )
+
+    strict = _SqlLikeStore(store, advance)
+    cb.configure_store(strict)
+
+    # Act
+    stored = _fail()
+
+    # Assert：计数基于对方插入的那一行继续累加（1 → 2），版本连号
+    assert strict.integrity_errors == 1
+    assert (stored.state, stored.failure_count, stored.version) == (cb.STATE_CLOSED, 2, 2)
+
+
+def test_concurrent_failure_count_is_not_lost(clock: Any, store: Any) -> None:
+    """复审 B03：并发失败计数不得丢更新（1 + 我方 1 + 对方 1 → 3 次即开启）。"""
+    _fail()
+    cb.clear_cache()
+
+    def advance(inner: Any, row: Any) -> None:
+        """模拟另一个进程在我读出之后抢先记一次失败。"""
+        assert row is not None
+        inner.put(
+            cb.Snapshot(**{**row.__dict__, "failure_count": row.failure_count + 1, "version": row.version + 1}),
+            expected_version=row.version,
+        )
+
+    cb.configure_store(_SqlLikeStore(store, advance))
+
+    # Act
+    stored = _fail()
+
+    # Assert：重试必须按最新状态重算计数，最终 3 次触发开启
+    assert stored.failure_count == 3
+    assert stored.state == cb.STATE_OPEN
+    assert stored.version == 3
+
+
+def test_concurrent_half_open_probe_is_granted_once(clock: Any, store: Any) -> None:
+    """复审 B02：冷却到期瞬间的并发写入，半开试探只允许被取用一次。
+
+    旧实现冲突后「原样重放目标快照」，第二个请求照样拿到半开放行；现在必须
+    重读最新状态重判，发现试探已被别人取用后直接拒绝。
+    """
+    # Arrange：先打开能力并让冷却到期
+    _trip()
+    clock.advance(61)
+    cb.clear_cache()
+
+    def advance(inner: Any, row: Any) -> None:
+        """模拟另一个进程在我读出之后抢先取用半开试探。"""
+        assert row is not None and row.state == cb.STATE_OPEN
+        inner.put(
+            cb.Snapshot(
+                **{
+                    **row.__dict__,
+                    "state": cb.STATE_HALF_OPEN,
+                    "half_open_at": cb._now(),
+                    "version": row.version + 1,
+                }
+            ),
+            expected_version=row.version,
+        )
+
+    cb.configure_store(_SqlLikeStore(store, advance))
+
+    # Act / Assert
+    with pytest.raises(cb.CircuitOpenError) as excinfo:
+        cb.require_closed(tenant_id=TENANT, user_id=USER, capability=cb.CAP_TRANSFER)
+    assert excinfo.value.state == cb.STATE_HALF_OPEN
+    assert store.get(_key()).state == cb.STATE_HALF_OPEN

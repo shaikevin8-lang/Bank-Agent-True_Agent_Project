@@ -71,6 +71,10 @@ try {
     & git archive --format=zip -o $archive HEAD
     if ($LASTEXITCODE -ne 0) { throw 'git archive 失败' }
     Expand-Archive -LiteralPath $archive -DestinationPath $repoDir -Force
+    # 中间产物 repo.zip 必须删掉：它就在暂存目录里，若不删会被
+    # Compress-Archive 一起打进成品包（复审实测：成品 6.7 MB 里有 3.4 MB 是
+    # 这份重复副本，等于仓库被装了两遍）。
+    Remove-Item -LiteralPath $archive -Force
     $repoFiles = @(Get-ChildItem -LiteralPath $repoDir -Recurse -File)
 
     Write-Host '2/4 收集 deliverables（视频 / PPT / PDF，缺失记 MISSING）...'
@@ -105,6 +109,8 @@ try {
     $lines | Set-Content -LiteralPath (Join-Path $stage 'MANIFEST.txt') -Encoding UTF8
 
     Write-Host '4/4 压缩为提交包 ...'
+    $leftover = Join-Path $stage 'repo.zip'
+    if (Test-Path $leftover) { Remove-Item -LiteralPath $leftover -Force }
     $outZip = Join-Path $OutputDir ('bank-agent-legacy-' + $Tag + '.zip')
     if (Test-Path $outZip) { Remove-Item -LiteralPath $outZip -Force }
     Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $outZip -CompressionLevel Optimal

@@ -63,6 +63,7 @@ _ACTION_RISK: dict[str, tuple[str, bool]] = {
     "set_restriction": ("yellow", False),
     "remove_restriction": ("red", True),
     "freeze_card": ("red", True),
+    "unfreeze_card": ("red", True),
     "report_loss": ("red", True),
 }
 
@@ -587,6 +588,72 @@ def build_card_tools(model: ChatModel, store: CardStore) -> list:
         return store.save_request(receipt)
 
     @tool
+    def unfreeze_card(
+        card_id: str,
+        confirmed: bool = False,
+        mfa_code: str = "",
+        account_id: str = DEFAULT_ACCOUNT_ID,
+    ) -> dict[str, Any]:
+        """解冻被临时冻结的卡片（``freeze_card`` 的补偿动作）。
+
+        当用户要求「解冻卡片」时使用本工具；也是 R4 补偿链路的落点：计划回滚时
+        ``freeze_card → card.unfreeze`` 映射需要真实存在的工具（复审 D1）。
+        解冻属红色动作，需确认 + 模拟 MFA；已挂失的卡片必须先补卡，不能直接解冻；
+        未冻结的卡片重复解冻不产生重复副作用。
+
+        Args:
+            card_id: 卡片标识。
+            confirmed: 是否已确认该操作。
+            mfa_code: 模拟 MFA 验证码（6 位数字）。
+            account_id: 账户标识，默认演示账户。
+
+        Returns:
+            一个字典，包含 status、reversible、脱敏卡号等字段。
+        """
+        card = store.get_card(card_id)
+        if card is None:
+            return {"status": "rejected", "tool": "unfreeze_card", "reason": f"卡片 {card_id} 不存在"}
+        if card["status"] == "lost":
+            return {
+                "status": "rejected",
+                "tool": "unfreeze_card",
+                "reason": "卡片已永久挂失，无法解冻，请先补卡",
+            }
+        if card["status"] != "frozen":
+            return {
+                "status": "noop",
+                "tool": "unfreeze_card",
+                "account_id": account_id,
+                "card_id": card_id,
+                "card_number_tail": card["card_number_tail"],
+                "risk_level": "red",
+                "idempotency_key": _new_id("cardreq"),
+                "created_at": _now(),
+                "message": f"卡片 {card['card_number_tail']} 当前未冻结，未重复执行。",
+            }
+
+        gate = _confirmation_required("unfreeze_card", confirmed, mfa_code)
+        if gate is not None:
+            gate.update({"account_id": account_id, "card_id": card_id, "card_number_tail": card["card_number_tail"]})
+            return gate
+
+        updated = store.set_status(card_id, "active")
+        receipt = {
+            "status": "accepted",
+            "tool": "unfreeze_card",
+            "action": "unfreeze_card",
+            "account_id": account_id,
+            "card_id": card_id,
+            "card_number_tail": updated["card_number_tail"],
+            "reversible": True,
+            "risk_level": "red",
+            "idempotency_key": _new_id("cardreq"),
+            "created_at": _now(),
+            "message": f"卡片 {updated['card_number_tail']} 已解冻（沙箱回执）。",
+        }
+        return store.save_request(receipt)
+
+    @tool
     def report_loss(
         card_id: str,
         confirmed: bool = False,
@@ -652,6 +719,7 @@ def build_card_tools(model: ChatModel, store: CardStore) -> list:
         set_restriction,
         remove_restriction,
         freeze_card,
+        unfreeze_card,
         report_loss,
     ]
 

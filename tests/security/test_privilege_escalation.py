@@ -1,4 +1,4 @@
-﻿"""越权与提权红队测试（阶段 5 测试体系补齐）。
+"""越权与提权红队测试（阶段 5 测试体系补齐）。
 
 三条不可让渡的口径：
 
@@ -366,7 +366,18 @@ def test_http_request_ignores_client_tenant_and_user(grant_store: Any, client: T
     assert response.status_code in (200, 201), response.text
     data = response.json()["data"]
     assert data["tenant_id"] == TENANT_ID
-    assert data["user_id"] is None
+    # 归属主体取自**认证身份**（``X-Operator`` 映射出的稳定 UUID），而不是请求体里的
+    # ``user_id="attacker"``。修复越权读取（复审 BUG-1）后这里必须**有**主体，
+    # 否则确认请求无法按本人隔离。
+    assert data["user_id"] != "attacker"
+    assert isinstance(data["user_id"], str)
+    assert len(data["user_id"]) == 36
+    repeated = client.post(
+        "/api/confirm/request",
+        headers=USER_HEADERS,
+        json={"tool_name": "transfer", "session_id": "sess-http", "args": dict(YELLOW_ARGS)},
+    )
+    assert repeated.json()["data"]["user_id"] == data["user_id"]
     summary = data.get("args_summary") or {}
     assert not ({"tenant_id", "user_id", "role", "scope", "confirmed"} & set(summary))
     assert data["mfa_required"] in (True, False)
@@ -427,18 +438,17 @@ def test_http_request_requires_session_id(grant_store: Any, client: TestClient) 
 
 
 def test_http_pending_only_shows_own_session(grant_store: Any, client: TestClient) -> None:
-    """``/api/confirm/pending`` 只回本会话的请求（跨会话看不到）。"""
-    confirm.create_request(
-        tool_name="transfer",
-        args=dict(YELLOW_ARGS),
-        tenant_id=TENANT,
-        session_id="sess-mine",
+    """``/api/confirm/pending`` 只回本会话、且属于本人的请求（跨会话 / 跨用户都看不到）。"""
+    attacker = {"X-Role": "user", "X-Operator": "mallory.user"}
+    client.post(
+        "/api/confirm/request",
+        headers=USER_HEADERS,
+        json={"tool_name": "transfer", "session_id": "sess-mine", "args": dict(YELLOW_ARGS)},
     )
-    confirm.create_request(
-        tool_name="transfer",
-        args=dict(YELLOW_ARGS),
-        tenant_id=TENANT,
-        session_id="sess-other",
+    client.post(
+        "/api/confirm/request",
+        headers=attacker,
+        json={"tool_name": "transfer", "session_id": "sess-other", "args": dict(YELLOW_ARGS)},
     )
     response = client.get(
         "/api/confirm/pending",
@@ -448,3 +458,10 @@ def test_http_pending_only_shows_own_session(grant_store: Any, client: TestClien
     assert response.status_code == 200
     items = response.json()["data"]["items"]
     assert [item["session_id"] for item in items] == ["sess-mine"]
+    # 反向也成立：即使报出对方的会话 ID，也拿不到对方的请求（归属隔离）。
+    leaked = client.get(
+        "/api/confirm/pending",
+        headers=USER_HEADERS,
+        params={"session_id": "sess-other"},
+    )
+    assert leaked.json()["data"]["items"] == []

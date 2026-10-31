@@ -72,7 +72,7 @@
 | **熔断与安全锁定** | 表 `app.circuit_breaker_state` 持久化状态，进程内 5s 缓存；阈值 `DEFAULT_THRESHOLD = 3`；`closed/open/half_open` 三态；打开后写路径统一返回 `NOT_READY_001` 并附 `capability/state/retry_after/reason_code`；安全类事件（注入命中、凭据异常）为**零容忍直开**，需人工经 `/api/safety/circuit-breakers/{capability}/reset` 复位 | `common/circuit_breaker.py`、`web_test/api_circuit_breaker.py`、`migrations/versions/0007_circuit_breaker.py` | [权限分级与高危锁定](docs/AI_Banking_Agent_安全设计文档.md#53-熔断与安全锁定) |
 | **确认凭据服务端化（grant）** | MFA 只换凭据、不直接放行写操作：`ConfirmationRequest`（有效期/尝试次数/失败锁定）→ `submit_mfa` → `issue_grant` 签发一次性 `ConfirmationGrant`（绑定主体、绑定参数指纹、带 TTL）→ 工具内 `consume_grant` 核销；凭据被重放、跨用户挪用、参数漂移分别抛 `GrantReused` / `SubjectMismatch` / `FingerprintMismatch` | `common/confirm.py`、`web_test/api_confirm.py`、`migrations/versions/0008_confirmation_grant.py` | [五件套对照](docs/AI_Banking_Agent_安全设计文档.md#54-确认凭据-grant) |
 | **幂等与未知结果不重查重放** | 幂等键 `make_idempotency_key(plan_id, version, node_id)`；写操作超时或网络中断返回 `UNKNOWN_RESULT_001` 时**只做查询对账、绝不重发**；重放同一请求返回首次结果，不产生第二笔业务 | `common/plan.py`、`Struct_of_Agent/db/idempotency.py` | [五件套对照](docs/AI_Banking_Agent_安全设计文档.md#55-幂等与未知结果不重放) |
-| **审计 append-only + SHA-256 链** | 审计只追加、不允许更新与删除；每条事件带前序摘要形成 SHA-256 链，篡改可检出；**审计不可用即拒绝写路径**（fail-closed），模型无任何审计写权限 | `Struct_of_Agent/db/audit.py`、`migrations/versions/0001_initial_schema.py` | [审计完整性](docs/AI_Banking_Agent_安全设计文档.md#6-审计完整性) |
+| **审计 append-only** | 审计只追加、不允许更新与删除（数据库触发器强制）；**审计不可用即拒绝写路径**（fail-closed），模型无任何审计写权限。逐条事件的 SHA-256 前序摘要链**尚未落地**（已在安全设计 §6.2 与安全自评 R-14 登记为残余风险） | `Struct_of_Agent/db/audit.py`、`migrations/versions/0001_initial_schema.py` | [审计完整性](docs/AI_Banking_Agent_安全设计文档.md#6-审计完整性) |
 
 **不可违反的冻结项**（任何运行时配置都不能覆盖）：端口 Web `5173` / API `8000` / PG `5432` / 模型网关 `8010` / Core Banking `8011` / 银行写沙箱 `8020` / 礼品写沙箱 `8021` / 代码沙箱 `8022`；错误码仅 `AUTH_001`、`AUTHZ_001`、`VALIDATION_001`、`CONFLICT_001`、`NOT_READY_001`、`RATE_LIMIT_001`、`UNKNOWN_RESULT_001`、`INTERNAL_001` 八个。冻结清单由 `scripts/check_error_codes.ps1` 在提交前自动校验。
 
@@ -105,7 +105,7 @@
 | 模块 | 覆盖率 | 说明 |
 | --- | --- | --- |
 | `common/hitl.py` | **100%** | 人工介入案件生命周期、冲突与超时规则 |
-| `db/audit.py` | **100%** | append-only 审计入口与 SHA-256 链 |
+| `db/audit.py` | **100%** | append-only 审计入口（写路径 fail-closed） |
 | `common/code_compute.py` | **100%** | 沙箱适配器、降级与健康探测 |
 | `common/plan.py` | **91%** | DAG 构建/校验/replan 上限/补偿语义 |
 | `common/param_guard.py` | **87%** | 参数守卫（L4 层） |
