@@ -382,6 +382,8 @@ ALG-1 意图路由｜ALG-2 结构抽取与校验｜ALG-3 计划与拓扑｜ALG-4
 
 **验收**：`docker compose up -d --build` → 全 healthy、`migrate` exited(0) → `python scripts/verify_all.py` `{"failed":0}`；`down -v` 冷启动复现；换目录（不含 `.venv`/`*.db`）仍成功。
 
+**交付状态（已完成并实测）**：`Dockerfile`、`.dockerignore`、`docker-compose.yml`（五服务）、`docker/model-mock/`、`.env.example`（191 行）、`scripts/verify_all.py`、`docs/AI_Banking_Agent_部署运维说明.md`（417 行）均已落地。本机实测：`up -d --build` 全 healthy + `migrate` exited(0)；`verify_all.py` → `passed=6 warned=0 failed=0`（含 `GET /health/code-sandbox` 新增只读端点、沙箱自检 `network=false/credentials=0/mounts=[]`、六场景 R1–R6 全命中）；`down -v` 冷启动复现同样 `failed=0`。与上表卡面的三处偏差（按仓库真实实现落笔）：① 熔断环境变量真实前缀为 `BANK_AGENT_CIRCUIT_*`（无 `BREAKER` 段），`BANK_AGENT_DEMO_MODE`/`APP_ENV` 代码不读取，已降级为 `.env.example` 注释留档；② `verify_all.py` 中沙箱不可用与熔断 `open` 记 `warn`（不影响退出码），仅 `fail` 计入 `failed`；③ structlog/Prometheus 尚未接入（`requirements.txt` 无依赖），观测以健康端点 + 容器日志为准。回归侧同步更新：`tests/contract/test_deployment.py` 由「应用不进镜像、compose 只声明沙箱」改为阶段 8 口径（唯一编排 + 五服务 + 沙箱姿态不放松）；新增 `tests/contract/test_health_code_sandbox.py`、`tests/integration/test_verify_all_script.py`；`scripts/db.ps1`、`scripts/verify_code_sandbox.ps1` 补 UTF-8 BOM，修复 Windows PowerShell 5.1 下的 ParserError。
+
 ---
 
 ### 阶段 9 终验与提交｜1 人日

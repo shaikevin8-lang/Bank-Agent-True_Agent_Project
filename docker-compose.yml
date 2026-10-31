@@ -1,11 +1,127 @@
-# 阶段2 受限代码沙箱编排。
-# 只包含 code-sandbox 服务：不发布宿主端口，仅挂在 internal 网络上，
-# 因此沙箱既不能访问外部网络，也无法被容器外部直接访问。
+# 阶段 8：容器化与部署（一键启动全栈）。
+#
+# 五个服务、两条网络：
+#   db           —— postgres:16.6，演示库 bank_agent_legacy（宿主端口由 BANK_AGENT_PG_PORT 覆盖）
+#   migrate      —— 一次性任务：alembic upgrade head + 演示数据播种，跑完 exited(0)
+#   app          —— 银行 Agent API（根 Dockerfile 多阶段构建，非 root，8000）
+#   model-mock   —— OpenAI 兼容 mock 模型网关（纯标准库，8010），离线演示用
+#   code-sandbox —— 受限代码沙箱（8022）：只读根、非 root、cap_drop ALL、无出站网络、不发布宿主端口
+#
+# 网络隔离口径：app 同时接入 app_net（对外）与 sandbox_net（internal，仅供 app 访问沙箱）；
+# 沙箱自身**只**接 sandbox_net，因此它既不能访问外部网络，也无法从容器外部被直接访问。
+#
+# 宿主端口冲突时（例如本机已有 PostgreSQL / 旧版 API 在跑），在 .env 里覆盖：
+#   BANK_AGENT_PG_PORT=15432
+#   BANK_AGENT_API_PORT=18000
+#   BANK_AGENT_MODEL_MOCK_PORT=18010
 services:
+  db:
+    image: postgres:16.6
+    container_name: bank-agent-db
+    restart: unless-stopped
+    environment:
+      # 演示环境：仅在本机 bridge 内部网段使用 trust 认证，口令不落盘、不入环境变量。
+      # 生产部署必须改为口令 + 密钥管理（见 docs/AI_Banking_Agent_部署运维说明.md 第 14 节）。
+      POSTGRES_DB: bank_agent_legacy
+      POSTGRES_USER: bank
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${BANK_AGENT_PG_PORT:-5432}:5432"
+    volumes:
+      - bank_agent_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bank -d bank_agent_legacy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks: [app_net]
+
+  migrate:
+    build: .
+    image: bank-agent/app:0.1.0
+    container_name: bank-agent-migrate
+    restart: "no"
+    # 一次性任务：建表（Alembic，幂等）+ 演示数据播种（ON CONFLICT DO NOTHING，幂等）。
+    # 注意必须用 `sh -c` 而不是 `sh -lc`：登录 shell 会重排 PATH，
+    # 把 /opt/venv/bin 挤到后面，导致 `python` 命中的是系统解释器（缺 alembic 等依赖）。
+    command:
+      - sh
+      - -c
+      - python scripts/db.py upgrade && python scripts/db.py seed
+    environment:
+      BANK_AGENT_DB_URL: ${BANK_AGENT_DOCKER_DB_URL:-postgresql+psycopg://bank@db:5432/bank_agent_legacy}
+      BANK_AGENT_ENV: demo
+      PYTHONIOENCODING: utf-8
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [app_net]
+
+  app:
+    build: .
+    image: bank-agent/app:0.1.0
+    container_name: bank-agent-app
+    restart: unless-stopped
+    environment:
+      BANK_AGENT_DB_URL: ${BANK_AGENT_DOCKER_DB_URL:-postgresql+psycopg://bank@db:5432/bank_agent_legacy}
+      BANK_AGENT_ENV: demo
+      BANK_AGENT_CODE_COMPUTE_MODE: auto
+      BANK_AGENT_CODE_SANDBOX_URL: http://code-sandbox:8022
+      PYTHONIOENCODING: utf-8
+    # 可选注入：.env 里的模型 / 搜索 Key 等；文件不存在也能启动（离线 Mock 模式）。
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${BANK_AGENT_API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      code-sandbox:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=4).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks: [app_net, sandbox_net]
+
+  model-mock:
+    build: ./docker/model-mock
+    image: bank-agent/model-mock:0.1.0
+    container_name: bank-agent-model-mock
+    restart: unless-stopped
+    environment:
+      MODEL_MOCK_PORT: "8010"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${BANK_AGENT_MODEL_MOCK_PORT:-8010}:8010"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=3).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks: [app_net]
+
   code-sandbox:
     build: ./docker/code-sandbox
     image: bank-agent/code-sandbox:0.1.0
     container_name: bank-agent-code-sandbox
+    restart: unless-stopped
     environment: []
     read_only: true
     user: "65534:65534"
@@ -15,10 +131,26 @@ services:
     cpus: 0.5
     mem_limit: 256m
     pids_limit: 32
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8022/health', timeout=3).status == 200 else 1)
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
     networks: [sandbox_net]
-    # 不发布端口
+    # 不发布端口：沙箱只能被 app 通过 sandbox_net 访问。
+
+volumes:
+  bank_agent_pgdata:
+    name: bank-agent-legacy-bank_agent_pgdata
 
 networks:
+  app_net:
+    driver: bridge
   sandbox_net:
     driver: bridge
     internal: true

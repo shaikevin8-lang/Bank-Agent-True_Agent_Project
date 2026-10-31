@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Bank-Agent 数据库运维入口（Windows）。
 

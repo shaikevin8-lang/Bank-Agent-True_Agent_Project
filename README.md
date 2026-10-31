@@ -137,34 +137,44 @@
 | 仓库卫生 | `powershell -ExecutionPolicy Bypass -File .\scripts\check_repo_hygiene.ps1` | 无密钥/口令入库、无大文件、无临时产物 |
 | 沙箱隔离 | `powershell -ExecutionPolicy Bypass -File .\scripts\verify_code_sandbox.ps1` | 只读根、非 root、无出站、限额生效 |
 | 错误码冻结 | `powershell -ExecutionPolicy Bypass -File .\scripts\check_error_codes.ps1` | 文档中出现的错误码全部在八码冻结清单内，输出 JSON 的 `passed` 为 `true` |
+| 部署验收 | `python scripts/verify_all.py`（栈已起） | 六步 smoke 末行 JSON `{"failed": 0}`、退出码 0（沙箱不可用与熔断 `open` 记 `warn`，不拦放行） |
 | 测试分层 | 见 6.3 三行命令 | 单元/契约/安全/集成四层通过 |
 
 ---
 
 ## 7. 部署与快速开始
 
-### 7.1 三条部署命令
+### 7.1 三条部署命令（容器全栈一键启动）
 
 ```powershell
-docker compose up -d --build                                        # 构建并启动受限代码沙箱（internal 网络，不发布宿主端口）
+Copy-Item .env.example .env      # 可选：填模型 Key、覆盖端口（.env 已被 .gitignore 忽略，绝不入库）
+docker compose up -d --build     # 起 db + migrate + app + model-mock + code-sandbox（全栈 healthy）
+python scripts/verify_all.py     # 部署验收：探针 → 熔断 → 沙箱自检 → 六场景 smoke，末行 JSON 需 {"failed": 0}
+```
+
+> 容器编排包含五个服务：`db`（postgres:16.6，演示库 `bank_agent_legacy`）、`migrate`（一次性 `alembic upgrade head` + 演示播种，跑完 `exited (0)`）、`app`（根 `Dockerfile` 多阶段构建、非 root、8000）、`model-mock`（OpenAI 兼容 mock 网关，8010）、`code-sandbox`（受限代码沙箱，8022，仅 `sandbox_net` internal 网络，不发布宿主端口）。宿主端口冲突时在 `.env` 覆盖 `BANK_AGENT_API_PORT` / `BANK_AGENT_PG_PORT` / `BANK_AGENT_MODEL_MOCK_PORT`。完整环境要求、备份回滚与故障处置见[部署运维说明](docs/AI_Banking_Agent_部署运维说明.md)。
+
+### 7.2 本地开发（不起容器 App 时）
+
+```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\db.ps1 upgrade    # 执行 Alembic 迁移（服务启动只校验版本，不自动迁移）
 powershell -ExecutionPolicy Bypass -File .\start_local.ps1           # 启动 API 与前端（8000），轮询 /health/live 直到就绪
 ```
 
 > 启动前置：`Copy-Item .env.example .env` 并把 `BANK_AGENT_DB_URL` 填成本机 PostgreSQL 连接串；`start_local.ps1` 会同时确保数据库容器 `bank-agent-pg` 在运行，并拒绝使用任何内置默认口令。PowerShell 7 环境可把 `powershell -ExecutionPolicy Bypass -File` 换成 `pwsh`（例如 `pwsh .\start_local.ps1`）。
 
-### 7.2 快速开始（本地 | 容器）
+### 7.3 快速开始（本地 | 容器）
 
-| 步骤 | 本地（开发与演示） | 容器（沙箱隔离验收） |
+| 步骤 | 本地（开发与演示） | 容器（全栈一键） |
 | --- | --- | --- |
-| 1. 运行时 | `python -m venv .venv`，再 `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` | 无需本机 Python：沙箱镜像自带运行时 |
-| 2. 配置 | `Copy-Item .env.example .env`，填 `BANK_AGENT_DB_URL`（必填，缺失即失败退出） | 沙箱不接收环境变量、不挂载宿主目录 |
-| 3. 数据库 | 确保容器 `bank-agent-pg` 运行，然后 `.\scripts\db.ps1 upgrade`；需要演示数据时 `.\scripts\db.ps1 seed` | 数据库在宿主侧，沙箱与库不直连，只经服务端适配器 |
-| 4. 起服务 | `powershell -ExecutionPolicy Bypass -File .\start_local.ps1` | `docker compose up -d --build`，沙箱就绪后由 API 侧调用 8022 |
-| 5. 验收 | 打开 `http://127.0.0.1:8000`，访问 `/health/live`、`/health/ready` | `powershell -ExecutionPolicy Bypass -File .\scripts\verify_code_sandbox.ps1` |
-| 6. 复位 | 演示时钟 `/api/clock/reset`、清理会话、`.\scripts\db.ps1 reset --env demo` | `docker compose down` 后重建镜像，状态不残留 |
+| 1. 运行时 | `python -m venv .venv`，再 `.\.venv\Scripts\python.exe -m pip install -r requirements.txt` | 无需本机 Python：`Dockerfile` 内置 3.12.8 + uv 装好的依赖 |
+| 2. 配置 | `Copy-Item .env.example .env`，填 `BANK_AGENT_DB_URL`（必填，缺失即失败退出） | 同上（可选）；容器内连接串由 compose 覆写为 `db:5432`，沙箱不接收环境变量、不挂载宿主目录 |
+| 3. 数据库 | 确保容器 `bank-agent-pg` 运行，然后 `.\scripts\db.ps1 upgrade`；需要演示数据时 `.\scripts\db.ps1 seed` | 由 `migrate` 一次性服务自动 `upgrade` + `seed`，`app` 等它 `exited (0)` 后才启动 |
+| 4. 起服务 | `powershell -ExecutionPolicy Bypass -File .\start_local.ps1` | `docker compose up -d --build` |
+| 5. 验收 | 打开 `http://127.0.0.1:8000`，访问 `/health/live`、`/health/ready` | `python scripts/verify_all.py`（末行 JSON 需 `{"failed": 0}`） |
+| 6. 复位 | 演示时钟 `/api/clock/reset`、清理会话、`.\scripts\db.ps1 reset --env demo` | `docker compose down`（保留数据）或 `docker compose down -v`（冷启动重来） |
 
-### 7.3 端口约定（冻结）
+### 7.4 端口约定（冻结）
 
 | 端口 | 用途 |
 | --- | --- |
@@ -177,11 +187,11 @@ powershell -ExecutionPolicy Bypass -File .\start_local.ps1           # 启动 AP
 | 8021 | 礼品写沙箱（Mock 回执） |
 | 8022 | 受限代码沙箱（仅容器内网） |
 
-### 7.4 已实现接口面
+### 7.5 已实现接口面
 
 | 分组 | 端点 |
 | --- | --- |
-| 健康与版本 | `GET /`、`GET /health/live`、`GET /health/ready`、`GET /health/capabilities`、`GET /health/circuit-breaker`、`GET /api/version` |
+| 健康与版本 | `GET /`、`GET /health/live`、`GET /health/ready`、`GET /health/capabilities`、`GET /health/circuit-breaker`、`GET /health/code-sandbox`、`GET /api/version` |
 | 对话 | `POST /api/chat`、`POST /api/chat/stream` |
 | 会话与记忆 | `GET/POST /api/sessions`、`GET/PATCH/DELETE /api/sessions/{session_id}`、`GET /api/sessions/{session_id}/memory` |
 | 认证 | `POST /api/auth/register`、`POST /api/auth/login`、`POST /api/auth/logout`、`GET /api/auth/me` |
@@ -205,11 +215,13 @@ Bank-Agent-legacy/
 │  ├─ db/                      # 模型、仓储、审计、幂等、账本、seed、会话
 │  └─ web_test/                # FastAPI 接入层、前端页面、认证/HITL/熔断/确认/时钟接口
 ├─ docker/code-sandbox/        # 受限代码沙箱镜像（AST 守卫 + runner + uvicorn 服务）
+├─ docker/model-mock/          # OpenAI 兼容 mock 模型网关（纯标准库，8010）
 ├─ migrations/versions/        # Alembic 迁移 0001 ... 0008
 ├─ tests/                      # unit / contract / security / integration / frontend
-├─ scripts/                    # db.ps1(.py)、仓库卫生、沙箱验收、错误码冻结校验
-├─ docs/                       # 需求、架构、安全、数据库、契约、测试、ADR、图示导出
-├─ docker-compose.yml          # 沙箱编排（internal 网络、只读根、非 root、限额）
+├─ scripts/                    # db.ps1(.py)、仓库卫生、沙箱验收、部署验收（verify_all.py）、错误码冻结校验
+├─ docs/                       # 需求、架构、安全、数据库、契约、测试、ADR、部署运维、图示导出
+├─ Dockerfile                  # 应用镜像（多阶段：uv 装依赖 → 非 root 运行 uvicorn）
+├─ docker-compose.yml          # 全栈编排：db / migrate / app / model-mock / code-sandbox
 ├─ start_local.ps1             # 本地一键启动（含数据库容器与就绪轮询）
 └─ .env.example                # 配置模板（必填 BANK_AGENT_DB_URL）
 ```
@@ -228,7 +240,7 @@ Bank-Agent-legacy/
 | [数据库设计文档](docs/AI_Banking_Agent_数据库设计文档.md) | 表结构、约束、索引、迁移策略（实施细节见[数据库实施说明](docs/AI_Banking_Agent_数据库实施说明.md)） |
 | [接口契约文档](docs/AI_Banking_Agent_接口契约文档.md) | 端点、请求/响应字段、错误码与状态码约定 |
 | [测试文档](docs/AI_Banking_Agent_测试文档.md) | 四层分层口径、用例清单、覆盖率与红队用例 |
-| 部署运维说明（阶段 8 交付项，口径见[缺失内容补齐开发文档](docs/AI_Banking_Agent_缺失内容补齐开发文档.md) 阶段 8） | 环境准备、迁移、启停、演示复位、故障处置；当前可用的等效入口为下方「三行部署」与 `scripts/db.ps1`、`start_local.ps1` |
+| [部署运维说明](docs/AI_Banking_Agent_部署运维说明.md) | 环境要求、端口表、一键启动、迁移播种、验收、复位、观测、备份回滚、常见故障、Windows/Linux 差异、离线环境 |
 
 **专题文档**
 
@@ -273,6 +285,6 @@ Bank-Agent-legacy/
 
 ## 11. 仓库与许可
 
-- 仓库地址：`https://github.com/<owner>/Bank-Agent-legacy`（把 `<owner>` 替换为实际账号即可访问）
+- 仓库地址：<https://github.com/GB01011/Bank-Agent>（主分支 `True_Agent_Project`；网页直接浏览，克隆用 `git clone git@github.com:GB01011/Bank-Agent.git`）
 - 运行平台：Windows + PowerShell（脚本已在 PowerShell 5.1 与 7 下验证）；Python 3.12；PostgreSQL 16
 - 许可：比赛评审与教学演示用途，具体条款见仓库内 `LICENSE` 文件

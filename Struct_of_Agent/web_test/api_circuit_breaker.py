@@ -522,3 +522,59 @@ def health_ready() -> JSONResponse:
             media_type="application/problem+json",
         )
     return JSONResponse(content=ok("服务就绪", payload))
+
+
+@router.get("/health/code-sandbox")
+def health_code_sandbox() -> JSONResponse:
+    """代码沙箱隔离自检快照（公开只读端点，供部署验收脚本与运维自查）。
+
+    为什么需要这个端点：沙箱本身不发布宿主端口（只挂在 ``sandbox_net`` 上），
+    宿主侧脚本无法直接 ``GET http://127.0.0.1:8022/selfcheck``。因此由 app 侧
+    代答一次自检采样，把「沙箱到底隔离到什么程度」变成可观测事实：
+
+    - ``available``：沙箱 ``GET /health`` 是否可达（不可达时**降级**，不放行）；
+    - ``selfcheck.network``：沙箱能否联网（必须为 ``false``）；
+    - ``selfcheck.credentials``：沙箱内可见的凭据条数（必须为 ``0``）；
+    - ``selfcheck.mounts``：沙箱内挂载点（不得出现宿主机业务目录）。
+
+    语义边界：这里只**读事实**，不触发任何写操作；探测失败一律返回 200 +
+    ``available=false``，由调用方（``scripts/verify_all.py``）判定告警，绝不让
+    健康端点因为沙箱不可用而 500。
+
+    Returns:
+        ``{ok, message, data:{status, available, adapter, selfcheck, mode}}``。
+    """
+    from common import code_compute
+
+    adapter_name = "unknown"
+    available = False
+    selfcheck: dict[str, Any] = {"network": None, "credentials": None, "mounts": None}
+    error_text = ""
+    try:
+        adapter = code_compute.get_adapter()
+        adapter_name = str(getattr(adapter, "name", "unknown"))
+        available = bool(adapter.available())
+        # 自检实现内部已兜住所有异常（不可达时返回三个 None），此处再包一层，
+        # 保证端点在任何第三方适配器实现下都不会抛 500。
+        sampled = adapter.selfcheck()
+        if isinstance(sampled, dict):
+            selfcheck = {
+                "network": sampled.get("network"),
+                "credentials": sampled.get("credentials"),
+                "mounts": sampled.get("mounts"),
+            }
+    except Exception as error:  # noqa: BLE001 - 健康端点只报事实，不抛
+        error_text = str(error)
+
+    mode = (code_compute._mode() if hasattr(code_compute, "_mode") else "unknown")  # noqa: SLF001
+    data: dict[str, Any] = {
+        "status": "ok" if available else "degraded",
+        "available": available,
+        "adapter": adapter_name,
+        "selfcheck": selfcheck,
+        "mode": mode,
+    }
+    if error_text:
+        data["detail"] = error_text
+    message = "代码沙箱隔离自检" if available else "代码沙箱不可用（代码计算已降级，不作为放行依据）"
+    return JSONResponse(content=ok(message, data))
