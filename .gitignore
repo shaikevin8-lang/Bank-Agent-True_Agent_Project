@@ -32,3 +32,10 @@ tests/frontend/package-lock.json
 *.pem
 secrets/
 local_settings.*
+
+# 反编译/临时参考产物（重建测试源码用，不入库）
+.decompiled/
+.decompiled_security/
+.pycdc_tool/
+_probe_tmp.py
+_verify_tmp.py
