@@ -144,6 +144,11 @@ $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
 $version = $null
 $lastError = $null
 while ((Get-Date) -lt $deadline) {
+    $proc.Refresh()
+    if ($proc.HasExited) {
+        $lastError = "Python 进程已退出，退出码：$($proc.ExitCode)"
+        break
+    }
     Start-Sleep -Milliseconds 500
     try {
         $resp = Invoke-RestMethod -Uri $HealthUrl -TimeoutSec 2 -ErrorAction Stop
@@ -155,8 +160,11 @@ while ((Get-Date) -lt $deadline) {
 }
 
 if (-not $version) {
-    Write-Host ("启动失败：{0} 秒内未就绪。最后错误：{1}" -f $TimeoutSeconds, $lastError) -ForegroundColor Red
+    Write-Host ("启动失败：{0}" -f $lastError) -ForegroundColor Red
     Write-Host ("请查看日志：{0}" -f $ErrLogFile) -ForegroundColor Red
+    if (Test-Path -LiteralPath $ErrLogFile) {
+        Get-Content -LiteralPath $ErrLogFile -Encoding UTF8 -Tail 40
+    }
     exit 1
 }
 

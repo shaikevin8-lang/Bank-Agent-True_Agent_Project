@@ -320,7 +320,7 @@ section('页面结构：左侧侧边栏 + 右侧对话区')
 
   check('存在侧边栏容器', !!d.querySelector('aside.sidebar'))
   check('存在两栏布局容器 .app', !!d.querySelector('.app'))
-  check('对话区被包在 .chat-column 内', !!d.querySelector('.chat-column > main#scroll'))
+  check('对话区被包在 .chat-column 内', !!d.querySelector('.chat-column .conversation-surface > main#scroll'))
   check('侧边栏在对话区之前（左侧）',
     d.querySelector('.app').firstElementChild.classList.contains('sidebar'))
   check('存在「新建会话」按钮', !!$(w, 'newSessionBtn'))
@@ -939,6 +939,57 @@ section('会话操作失败走侧边栏提示，不写进对话记录')
     && /删除会话失败/.test($(w, 'sidebarAlert').textContent), $(w, 'sidebarAlert').textContent)
   check('失败提示没有混进对话记录', !/删除会话失败/.test(chatText(w)), chatText(w).slice(0, 80))
   check('对话区内容保持不变', /X-QUESTION/.test(chatText(w)))
+}
+
+section('场景入口只填写可编辑草稿，发送后收起欢迎页')
+{
+  resetBackend()
+  const dom = await loadPage()
+  const w = dom.window
+  const cards = [...w.document.querySelectorAll('.service-card')]
+  check('欢迎页提供六个业务场景', cards.length === 6)
+  const before = calls.length
+  click(w, cards[0].querySelector('h4'))
+  check('点击卡片内部元素也能填写示例', $(w, 'input').value === cards[0].dataset.prompt)
+  check('填写示例后聚焦输入框', w.document.activeElement === $(w, 'input'))
+  check('选择场景不发出业务请求', calls.length === before)
+  $(w, 'input').value = '我修改后的需求'
+  click(w, $(w, 'send'))
+  await settle(80)
+  check('发送的是用户修改后的内容',
+    calls.some((c) => c.url === '/api/chat/stream' && c.body.message === '我修改后的需求'))
+  check('实际对话开始后收起欢迎页', !w.document.querySelector('.welcome'))
+  check('欢迎页不会混入用户对话', !/把繁琐留给我/.test(chatText(w)))
+}
+
+section('探索服务保留历史会话并打开新的欢迎页')
+{
+  resetBackend()
+  seedSession('保留的历史', [{ role: 'user', content: 'HISTORY-TO-KEEP' }])
+  const dom = await loadPage(stubFetch, (window) => {
+    window.HTMLElement.prototype.scrollIntoView = function () {}
+  })
+  const w = dom.window
+  click(w, $(w, 'servicesNav'))
+  await settle(80)
+  check('探索入口打开服务首页', !!w.document.querySelector('.welcome'))
+  check('原有历史会话仍在', titles(w).includes('保留的历史'))
+  check('键盘焦点位于首个服务入口',
+    w.document.activeElement === w.document.querySelector('.service-card'))
+}
+
+section('中文输入法确认候选词时不会发送消息')
+{
+  resetBackend()
+  const dom = await loadPage()
+  const w = dom.window
+  $(w, 'input').value = '尚未完成的输入'
+  $(w, 'input').dispatchEvent(new w.KeyboardEvent('keydown', {
+    key: 'Enter', isComposing: true, bubbles: true,
+  }))
+  await settle()
+  check('输入法回车不会触发对话请求', !calls.some((c) => c.url === '/api/chat/stream'))
+  check('正在编辑的内容仍然保留', $(w, 'input').value === '尚未完成的输入')
 }
 
 // ---------------------------------------------------------------- 汇总
