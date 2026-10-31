@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 
 #: 沙箱模块所在目录（含连字符，不能作为包导入，故直接插入搜索路径）。
-SANDBOX_DIR = Path(__file__).resolve().parents[1] / "docker" / "code-sandbox"
+SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "code-sandbox"
 sys.path.insert(0, str(SANDBOX_DIR))
 
 import ast_guard  # noqa: E402

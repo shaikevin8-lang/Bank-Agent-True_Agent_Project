@@ -380,7 +380,7 @@ POST /run
 | `DELETE /{request_id}` | 同上 | `status="revoked"` |
 | `GET /sms/{request_id}` | ——（**唯一**返回明文 `code` 的端点，仅演示环境） | `phone`、`code`、`expires_at` |
 
-约定落地方式：三个业务端点只序列化 `ConfirmationRequest.to_public()` / `ConfirmationGrant.to_public()`，二者**在设计上就不含** `mfa_code_hash`/`token_hash` 字段；新增响应字段时必须先改冻结文件 §1.2。`tests/test_confirm_api.py` 对三个端点做「响应 JSON 里不得出现明文 6 位码与两个 hash 键」的断言。
+约定落地方式：三个业务端点只序列化 `ConfirmationRequest.to_public()` / `ConfirmationGrant.to_public()`，二者**在设计上就不含** `mfa_code_hash`/`token_hash` 字段；新增响应字段时必须先改冻结文件 §1.2。`tests/contract/test_confirm_api.py` 对三个端点做「响应 JSON 里不得出现明文 6 位码与两个 hash 键」的断言。
 
 ### 3.8 别名与演示环境边界
 

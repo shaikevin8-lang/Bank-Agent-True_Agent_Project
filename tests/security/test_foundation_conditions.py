@@ -27,9 +27,18 @@ def test_risk_and_independent_conditions_never_authorize_writes() -> None:
     hit = hitl.evaluate("smart_transfer", {"amount": 5000, "confirmed": True, "mfa_code": "123456"})
     assert hit is not None and hit.risk_level == hitl.RISK_YELLOW
 
-    # 用户确认证据缺失时不授权：mfa_ok 为假。
+    # 用户确认证据缺失时不授权：没有真实凭据（confirmation_grant）时 mfa_ok 为假，
+    # 模型自供的 confirmed/mfa_code 只登记为候选、不算确认（阶段4 凭据化）。
     rule = hitl.HITL_POLICY["report_loss"]
-    assert hitl._user_confirmation(rule, {}).get("mfa_ok") is False
+    no_claim = hitl._user_confirmation("report_loss", rule, {})
+    assert no_claim["mfa_ok"] is False and no_claim["confirmed"] is False
+    assert no_claim["grant_id"] is None
+
+    claimed = hitl._user_confirmation(
+        "report_loss", rule, {"card_id": "6222", "confirmed": True, "mfa_code": "123456"}
+    )
+    assert claimed["mfa_ok"] is False and claimed["confirmed"] is False
+    assert claimed["grant_id"] is None
 
 
 def test_missing_dependency_cannot_be_replaced_by_confirmation_or_human() -> None:

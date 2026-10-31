@@ -415,13 +415,13 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 
 ## 8. 测试计划
 
-测试文件名与实施计划 §4（B1）一致：`tests/test_sim_clock*.py`、`tests/test_api_clock*.py`。前端静态契约归入 `tests/test_web_ui_clock_panel.py`（对齐既有 `tests/test_web_ui_delete_button.py` 的做法：读 `index.html` 断言关键实现存在；文件名不在计划清单内，见 §11 O-6）。PG 相关用例依赖 `BANK_AGENT_TEST_DB_URL`（`tests/conftest.py` 的 `runtime_pg_database` / `pg_clean` / `live_server` 夹具；未设置则 skip）。
+测试文件落在阶段 5 的四层目录：本节原计划写作 `tests/test_sim_clock*.py`、`tests/test_api_clock*.py`，阶段 5 迁移时归并为 `tests/unit/test_clock_units.py`、`tests/contract/test_clock_api.py` 与 `tests/integration/test_clock_settlement.py`。前端静态契约归入 `tests/frontend/test_auth_gate.mjs`（对齐既有 `tests/contract/test_web_ui_delete_button.py` 的做法：读 `index.html` 断言关键实现存在；见 §11 O-6）。分层判定与迁移对照见 `docs/AI_Banking_Agent_测试文档.md` §2 与 §9。PG 相关用例依赖 `BANK_AGENT_TEST_DB_URL`（`tests/conftest.py` 的 `runtime_pg_database` / `pg_clean` / `live_server` 夹具；未设置则 skip）。
 
 ### 8.1 单元（纯逻辑，不需要数据库）
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_sim_clock.py` | `test_system_clock_now_equals_real_now` | 固定 `real_now()` 后 `now() == real_now()`，精确到微秒 |
+| `tests/unit/test_clock_units.py` | `test_system_clock_now_equals_real_now` | 固定 `real_now()` 后 `now() == real_now()`，精确到微秒 |
 | | `test_sim_clock_disabled_ignores_offset` | `enabled=False, offset=7200` → `now()==real_now()` |
 | | `test_sim_clock_running_adds_offset` | `enabled=True, offset=7200` → `now()-real_now()==7200s` |
 | | `test_sim_clock_frozen_is_constant` | 冻结值固定；`real_now()` 前进 60 秒后 `now()` 不变 |
@@ -432,7 +432,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_sim_clock_store.py` | `test_store_seeds_default_single_row` | 空库首次 `load()` 插入 1 行且 `id==1, enabled=false, version=1` |
+| `tests/unit/test_clock_units.py` | `test_store_seeds_default_single_row` | 空库首次 `load()` 插入 1 行且 `id==1, enabled=false, version=1` |
 | | `test_store_rejects_second_row` | 手工插入 `id=2` → `IntegrityError`（`ck_sim_clock_single_row`） |
 | | `test_store_roundtrip_survives_new_instance` | 写入 `offset=7200` 后新建实例（模拟重启）读回同值 |
 | | `test_store_version_increments_on_each_write` | 连续两次写入 `version` 递增；用旧 `version` 写入 → 冲突 |
@@ -441,7 +441,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_api_clock.py` | `test_get_clock_defaults_to_real_time` | `enabled=false`、`business_now==real_now`、`frozen=false` |
+| `tests/contract/test_clock_api.py` | `test_get_clock_defaults_to_real_time` | `enabled=false`、`business_now==real_now`、`frozen=false` |
 | | `test_advance_requires_ack` | 缺 `ack` → 400 `ack_required`，时钟未变 |
 | | `test_advance_rejects_both_seconds_and_to` | → 400 `clock_advance_invalid` |
 | | `test_advance_from_disabled_enables_clock` | `disabled` + `seconds=3600` → 200 且 `enabled=true, offset=3600` |
@@ -449,7 +449,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 | | `test_freeze_and_resume_are_idempotent` | 重复调用均 200、`version` 不增、领域事件不新增 |
 | | `test_reset_restores_real_time_and_keeps_audit_rows` | `enabled=false,offset=0`；`audit.clock_event`/`audit.event` 行数不减 |
 | | `test_clock_change_writes_dual_audit_with_both_timestamps` | 每条变更 1 行 `clock_event` + 1 行 `audit.event`，`real_at`/`business_at` 均非空 |
-| `tests/test_api_clock_auth.py` | `test_clock_write_requires_ops_admin_role` | `X-Role=user/risk_reviewer` → 403 `role_not_allowed`，状态不变 |
+| `tests/contract/test_clock_api.py` | `test_clock_write_requires_ops_admin_role` | `X-Role=user/risk_reviewer` → 403 `role_not_allowed`，状态不变 |
 | | `test_denied_clock_write_is_audited` | 越权后 `audit.event` 出现 `clock.denied` |
 | | `test_clock_write_requires_operator_header` | 缺 `X-Operator` → 403 `operator_required` |
 
@@ -457,7 +457,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_sim_clock_due.py` | `test_advance_triggers_due_task_once` | 造一条 `scheduled_at` 在业务时间后的任务 → `advance` 越过它 → 任务被触发 1 次（`app.task.status` 变更 + 1 条结算审计） |
+| `tests/integration/test_clock_settlement.py` | `test_advance_triggers_due_task_once` | 造一条 `scheduled_at` 在业务时间后的任务 → `advance` 越过它 → 任务被触发 1 次（`app.task.status` 变更 + 1 条结算审计） |
 | | `test_repeated_advance_does_not_double_settle` | 再次 `advance` 相同区间 → 无新结算、账户余额不再变化（幂等键生效） |
 | | `test_due_scan_runs_final_gate_and_refetches_facts` | 桩掉事实查询，返回余额不足 → 任务**不执行**且落 `failed`/人工案件，不得写 `succeeded` |
 | | `test_frozen_clock_does_not_expire_cases` | 冻结后推进真实时间 → SLA/到期判定不推进（与 HITL 联动，见 HITL 设计说明 §8） |
@@ -467,7 +467,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_web_ui_clock_panel.py` | `test_toolbar_shows_business_time_badge` | `index.html` 含 `业务时间`、`演示`、`真实时间` 三种文案分支 |
+| `tests/frontend/test_auth_gate.mjs` | `test_toolbar_shows_business_time_badge` | `index.html` 含 `业务时间`、`演示`、`真实时间` 三种文案分支 |
 | | `test_clock_panel_requires_confirmation` | 面板按钮调用 `askConfirm(`，且全文不含 `window.confirm(` |
 | | `test_clock_panel_calls_all_clock_endpoints` | 出现 `/api/clock/advance`、`/freeze`、`/resume`、`/reset` 四个路径 |
 | | `test_clock_panel_renders_triggered_summary` | 响应处理里有 `triggered` 渲染与系统提示插入 |
@@ -499,7 +499,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 - [ ] `reset` 后时钟回真实时间，且 `audit.*` 行数不减、`app.*` 业务数据不受影响。
 - [ ] 前端顶栏能显示 `真实时间` / `业务时间 … · 演示 +2h` / `… · 已冻结` 三态，面板六个操作均经 `askConfirm` 二次确认。
 - [ ] 推进触发的任务若结果未知，界面显示「结果未知，已转人工」，不显示成功（需求 `:250`）。
-- [ ] `tests/test_sim_clock*.py`、`tests/test_api_clock*.py`、`tests/test_web_ui_clock_panel.py` 全绿；`pytest tests -q` 不低于基线。
+- [ ] `tests/unit/test_clock_units.py`、`tests/contract/test_clock_api.py`、`tests/frontend/test_auth_gate.mjs` 全绿；`pytest tests -q` 不低于基线。
 
 ## 11. 对实施计划的偏差建议
 
@@ -512,7 +512,7 @@ reset: ops_admin + ack → enabled=false, offset=0, frozen=NULL, version+1
 | O-3 | §3 `GET /api/clock -> {enabled, business_now, ...}` | 未说明这些字段位于统一响应包的 `data` 内还是与 `ok/message` 平级 | 明确为 `data` 内（本文按此实现）；否则前后端会对不上 |
 | O-4 | §2.3 `audit.clock_event` 列清单 | 缺 `tenant_id` 与 `role`。需求 `:236` 要求审计能关联用户/租户；`X-Role` 是本次新增的鉴权维度，若不入审计，越权追溯只能靠 `operator` 猜 | 建议补 `tenant_id UUID NOT NULL` 与 `role VARCHAR(16)` 两列；若坚持不动表结构，则最少把 `role` 写入 `after` JSONB（本文当前按此兼容） |
 | O-5 | §1.1 第 5 条「对话流插入系统提示」 vs §3 契约 `POST /api/clock/advance {seconds\|to, ack, operator?}` | 契约没有 `session_id`，后端无法知道要往哪个会话插系统消息 | 二选一：前端本地插入（本文首版）；或给 `advance` 增加可选 `session_id` 并落 `app.conversation_message` |
-| O-6 | §4 任务拆分 | 未列与时钟相关的前端/端到端测试文件名；而 §5 验收要求「前端可见」 | 建议正式登记 `tests/test_sim_clock_due.py`、`tests/test_web_ui_clock_panel.py` |
+| O-6 | §4 任务拆分 | 未列与时钟相关的前端/端到端测试文件名；而 §5 验收要求「前端可见」 | 建议正式登记 `tests/integration/test_clock_settlement.py`、`tests/frontend/test_auth_gate.mjs` |
 | O-7 | §5 测试基线 | 基线写作「532 passed / 2 failed」，但同时说明设了 `BANK_AGENT_TEST_DB_URL` 时是 `3 failed, 689 passed, 1 skipped` | 建议把两条基线都列为门禁（带 PG 变量的全量基线才是真门禁），避免「不设变量跑绿」被当作通过 |
 
 ## 12. 实现对齐与已知限制（v1.1 补记）

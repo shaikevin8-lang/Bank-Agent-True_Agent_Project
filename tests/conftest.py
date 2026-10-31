@@ -569,3 +569,184 @@ def pg_clean(runtime_pg_database: RuntimeDatabase, monkeypatch: pytest.MonkeyPat
         yield runtime_pg_database.url
     finally:
         _reset_server()
+
+# ---------------------------------------------------------------------------
+# 阶段 5（D13 测试体系补齐）：分层标记自动派生 + 四个新增夹具
+#
+# 约定：目录即分层。历史 40+ 测试文件由 ``git mv`` 迁入四层目录，用例体不改，
+# 分层标记从文件路径派生，因此 ``pytest -m "not pg and not integration"`` 才是
+# 可靠的「快跑」口径，不依赖逐个补装饰器。
+# ---------------------------------------------------------------------------
+
+_LAYERS: tuple[str, ...] = ("unit", "contract", "security", "integration")
+
+# 用这些夹具的用例必然触碰真实 PostgreSQL / 起服务，自动打 ``pg`` 标记。
+_PG_FIXTURES = frozenset(
+    {"pg_clean", "pg_engine", "runtime_pg_database", "runtime_pg_url", "live_server"}
+)
+
+# 用这些夹具的用例要连容器或外部进程，自动打 ``slow`` 标记。
+_SLOW_FIXTURES = frozenset({"sandbox_client"})
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[Any]) -> None:
+    """按目录派生分层标记，按夹具派生 ``pg`` / ``slow`` 标记。
+
+    Args:
+        config: pytest 配置对象（未使用，签名由钩子规范固定）。
+        items: 本次收集到的用例列表，原地追加标记。
+
+    Returns:
+        无。
+    """
+    for item in items:
+        raw = str(getattr(item, "path", getattr(item, "fspath", ""))).replace("\\", "/")
+        for layer in _LAYERS:
+            if f"/tests/{layer}/" in f"/{raw}":
+                item.add_marker(getattr(pytest.mark, layer))
+                break
+        used = set(getattr(item, "fixturenames", ()) or ())
+        if used & _PG_FIXTURES:
+            item.add_marker(pytest.mark.pg)
+        if used & _SLOW_FIXTURES:
+            item.add_marker(pytest.mark.slow)
+
+
+@pytest.fixture()
+def pg_engine(runtime_pg_database: RuntimeDatabase) -> Iterator[Any]:
+    """真实 PostgreSQL 引擎。
+
+    优先用 ``BANK_AGENT_TEST_PG_URL`` 指定的库（已具备 app schema 的维护库），
+    未设置时回落到 ``runtime_pg_database`` 造的临时测试库。用例负责自己的数据
+    隔离：走维护库时请用事务回滚或 ``pg_clean`` 清表。
+
+    Args:
+        runtime_pg_database: 临时测试库夹具（未配置 URL 时它自己会 skip）。
+
+    Yields:
+        ``sqlalchemy.Engine``。
+    """
+    override = os.environ.get("BANK_AGENT_TEST_PG_URL", "").strip()
+    if not override:
+        yield runtime_pg_database.engine
+        return
+
+    from sqlalchemy import create_engine
+
+    engine = create_engine(override, pool_pre_ping=True)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+@pytest.fixture()
+def breaker_service() -> Iterator[Any]:
+    """熔断服务句柄：内存存储 + 每用例清零引擎与缓存。
+
+    与 autouse 的 ``_isolated_circuit_breaker`` 互补——那个负责「清干净」，
+    这个负责把模块本身交给用例，省掉每个安全用例重复 import 与配置。
+
+    Yields:
+        ``common.circuit_breaker`` 模块。
+    """
+    from common import circuit_breaker
+
+    circuit_breaker.configure_store(circuit_breaker.MemoryStore())
+    circuit_breaker.reset_engine()
+    circuit_breaker.clear_cache()
+    try:
+        yield circuit_breaker
+    finally:
+        circuit_breaker.configure_store(None)
+        circuit_breaker.reset_engine()
+        circuit_breaker.clear_cache()
+
+
+@pytest.fixture()
+def grant_factory() -> Iterator[Any]:
+    """确认凭据工厂：一行拿到「可直接执行」的一次性凭据。
+
+    Yields:
+        可调用对象 ``issue(tool_name, args=None, *, tenant_id=None, user_id=None,
+        session_id="default") -> ConfirmationGrant``；红色动作（需 MFA）自动取
+        演示验证码走完 ``submit_mfa``，因此不依赖真实短信通道。
+    """
+    from common import confirm
+
+    def issue(
+        tool_name: str,
+        args: dict[str, Any] | None = None,
+        *,
+        tenant_id: Any = None,
+        user_id: Any = None,
+        session_id: str = "default",
+    ) -> Any:
+        """创建确认请求并返回可用凭据。
+
+        Args:
+            tool_name: 工具名。
+            args: 工具参数。
+            tenant_id: 租户 UUID。
+            user_id: 操作者 UUID。
+            session_id: 会话 ID。
+
+        Returns:
+            ``ConfirmationGrant``。
+        """
+        request = confirm.create_request(
+            tool_name=tool_name,
+            args=args,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if not request.mfa_required:
+            # 非红色动作在 create_request 内已签发凭据，按会话态取回。
+            grant = confirm.session_grant(
+                tool_name=tool_name,
+                args=args,
+                session_id=session_id,
+                tenant_id=tenant_id,
+                user_id=user_id,
+            )
+            if grant is None:
+                raise confirm.ConfirmError("非红色动作未签发凭据")
+            return grant
+        code = confirm.demo_sms(request.request_id)["code"]
+        return confirm.submit_mfa(
+            request_id=request.request_id,
+            code=code,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+
+    confirm.clear_demo_codes()
+    try:
+        yield issue
+    finally:
+        confirm.clear_demo_codes()
+
+
+@pytest.fixture()
+def sandbox_client() -> Iterator[httpx.Client]:
+    """代码沙箱 HTTP 客户端；沙箱未起时整组跳过。
+
+    Yields:
+        指向 ``BANK_AGENT_CODE_SANDBOX_URL``（默认 ``http://127.0.0.1:8022``）的
+        ``httpx.Client``。
+    """
+    base = os.environ.get("BANK_AGENT_CODE_SANDBOX_URL", "http://127.0.0.1:8022").strip()
+    client = httpx.Client(base_url=base, timeout=10.0)
+    try:
+        health = client.get("/health")
+    except Exception as exc:  # 沙箱未启动属环境缺失，不当作失败
+        client.close()
+        pytest.skip(f"代码沙箱不可用（{base}）：{exc}")
+    if health.status_code >= 500:
+        client.close()
+        pytest.skip(f"代码沙箱健康检查失败：HTTP {health.status_code}")
+    try:
+        yield client
+    finally:
+        client.close()

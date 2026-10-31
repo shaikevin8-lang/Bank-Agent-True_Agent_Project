@@ -25,6 +25,18 @@ def test_internal_views_match_public_shapes_without_private_scope() -> None:
 
     # 审核结果字典的字段是公共字段的子集，不外泄私有 DB 主键 / 租户标识。
     result = ModerationResult(passed=True)
-    assert set(result.to_dict()) == {"passed", "category", "reason", "matched", "review_source"}
-    assert "tenant_id" not in result.to_dict()
-    assert "session_id" not in result.to_dict()
+    public = result.to_dict()
+    # 旧键（文档口径）不变，``layer`` / ``normalized_flags`` 是增量字段（只增不改）。
+    assert set(public) == {
+        "passed",
+        "category",
+        "reason",
+        "matched",
+        "review_source",
+        "layer",
+        "normalized_flags",
+    }
+    assert isinstance(public["normalized_flags"], list)
+    assert public["layer"] is None or isinstance(public["layer"], str)
+    assert "tenant_id" not in public
+    assert "session_id" not in public

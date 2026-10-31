@@ -332,7 +332,11 @@ def test_red_confirmed_plan_without_mfa_reuses_the_card_instead_of_minting_anoth
     assert hit.risk_level == hitl.RISK_RED
 
     # 已确认但缺 6 位 MFA 码 → mfa_ok 为 False（不因 confirmed 而放行）。
-    confirmation = hitl._user_confirmation(rule, {"card_id": "6222", "confirmed": True})
+    # 阶段4 起 ``_user_confirmation`` 需要 (tool_name, rule, arguments)：模型自供的
+    # ``confirmed`` 只被登记为候选，真正的确认凭据来自 ``confirm`` 模块。
+    confirmation = hitl._user_confirmation(
+        "report_loss", rule, {"card_id": "6222", "confirmed": True}
+    )
     assert confirmation["mfa_ok"] is False
     assert confirmation["mfa_required"] is True
 

@@ -27,6 +27,34 @@ _SEED_TXN_KEYS = {
     "abnormal_reason",
 }
 
+#: ``/api/auth/*`` 的静态声明（账号接口是闭集）。
+EXPECTED_AUTH_ROUTES = [
+    "GET /api/auth/me",
+    "POST /api/auth/login",
+    "POST /api/auth/logout",
+    "POST /api/auth/register",
+]
+
+
+def _declared_routes(router: object) -> list[str]:
+    """列出 APIRouter 上**静态声明**的 ``"METHOD path"``（排序去重）。
+
+    Args:
+        router: FastAPI ``APIRouter``（如 ``server.auth_router``）。
+
+    Returns:
+        形如 ``"POST /api/auth/login"`` 的字符串列表（已排序）。
+    """
+    routes: set[str] = set()
+    for route in getattr(router, "routes", ()):
+        path = getattr(route, "path", "") or ""
+        methods = getattr(route, "methods", None) or ()
+        if not path:
+            continue
+        for method in methods:
+            routes.add(f"{method} {path}")
+    return sorted(routes)
+
 
 def test_generated_internal_schemas_are_current_and_fixture_is_structurally_valid() -> None:
     """seed fixture 与演示账户常量结构有效，且与运行时口径一致。"""
@@ -115,8 +143,10 @@ def test_query_defaults_are_consistent_with_schema_without_dynamic_dispatch() ->
     # 会话 / 账号路由由 FastAPI 静态绑定（非动态分发）。
     session_routes = server._registered_session_routes()
     assert len(session_routes) == 6
-    auth_routes = server._registered_auth_routes()
-    assert len(auth_routes) == 4
+    # 账号路由来自 ``web_test.api_auth.router`` 的静态声明：当前 FastAPI 版本的
+    # ``include_router`` 惰性展开（``app.routes`` 里只有占位对象），运行期遍历看不到
+    # 它们，因此断言 APIRouter 自身的静态签名。
+    assert _declared_routes(server.auth_router) == EXPECTED_AUTH_ROUTES
 
 
 def test_internal_mapping_tracks_the_real_closed_contract_and_fixture() -> None:

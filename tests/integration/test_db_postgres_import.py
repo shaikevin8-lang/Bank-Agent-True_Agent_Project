@@ -32,7 +32,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 STRUCT_ROOT = REPO_ROOT / "Struct_of_Agent"
 if str(STRUCT_ROOT) not in sys.path:
     sys.path.insert(0, str(STRUCT_ROOT))

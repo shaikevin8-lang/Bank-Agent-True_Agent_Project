@@ -223,18 +223,57 @@ def test_decision_input_accepts_only_the_two_documented_values():
             DecisionRequest.model_validate(payload)
 
 
+MFA_ENDPOINT = "/api/v1/confirm/mfa"
+MFA_HEADERS = {"X-Role": "user", "X-Operator": "tester.user"}
+
+
 def test_mfa_input_accepts_only_six_ascii_digits():
-    """MFA 只接受 6 位数字：命中后 ``_user_confirmation`` 复算 ``mfa_ok``。
+    """MFA 输入门只放行 6 位数字，且模型自供的码不构成确认。
 
-    当前实现用 ``str.isdigit()``（非严格 ASCII，见总结偏差）；5/7 位、含字母、空串均不通过。
+    阶段4 凭据化后语义分两层：
+
+    - 格式门在 ``POST /api/v1/confirm/mfa``：``len(code) == 6 and code.isdigit()``
+      不满足即 400 ``VALIDATION_001`` + ``data.reason == "invalid_code_format"``，
+      且在查库之前就拒绝（避免枚举请求 ID）；
+    - ``hitl._user_confirmation`` 只登记候选、不消费凭据：模型自带的
+      ``confirmed`` / ``mfa_code`` 一律不算确认，``mfa_ok`` 恒为 False。
+
+    Raises:
+        AssertionError: 非 6 位数字未被格式门拦截，或模型自供字段被当成确认。
     """
+    from fastapi.testclient import TestClient
+
+    import web_test.server as server
+
+    with TestClient(server.app) as client:
+        # 5/7 位、含字母、空串：在格式门被拒，不触发任何请求查询。
+        for code in ("12345", "1234567", "12345a", "abcdef", ""):
+            response = client.post(
+                MFA_ENDPOINT,
+                json={"request_id": "not-a-uuid", "code": code},
+                headers=MFA_HEADERS,
+            )
+            assert response.status_code == 400, (code, response.text)
+            body = response.json()
+            assert body["ok"] is False and body["error_code"] == "VALIDATION_001"
+            assert body["data"]["reason"] == "invalid_code_format"
+
+        # 6 位数字通过格式门，继续走到请求 ID 校验（说明门只拦格式，不做别的事）。
+        accepted = client.post(
+            MFA_ENDPOINT,
+            json={"request_id": "not-a-uuid", "code": "123456"},
+            headers=MFA_HEADERS,
+        )
+
+    assert accepted.status_code == 400
+    assert accepted.json()["data"]["reason"] == "not_found"
+
+    # 模型自供 confirmed + 6 位码也不产生 mfa_ok：凭据只能由 confirm 模块签发。
     rule = hitl.HITL_POLICY["report_loss"]
-
-    def _mfa_ok(code) -> bool:
-        return hitl._user_confirmation(rule, {"confirmed": True, "mfa_code": code})["mfa_ok"]
-
-    assert _mfa_ok("123456") is True
-    for code in ("12345", "1234567", "12345a", "abcdef", ""):
-        assert _mfa_ok(code) is False
-    # 未确认时即使 6 位码也无效。
-    assert hitl._user_confirmation(rule, {"confirmed": False, "mfa_code": "123456"})["mfa_ok"] is False
+    claimed = hitl._user_confirmation(
+        "report_loss", rule, {"confirmed": True, "mfa_code": "123456"}
+    )
+    assert claimed["mfa_ok"] is False and claimed["confirmed"] is False
+    assert claimed["grant_id"] is None
+    assert claimed["mfa_required"] is True
+    assert claimed["source"] == "model_arguments_ignored"

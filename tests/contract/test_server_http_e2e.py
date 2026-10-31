@@ -30,7 +30,7 @@ from typing import Any
 
 import httpx
 
-_STRUCT = Path(__file__).resolve().parent.parent / "Struct_of_Agent"
+_STRUCT = Path(__file__).resolve().parents[2] / "Struct_of_Agent"
 if str(_STRUCT) not in sys.path:
     sys.path.insert(0, str(_STRUCT))
 

@@ -38,6 +38,10 @@ httpx>=0.28.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
 
-# 测试（可选）：pip install pytest
-#   后端测试：python -m pytest tests -q
+# 测试（可选）：pip install pytest pytest-cov
+#   快跑（不碰真实 PG 与集成层）：python -m pytest tests -q -m "not pg and not integration"
+#   全量（需 BANK_AGENT_TEST_DB_URL 才能覆盖 PG 用例）：python -m pytest tests -q
+#   覆盖率：python -m pytest tests --cov=Struct_of_Agent --cov-report=term-missing
 #   前端 DOM 测试：cd tests/frontend && npm install jsdom && node test_settings_panel.mjs
+pytest>=8.0.0
+pytest-cov>=7.0.0

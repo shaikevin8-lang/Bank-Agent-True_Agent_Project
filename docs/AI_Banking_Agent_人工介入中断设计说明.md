@@ -583,13 +583,13 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 
 ## 8. 测试计划
 
-测试文件名与实施计划 §4（B2）一致：`tests/test_hitl*.py`、`tests/test_api_hitl*.py`；前端静态契约 `tests/test_web_ui_hitl_card.py`（对齐既有 `tests/test_web_ui_delete_button.py` 风格，文件名不在计划清单内，见 §11 O-8）。依赖 PG 的用例走 `tests/conftest.py` 的 `pg_clean`/`live_server` 夹具（未设 `BANK_AGENT_TEST_DB_URL` 则 skip）。
+测试文件落在阶段 5 的四层目录：本节原计划写作 `tests/test_hitl*.py`、`tests/test_api_hitl*.py`，阶段 5 迁移时归并为 `tests/unit/test_hitl_units.py`（状态机与领域服务）与 `tests/contract/test_hitl_api.py`（HTTP 契约）；前端静态契约归入 `tests/frontend/test_confirm_card.mjs`（对齐既有 `tests/contract/test_web_ui_delete_button.py` 的静态断言做法，见 §11 O-8）。分层判定与迁移对照见 `docs/AI_Banking_Agent_测试文档.md` §2 与 §9。依赖 PG 的用例走 `tests/conftest.py` 的 `pg_clean`/`live_server` 夹具（未设 `BANK_AGENT_TEST_DB_URL` 则 skip）。
 
 ### 8.1 单元：状态机与领域服务
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_hitl.py` | `test_legal_transitions_matrix` | 13 条合法迁移逐条通过，`version` 每次 +1，事件 `seq` 单调递增 |
+| `tests/unit/test_hitl_units.py` | `test_legal_transitions_matrix` | 13 条合法迁移逐条通过，`version` 每次 +1，事件 `seq` 单调递增 |
 | | `test_illegal_transitions_raise_invalid_transition` | 终态出发的迁移、`open→approved`、`claimed→claimed` 等全部抛 `InvalidTransition` → `invalid_transition` |
 | | `test_claim_sets_ttl_from_business_clock` | `claim_expires_at == clock.now() + 300s`（用 `use_clock` 注入固定时钟） |
 | | `test_claim_ttl_expiry_allows_others_to_claim` | 业务时间越过 `claim_expires_at` → 他人 `claim` 成功；事件流出现「回收 + 认领」 |
@@ -603,11 +603,11 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_hitl_gate.py` | `test_gate_allows_low_risk_read_only` | 只读/草稿工具 → `Allow`，不建案 |
+| `tests/unit/test_hitl_units.py` | `test_gate_allows_low_risk_read_only` | 只读/草稿工具 → `Allow`，不建案 |
 | | `test_gate_interrupts_red_write_over_threshold` | 转账 ≥ 1000 元 → `Interrupt`，`reason_code='high_risk_write'`，`risk_level='red'` |
 | | `test_gate_interrupts_unknown_result` | 工具结果未知 → `Interrupt`，`reason_code='unknown_result'` |
 | | `test_interrupt_creates_case_without_side_effects` | 建案后账户余额、`app.task` 状态、`bank_transaction` 行数均不变；`hitl_case.proposal` 含工具名/参数/幂等键/`graph_thread_id` |
-| `tests/test_hitl_resume.py` | `test_approve_executes_exactly_once` | 首次批准执行 1 次；再调同一决策 → `replay=true` 且不再执行 |
+| `tests/unit/test_hitl_units.py` | `test_approve_executes_exactly_once` | 首次批准执行 1 次；再调同一决策 → `replay=true` 且不再执行 |
 | | `test_resume_reuses_idempotency_key` | 桩掉工具执行，重复 `resume` → `begin_operation` 返回 `replay`，工具不被二次调用 |
 | | `test_resume_reruns_gate_and_refetches_facts` | 事实变化（余额不足）→ 不执行，任务落 `failed`/转人工，绝不写 `succeeded` |
 | | `test_reject_leaves_no_side_effects` | `resumed is None`、余额不变、无工具执行审计 |
@@ -618,18 +618,18 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_api_hitl.py` | `test_list_cases_filters_by_status_and_session` | `{items,total}` 结构、`status`/`session_id`/`limit` 生效；`limit` 越界返回 400 |
+| `tests/contract/test_hitl_api.py` | `test_list_cases_filters_by_status_and_session` | `{items,total}` 结构、`status`/`session_id`/`limit` 生效；`limit` 越界返回 400 |
 | | `test_get_case_returns_case_and_events` | `{case, events}`；`events` 按 `seq` 升序；响应不含明文账号 |
 | | `test_claim_then_decision_flow` | `open→claimed→approved`；`resumed` 非空 |
 | | `test_decision_idempotent_response_flags_replay` | 二次请求 `replay=true` |
 | | `test_cancel_case` | `status='cancelled'`，无副作用 |
 | | `test_sweep_expires_overdue_cases` | 推进业务时钟后 sweep → `expired` 列表与 DB 状态一致 |
-| `tests/test_api_hitl_auth.py` | `test_claim_requires_reviewer_role` | `user`/`ops_admin` → 403 `role_not_allowed` 且落 `hitl.denied` 审计 |
+| `tests/contract/test_hitl_api.py` | `test_claim_requires_reviewer_role` | `user`/`ops_admin` → 403 `role_not_allowed` 且落 `hitl.denied` 审计 |
 | | `test_decision_requires_assignee` | 非认领人 → 409 `case_not_claimable` |
 | | `test_decision_requires_ack_and_note` | 缺 `ack` → 400 `ack_required`；`reject` 缺 `note` → 400 `note_required` |
 | | `test_user_cannot_read_other_session_case` | 403 `role_not_allowed` |
 | | `test_missing_operator_header_is_rejected` | 写操作 → 403 `operator_required` |
-| `tests/test_api_hitl_concurrency.py` | `test_concurrent_claim_only_one_wins` | 两线程并发 `claim`：1 个 200 + 1 个 409（`case_not_claimable` 或 `case_version_conflict`） |
+| `tests/contract/test_hitl_api.py` | `test_concurrent_claim_only_one_wins` | 两线程并发 `claim`：1 个 200 + 1 个 409（`case_not_claimable` 或 `case_version_conflict`） |
 | | `test_concurrent_approve_executes_once` | 两线程并发 `approve`：只有 1 个 `resumed` 非空；`bank_transaction` 只增 1 行 |
 | | `test_concurrent_approve_and_reject_do_not_mix` | 结果只有一种终态，`decision` 与 `resumed` 一致 |
 
@@ -637,9 +637,9 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 
 | 文件 | 测试方法名建议 | 断言要点 |
 | --- | --- | --- |
-| `tests/test_api_hitl.py`（e2e 用例） | `test_high_risk_write_interrupts_then_resumes_end_to_end` | 走 `/api/chat` → 命中红色写 → 无副作用 + 落案件；`claim`+`approve` → 只执行一次；审计两条链可对上 |
+| `tests/contract/test_hitl_api.py`（e2e 用例） | `test_high_risk_write_interrupts_then_resumes_end_to_end` | 走 `/api/chat` → 命中红色写 → 无副作用 + 落案件；`claim`+`approve` → 只执行一次；审计两条链可对上 |
 | | `test_expired_case_message_tells_user_nothing_was_executed` | 过期后用户侧文案含「未执行」，且无工具执行审计 |
-| `tests/test_web_ui_hitl_card.py` | `test_chat_renders_waiting_card_fields` | `index.html` 含案件号/原因/风险级别/SLA 倒计时/「尚未执行」文案 |
+| `tests/frontend/test_confirm_card.mjs` | `test_chat_renders_waiting_card_fields` | `index.html` 含案件号/原因/风险级别/SLA 倒计时/「尚未执行」文案 |
 | | `test_card_has_claim_approve_reject_buttons` | 三个按钮分别调用 `claim`、`decision`（approve/reject） |
 | | `test_case_drawer_and_badge_exist` | 抽屉容器 + 顶栏待处理徽标 + `role` 切换下拉 |
 | | `test_no_window_confirm_in_hitl_flow` | 决策确认走 `askConfirm(`，全文不含 `window.confirm(` |
@@ -676,7 +676,7 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 - [ ] 每次迁移写 `hitl_case_event` + `audit.event`，两者都含 `real_at`/`business_at`；`hitl.denied` 覆盖越权与非法迁移。
 - [ ] 审计写失败 → 事务回滚、工具未执行、返回 `audit_unavailable`（fail-closed）。
 - [ ] 前端：聊天卡片（案件号/原因/风险级别/动作摘要/SLA 倒计时/认领-批准-拒绝）+ 抽屉队列 + 顶栏待处理徽标 + 身份切换 + 「演示」声明；刷新后卡片可由 `session_id` 重建。
-- [ ] `tests/test_hitl*.py`、`tests/test_api_hitl*.py`、`tests/test_web_ui_hitl_card.py` 全绿；`pytest tests -q` 不低于基线。
+- [ ] `tests/unit/test_hitl_units.py`、`tests/contract/test_hitl_api.py`、`tests/frontend/test_confirm_card.mjs` 全绿；`pytest tests -q` 不低于基线。
 
 ## 11. 对实施计划的偏差建议
 
@@ -689,9 +689,9 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 | O-3 | §2.2 恢复段只写「批准后 resume 用存档 proposal 重新走安全门执行」 | 未覆盖「人工通过不能代替用户确认」（需求 `:144`）的硬约束 | 建议 `proposal` 增加 `user_confirmation`，`resume` 前校验，缺失/失效 → `user_confirmation_missing` 并回落「待确认」；否则实现会天然违反 FR-COM-003 |
 | O-4 | §2.3 `app.hitl_case` 列清单 | 缺 `tenant_id` / `owner_principal_id`，与数据库设计文档 L43-59（用户数据带租户与所有者）和需求 `:76`（案件按最小必要范围可见）不一致 | 建议补两列 + 复合外键；否则「`user` 只能看本人案件」只能靠 `session_id` 间接推，隔离不严 |
 | O-5 | §2.3 `hitl_case_event.action` 枚举 | 认领超时回收没有对应动作 | 二选一：加 `reclaim`（需同步 CHECK 与迁移）；或保留枚举、回收复用 `claim` + `note` 前缀（本文当前做法） |
-| O-6 | §1.2「调度器把本轮结果标记为『已挂起等待人工处理』」 | `db/task_status.py` 的 `TASK_STATUSES` 与 `app.task` 的 CHECK 都不含该状态，无法合法落库 | 建议新增 `awaiting_human`：改 `TASK_STATUSES` + `app.task` CHECK + `tests/test_db_units.py` 的约束断言；过渡方案是用 `payload.hitl_case_no` + `status='requested'`（但 UI 需另外呈现） |
+| O-6 | §1.2「调度器把本轮结果标记为『已挂起等待人工处理』」 | `db/task_status.py` 的 `TASK_STATUSES` 与 `app.task` 的 CHECK 都不含该状态，无法合法落库 | 建议新增 `awaiting_human`：改 `TASK_STATUSES` + `app.task` CHECK + `tests/unit/test_db_units.py` 的约束断言；过渡方案是用 `payload.hitl_case_no` + `status='requested'`（但 UI 需另外呈现） |
 | O-7 | §2.2 `gate(session, task, proposal)` | 未定义「什么算命中人工策略」——阈值、白名单、`reason_code` 优先级都缺 | 采纳本文 §3.5 的策略表（常量放 `common/hitl.py`，金额阈值 1000 元、命中优先级 `unknown_result > tool_degraded > policy_conflict > missing_info > high_risk_write`） |
-| O-8 | §4 任务拆分 | 未列 HITL 的前端/并发测试文件名，而 §5 验收要求「并发认领只有一个成功」「前端可见」 | 建议正式登记 `tests/test_api_hitl_concurrency.py`、`tests/test_web_ui_hitl_card.py` |
+| O-8 | §4 任务拆分 | 未列 HITL 的前端/并发测试文件名，而 §5 验收要求「并发认领只有一个成功」「前端可见」 | 建议正式登记 `tests/contract/test_hitl_api.py`、`tests/frontend/test_confirm_card.mjs` |
 | O-9 | §3 第 114 行 `pin?` | 未定义 `pin` 的来源、格式、失败码，以及「模拟 MFA」与「人工复核」的关系 | 建议明确：仅红色动作校验、配置项提供演示 PIN、失败 `mfa_invalid`；并写明模拟 MFA 不构成安全边界（架构 `:107`） |
 
 **修订记录**

@@ -25,7 +25,7 @@ from typing import Iterator
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 SERVICE = "code-sandbox"
 CONTAINER = "bank-agent-code-sandbox"

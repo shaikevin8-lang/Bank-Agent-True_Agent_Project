@@ -6,11 +6,41 @@ R1~R6 场景注册、``db.cli`` 的默认环境与 reset 的显式开关）逐�
 
 from __future__ import annotations
 
+from typing import Any
+
 from common import hitl_replay
 from db import cli as db_cli
 from R1 import ALL_TOOLS
 from R1.tools import transfer_tools
 from web_test import server
+
+#: ``/api/auth/*`` 的静态声明（账号接口是闭集）。
+EXPECTED_AUTH_ROUTES = [
+    "GET /api/auth/me",
+    "POST /api/auth/login",
+    "POST /api/auth/logout",
+    "POST /api/auth/register",
+]
+
+
+def _declared_routes(router: Any) -> list[str]:
+    """列出 APIRouter 上**静态声明**的 ``"METHOD path"``（排序去重）。
+
+    Args:
+        router: FastAPI ``APIRouter``（如 ``server.auth_router``）。
+
+    Returns:
+        形如 ``"POST /api/auth/login"`` 的字符串列表（已排序）。
+    """
+    routes: set[str] = set()
+    for route in getattr(router, "routes", ()):
+        path = getattr(route, "path", "") or ""
+        methods = getattr(route, "methods", None) or ()
+        if not path:
+            continue
+        for method in methods:
+            routes.add(f"{method} {path}")
+    return sorted(routes)
 
 
 def test_current_mapping_matches_documents_contract_and_runtime() -> None:
@@ -40,7 +70,10 @@ def test_current_mapping_matches_documents_contract_and_runtime() -> None:
     ]
     assert server._registered_settings_routes() == expected_settings
     assert len(server._registered_session_routes()) == 6
-    assert len(server._registered_auth_routes()) == 4
+    # 账号路由由 ``web_test.api_auth.router`` 静态声明后 include 进 app。当前
+    # FastAPI 版本的 ``include_router`` 是惰性展开（``app.routes`` 里只放占位），
+    # 因此这里断言 APIRouter 的静态声明而不是运行期展开结果。
+    assert _declared_routes(server.auth_router) == EXPECTED_AUTH_ROUTES
 
 
 def test_business_mapping_entries_are_registered_and_resolvable() -> None:

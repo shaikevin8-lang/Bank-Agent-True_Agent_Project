@@ -21,7 +21,7 @@
 | 关联 ADR | ADR-007 DAG 回退与补偿语义 |
 | 最后更新 | 2025-10-31 |
 | 权威代码 | `Struct_of_Agent/common/plan.py`、`Struct_of_Agent/supervisor.py` |
-| 权威测试 | 阶段 3 四个文件共 48 用例：`test_plan_dag.py`(23)、`test_plan_sse.py`(10，只增不改)、`test_compensation_guard.py`(10，补偿过门禁)、`test_scenario_dag_r6.py`(5，R6 场景与回滚)；全量 `pytest tests -q` = 943 passed, 180 skipped |
+| 权威测试 | 阶段 3 四个文件共 48 用例：`tests/unit/test_plan_dag.py`(23)、`tests/contract/test_plan_sse.py`(10，只增不改)、`tests/security/test_compensation_guard.py`(10，补偿过门禁)、`tests/integration/test_full_scenario_r6.py`(5，R6 场景与回滚)；全量 `pytest tests -q` = 943 passed, 180 skipped |
 | 回放样例 | `docs/_work/stage3_plan_sample.json`、`docs/_work/stage3_events_replay.jsonl` |
 
 ## 1. 定位与边界
@@ -313,7 +313,7 @@ def rollback_plan(self, session_id: str = "default", *,
 会话状态：`self._plans[session_id]`；`build_plan` 的版本裁决——同会话存在**未完成**旧计划 → `version+1`，已完成 → 开新计划。
 
 ## 9. 计划卡片展示规范
-前端实现位于 `Struct_of_Agent/web_test/index.html`（阶段 3 已落地）。类名是**契约的一部分**：改样式可以，改类名必须同步本节与 `tests/test_plan_sse.py`。
+前端实现位于 `Struct_of_Agent/web_test/index.html`（阶段 3 已落地）。类名是**契约的一部分**：改样式可以，改类名必须同步本节与 `tests/contract/test_plan_sse.py`。
 
 | 展示项 | 实现（类名 / 条件） | 行为 |
 | --- | --- | --- |
@@ -362,7 +362,7 @@ assert not any(e["action"] == "plan.replay_suppressed" for e in events)   # 正�
 | --- | --- | --- | --- |
 | U-1 | ~~`classify_failure` docstring 与实现对 `TimeoutError` 口径不一致~~ **已修**（2026-10-31）：docstring 已改为「超时 → `unknown`（写操作可能已在远端生效，按未知转人工）」，并补记 HITL 不可用/熔断开启 → `permission`；代码行为未动（安全侧口径不变） | — | 后续新增失败码时先改 docstring 再改代码，避免再次分叉 |
 | U-2 | `self._plans` 是进程内字典，跨进程恢复必须外部显式传 `version` | 演示单进程够用 | 需要时落 checkpoint 表，键 `(plan_id, version)` |
-| U-3 | ~~`Supervisor.replan` 换节点集后 `edges` 仍沿用旧版~~ **已修**（2026-10-31）：`Plan.replanned()` 现调 `_rebuild_edges(nodes, previous)` 按新 `depends_on` 重建边，旧 `(from,to)` 的 `kind` 保留，新依赖退化 `sequential`，指向已删节点的依赖丢弃；`tests/test_plan_dag.py::test_replanning_rebuilds_edges_from_depends_on` 覆盖 | — | 若将来引入跨节点「非 depends_on 声明」的边（如纯 `confirm` 审批边），需同步扩展 `_rebuild_edges` |
+| U-3 | ~~`Supervisor.replan` 换节点集后 `edges` 仍沿用旧版~~ **已修**（2026-10-31）：`Plan.replanned()` 现调 `_rebuild_edges(nodes, previous)` 按新 `depends_on` 重建边，旧 `(from,to)` 的 `kind` 保留，新依赖退化 `sequential`，指向已删节点的依赖丢弃；`tests/unit/test_plan_dag.py::test_replanning_rebuilds_edges_from_depends_on` 覆盖 | — | 若将来引入跨节点「非 depends_on 声明」的边（如纯 `confirm` 审批边），需同步扩展 `_rebuild_edges` |
 | U-4 | 补偿工具缺口：`schedule_transfer`/`purchase_product`/`adjust_limit`/`set_reminder` 规则可逆但无 `tool_name` | 回滚落 `manual` 转人工 | 按 R1/R3/R4/R6 逐场景补工具 |
 | U-5 | 本文档段与测试用例是两份契约，易漂移 | 阶段 3 四个文件 48 用例已覆盖 DAG/SSE/补偿/R6 场景（全量 943 passed, 180 skipped） | 字段改名或新增事件时同步改 §5/§7 与对应用例，并把全量 pytest 纳入 CI 门禁 |
 | U-6 | `plan_replanned` 只由 `PlanExecutor.run` 产生，`chat_stream` 顺序路径不产生 | 顺序路径失败不重规划，直接级联跳过 | 若前端要展示重规划，需在 `chat_stream` 接 `replan` 工厂 |

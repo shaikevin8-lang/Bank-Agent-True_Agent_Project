@@ -82,4 +82,17 @@ def test_input_gate_mapping_keeps_scope_and_acceptance_honest() -> None:
     assert detector.detect("帮我查一下余额") is None
 
     result = ModerationResult(passed=True)
-    assert set(result.to_dict()) == {"passed", "category", "reason", "matched", "review_source"}
+    # 审核结果形状固定：旧键（passed/category/reason/matched/review_source）不变，
+    # ``layer`` / ``normalized_flags`` 为增量字段。
+    public = result.to_dict()
+    assert set(public) == {
+        "passed",
+        "category",
+        "reason",
+        "matched",
+        "review_source",
+        "layer",
+        "normalized_flags",
+    }
+    assert public["passed"] is True and public["category"] == "clean"
+    assert isinstance(public["normalized_flags"], list)

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_INDEX_HTML = Path(__file__).resolve().parent.parent / "Struct_of_Agent" / "web_test" / "index.html"
+_INDEX_HTML = Path(__file__).resolve().parents[2] / "Struct_of_Agent" / "web_test" / "index.html"
 
 
 def _html() -> str:

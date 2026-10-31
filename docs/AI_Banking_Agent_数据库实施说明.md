@@ -54,10 +54,10 @@
 | `migrations/env.py`、`migrations/versions/0001_initial_schema.py` | Alembic 环境与 V001 迁移 |
 | `migrations/versions/0002_task_session_link.py` | V002：`app.task.session_id`、复合外键与索引 |
 | `scripts/db.py`、`scripts/db.ps1` | 仓库根目录入口（补齐 `sys.path`、隐藏口令、reset 二次确认） |
-| `tests/test_db_units.py` | 纯逻辑单元测试（不需要数据库） |
-| `tests/test_db_postgres_core.py` | 迁移/约束/种子/会话序号/余额并发/幂等集成测试 |
-| `tests/test_db_postgres_import.py` | 旧库导入/demo reset/审计保留/CLI 冒烟集成测试 |
-| `tests/test_db_runtime.py` | Web/R1/R2 共用会话表、任务会话外键、结算流水、报告只读 posted、异常标记 |
+| `tests/unit/test_db_units.py` | 纯逻辑单元测试（不需要数据库） |
+| `tests/integration/test_db_postgres_core.py` | 迁移/约束/种子/会话序号/余额并发/幂等集成测试 |
+| `tests/integration/test_db_postgres_import.py` | 旧库导入/demo reset/审计保留/CLI 冒烟集成测试 |
+| `tests/integration/test_db_runtime.py` | Web/R1/R2 共用会话表、任务会话外键、结算流水、报告只读 posted、异常标记 |
 
 ---
 
@@ -206,11 +206,11 @@ R1/R2 单独用 `uvicorn R1.api:app` / `uvicorn R2.api:app` 启动时，Agent �
 ```powershell
 # 单元测试（无需数据库）
 $env:PYTHONIOENCODING='utf-8'
-& .\.venv\Scripts\python.exe -m pytest tests\test_db_units.py -q
+& .\.venv\Scripts\python.exe -m pytest tests\unit\test_db_units.py -q
 
 # PostgreSQL 集成测试（需要可建库的账号；不设变量则整体 skip）
 $env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
-& .\.venv\Scripts\python.exe -m pytest tests\test_db_postgres_core.py tests\test_db_postgres_import.py tests\test_db_runtime.py -q
+& .\.venv\Scripts\python.exe -m pytest tests\integration\test_db_postgres_core.py tests\integration\test_db_postgres_import.py tests\integration\test_db_runtime.py -q
 
 # 全量（含 Web/R1/R2 运行时与会话接口）
 & .\.venv\Scripts\python.exe -m pytest tests -q

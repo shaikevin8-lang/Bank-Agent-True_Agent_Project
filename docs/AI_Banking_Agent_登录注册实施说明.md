@@ -78,8 +78,8 @@ Struct_of_Agent/db/models.py（WebUser / WebUserSession）+ migrations/versions/
 | `Struct_of_Agent/web_test/index.html`（修改） | 登录/注册门禁遮罩、页签切换、顶栏账号名与「退出登录」、启动流程改为先查 `/api/auth/me` |
 | `tests/frontend/test_sidebar.mjs`、`tests/frontend/test_settings_panel.mjs`（修改） | `stubFetch` 补 `/api/auth/me` 桩，避免门禁逻辑导致既有断言失败 |
 | `tests/frontend/test_auth_gate.mjs`（新增） | 门禁 DOM 契约与交互（jsdom）测试 |
-| `tests/test_auth_store.py`（新增） | 存储层单元测试（口令、规则、令牌、过期/注销） |
-| `tests/test_auth_api.py`（新增） | 4 个端点的 HTTP 契约测试（状态码、错误码、Cookie 属性） |
+| `tests/integration/test_auth_store.py`（新增） | 存储层单元测试（口令、规则、令牌、过期/注销） |
+| `tests/contract/test_auth_api.py`（新增） | 4 个端点的 HTTP 契约测试（状态码、错误码、Cookie 属性） |
 
 ## 3. 数据库设计
 
@@ -548,7 +548,7 @@ curl.exe -s -X POST http://127.0.0.1:8000/api/auth/register -H "Content-Type: ap
 
 ## 9. 测试覆盖
 
-### 9.1 `tests/test_auth_store.py`（存储层单元测试，纯逻辑，不需要数据库）
+### 9.1 `tests/integration/test_auth_store.py`（存储层单元测试，纯逻辑，不需要数据库）
 
 - 口令哈希：返回十六进制、迭代次数默认 200000（契约值）；固定盐时结果确定；
   正确口令通过、错误口令拒绝；**脏数据不抛异常**（损坏的盐/哈希只返回不通过）；
@@ -560,7 +560,7 @@ curl.exe -s -X POST http://127.0.0.1:8000/api/auth/register -H "Content-Type: ap
 - 连接串：SQLAlchemy 形式的 URL 会被转成 psycopg 可用的 DSN（去掉 `+psycopg` 方言前缀）；
 - `AuthError`：自带 `message` / `error_code` / `status_code`，未知错误码也能兜底。
 
-### 9.2 `tests/test_auth_api.py`（HTTP 接口契约测试，需要 PostgreSQL）
+### 9.2 `tests/contract/test_auth_api.py`（HTTP 接口契约测试，需要 PostgreSQL）
 
 > 该文件用 `pg_clean` / `runtime_pg_database` 夹具（临时建库并 `alembic upgrade head`）。
 > **未设置 `BANK_AGENT_TEST_DB_URL` 时这些用例整体 skip**——想真正跑到接口层，必须指向
@@ -616,11 +616,11 @@ if (url === '/api/auth/me') {
 
 ```powershell
 # 存储层单元测试（纯逻辑，无需数据库）
-& .\.venv\Scripts\python.exe -m pytest tests\test_auth_store.py -q
+& .\.venv\Scripts\python.exe -m pytest tests\integration\test_auth_store.py -q
 
 # 接口契约测试（需 PostgreSQL：指向可建库的维护库）
 $env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
-& .\.venv\Scripts\python.exe -m pytest tests\test_auth_api.py -q
+& .\.venv\Scripts\python.exe -m pytest tests\contract\test_auth_api.py -q
 
 # 前端（jsdom；依赖已装在 tests/frontend）
 node tests\frontend\test_auth_gate.mjs

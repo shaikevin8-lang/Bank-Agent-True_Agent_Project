@@ -42,7 +42,7 @@ from typing import Any, Callable, Iterator
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _STRUCT_ROOT = _REPO_ROOT / "Struct_of_Agent"
 if str(_STRUCT_ROOT) not in sys.path:
     sys.path.insert(0, str(_STRUCT_ROOT))

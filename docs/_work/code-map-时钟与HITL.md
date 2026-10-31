@@ -309,7 +309,7 @@ def _risk_level(amount_fen: int) -> str:
 ### 结论
 
 - **审计唯一入口**：`db\audit.py:18-55` `append_event(session, *, tenant_id, action, resource_type, resource_id=None, actor_principal_id=None, request_id=None, metadata=None) -> AuditEvent`；内部 `session.add(AuditEvent(... event_metadata=dict(metadata or {})))` + `session.flush()`，**不 commit**（文件头规定"必须与业务写入同事务"；`audit.event` 上的 UPDATE/DELETE/TRUNCATE 由 migration 触发器拒绝）。
-- **`audit.event` 表结构**：`db\models.py:394-421`，`__tablename__ = "event"`，`schema=AUDIT_SCHEMA`（`"audit"`），**无任何外键**（`tests\test_db_units.py:740-741` 对此有断言）：
+- **`audit.event` 表结构**：`db\models.py:394-421`，`__tablename__ = "event"`，`schema=AUDIT_SCHEMA`（`"audit"`），**无任何外键**（`tests\unit\test_db_units.py:740-741` 对此有断言）：
   `id BigInteger autoincrement PK / tenant_id Uuid not null / actor_principal_id Uuid null / action String(64) / resource_type String(64) / resource_id Uuid null / request_id String(128) null / event_metadata（列名 "metadata"）JSONB default {} / created_at timestamptz`；
   索引 `ix_audit_event_tenant_created`、`ix_audit_event_resource(resource_type, resource_id)`。
   → 新的 `audit.clock_event` 照抄这个形状即可（额外列 `before`/`after` JSONB、`operator`、`real_at`、`business_at`、`note`），**但必须带命名 CHECK**（见 §6.5 的例外规则）。
@@ -443,7 +443,7 @@ APP = "app"
   常用：`.\.venv\Scripts\python.exe scripts\db.py upgrade`（需 `BANK_AGENT_DB_URL`）、`.\.venv\Scripts\python.exe scripts\db.py check`。
 - 服务启动**不会**建表（`server.py:136 get_database()` 只 `Database.from_env()` + seed + seed_scenarios）→ 迁移必须手动跑。
 
-### 6.5 `tests\test_db_units.py` 的断言逻辑与基线失败诊断
+### 6.5 `tests\unit\test_db_units.py` 的断言逻辑与基线失败诊断
 
 - `_EXPECTED_TABLES`（L571-582）目前只有 10 张表（`app.tenant` … `app.idempotency_key`、`audit.event`）。
 - `_EXPECTED_SCHEMAS`（L584-586）由键推导：`audit.event` → `"audit"`，其余 → `"app"`。
@@ -455,7 +455,7 @@ APP = "app"
 
 **基线失败诊断（已实测复现，结论：计划的诊断方向对，但触发条件更隐蔽）**
 
-- 单独跑：`.\.venv\Scripts\python.exe -m pytest tests\test_db_units.py -k "metadata_contains_exactly or named_check_constraints"` → **2 passed**（该文件只 `from db.models import Base`，`Base.metadata` 里只有 10 张表）。
+- 单独跑：`.\.venv\Scripts\python.exe -m pytest tests\unit\test_db_units.py -k "metadata_contains_exactly or named_check_constraints"` → **2 passed**（该文件只 `from db.models import Base`，`Base.metadata` 里只有 10 张表）。
 - 全量收集后跑同两个用例：`.\.venv\Scripts\python.exe -m pytest tests -q -k "metadata_contains_exactly or named_check_constraints"` → **2 failed, 1 skipped**，报错形如
   `AssertionError: assert {'app.aa_shar…' , 'app.card', …} == {'app.account', …, 'app.idempotency_key', …}`，
   `Extra items in the left set: 'app.portfolio_holding' 'app.subscription' 'app.payee' 'app.scheduled_transfer' 'app.workflow_request' …`。
@@ -484,7 +484,7 @@ APP = "app"
      from web_test.api_hitl import router as hitl_router
      ```
   2. **挂载**：最后一个路由是 `@app.delete("/api/settings/search")` 函数（L833-840），随后 **L843 `def _registered_settings_routes()`** → `app.include_router(clock_router)` / `app.include_router(hitl_router)` 插在 **L841-842**（L840 之后，L842 空行之前）。
-  3. **版本/特性声明**：`API_VERSION`（L120）改成新日期串（形如 `"2026-11-05.demo-clock-hitl"`，`tests\test_server_metadata.py:35-43` 要求匹配 `YYYY-MM-DD.tag`）；`API_FEATURES`（L121）追加 `"clock"`、`"hitl"`（`/health/live` 与 `/api/version` 会一并暴露，`test_server_metadata.py:46-80` 会校验一致性）。
+  3. **版本/特性声明**：`API_VERSION`（L120）改成新日期串（形如 `"2026-11-05.demo-clock-hitl"`，`tests\contract\test_server_metadata.py:35-43` 要求匹配 `YYYY-MM-DD.tag`）；`API_FEATURES`（L121）追加 `"clock"`、`"hitl"`（`/health/live` 与 `/api/version` 会一并暴露，`test_server_metadata.py:46-80` 会校验一致性）。
   4. 若新路由需要共享的数据库/身份依赖，直接调用已有的 `get_database()`（L136）、`get_session_store()`（L229）；**注意 `app.state` 没有被使用，单例一律是模块级 `_database/_supervisor/...`**。
 - **鉴权/操作员身份：完全不存在。** `web_test` 目录里 grep `Authorization|X-Operator|operator|Depends(|Header(|api_key` 只命中 LLM 设置的 `api_key` 字段（server.py:25,284,289,301）。→ `X-Operator` 头 + 缺省 403 fail-closed 必须从零实现；建议在 `api_hitl.py` / `api_clock.py` 内各写一个 `def require_operator(x_operator: str | None = Header(default=None, alias="X-Operator")) -> str`（FastAPI `Depends`），不污染 `server.py`。
 - 另一个可复用资产：`_record_turn(session_id, user_message, result)`（L531）与 `_clear_agent_context(session_id)`（L565）——HITL 决策后若要"重放"对话，可参考它们的会话落库方式。
@@ -602,7 +602,7 @@ JS 里还在用 `.stream-plan`、`.stream-task-tag`、`.memory-hint` 三个类�
   - `runtime_pg_database`（L415-462，session 作用域）：读 `BANK_AGENT_TEST_DB_URL`（L386），**未设置则 skip 并给出中文提示**（L424-425）；只接受 `postgresql+psycopg://`（L437）；拒绝受保护库名（L388 `PROTECTED_DATABASES`，L440）；测试库前缀 `bank_agent_it_runtime_`（L387）；
   - `runtime_pg_url`（L464-467）：返回连接串字符串；
   - **`pg_clean`（L470-…）**：建/清一个隔离库，并把 `BANK_AGENT_DB_URL` 指过去（L489 `monkeypatch.setenv`）。
-- 写"调真实 HTTP"的测试：优先 `live_server`（真 uvicorn）；只想测路由逻辑用 `from fastapi.testclient import TestClient` + `import web_test.server as server`（见 `tests\test_server_stream.py:27-29`）。
+- 写"调真实 HTTP"的测试：优先 `live_server`（真 uvicorn）；只想测路由逻辑用 `from fastapi.testclient import TestClient` + `import web_test.server as server`（见 `tests\contract\test_server_stream.py:27-29`）。
 - 前端测试：`tests\frontend\test_sidebar.mjs`（924 行）范式 —— `import { JSDOM } from 'jsdom'`（L19）、`readFileSync(resolve(here, '../../Struct_of_Agent/web_test/index.html'))`（L22）、`check(name, cond, extra)` / `section(title)` 计数断言（L27-39）、`settle(ms=40)`（L41）、打桩 `fetch`（backend 状态 + `calls` 记录）。运行：`cd tests\frontend; npm install jsdom; node test_sidebar.mjs`。
 - **禁网/离线要求**：测试不得访问真实外网。已建立的替代手段是 `fake_openai` / `fake_search` 本地 HTTP 服务 + autouse 清空 `*_API_KEY`；`live_server` 的 `httpx.Client(trust_env=False)` 是为了绕开机器代理。新测试若涉及 LLM，必须用 mock 模型（`common.model_manager` 的 MockChat）或 `fake_openai`。
 - 本项目**没有** `pytest.ini`/`pyproject` 里的自定义 marker 或 `addopts`（用默认配置），因此新测试文件不需要注册 marker。
@@ -708,7 +708,7 @@ process.exit(failures === 0 ? 0 : 1)
 cd <仓库根>
 $env:BANK_AGENT_TEST_DB_URL='postgresql+psycopg://bank:<口令>@127.0.0.1:5432/postgres'
 .\.venv\Scripts\python.exe -m pytest tests -q                       # 全量（基线 532 passed / 2 failed）
-.\.venv\Scripts\python.exe -m pytest tests\test_db_units.py -q     # 只跑元数据断言
+.\.venv\Scripts\python.exe -m pytest tests\unit\test_db_units.py -q     # 只跑元数据断言
 .\.venv\Scripts\python.exe -m pytest tests -q -k "clock or hitl"   # 只跑新功能
 cd tests\frontend; npm install jsdom; node test_sidebar.mjs        # 前端 DOM 测试（jsdom）
 ```
@@ -755,11 +755,11 @@ cmd = "cmd /c " & python & " web_test\server.py >> " & logFile & " 2>> " & errLo
 
 | 顺序 | 动作 | 落点 |
 |---|---|---|
-| 1 | 4 张新表 + 3 个新模块登记 | `db\models.py`（`__all__` 之前）、`migrations\versions\0004_demo_clock_and_hitl.py`、`tests\test_db_units.py:571-586` |
+| 1 | 4 张新表 + 3 个新模块登记 | `db\models.py`（`__all__` 之前）、`migrations\versions\0004_demo_clock_and_hitl.py`、`tests\unit\test_db_units.py:571-586` |
 | 2 | 时钟内核 | 新建 `common\clock.py`（`get_clock/use_clock/run_due`）、`common\clock_store.py`（`app.sim_clock` 持久化） |
 | 3 | 时间取值改造（7 文件 25 点） | §1 表格 |
 | 4 | HITL 内核 | 新建 `common\hitl.py`（`gate()` / `wrap_tool_map()`）；`api_hitl.py` |
 | 5 | 图接入 | 6 处 `build_graph` 的 `tool_map` 行（`R4\graph.py:191` 为样板）；R1 在 `R1\graph.py:255-300` |
 | 6 | 服务挂载 | `server.py` import L109 后、`include_router` L841-842、`API_VERSION` L120、`API_FEATURES` L121 |
 | 7 | 前端 | 徽标 L543/544 之间、`callApi` headers L827-832、`send()` L2032 前、弹层复用 L1432-1521 |
-| 8 | 测试 | 新增 `tests\test_clock_api.py`、`tests\test_hitl_api.py`、`tests\frontend\test_hitl_ui.mjs`；修 `_EXPECTED_TABLES` |
+| 8 | 测试 | 新增 `tests\contract\test_clock_api.py`、`tests\contract\test_hitl_api.py`、`tests\frontend\test_hitl_ui.mjs`；修 `_EXPECTED_TABLES` |

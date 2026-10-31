@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
     阶段 2 受限代码沙箱：容器侧三层隔离实证 + 用例回归校验。
 
@@ -296,7 +296,7 @@ print(' || '.join(rows) if rows else 'NO_TMP_ENTRY')
     elseif ($null -ne (Get-Command python -ErrorAction SilentlyContinue)) { $pyExe = 'python' }
     elseif ($null -ne (Get-Command py -ErrorAction SilentlyContinue)) { $pyExe = 'py'; $pyPrefix = @('-3') }
 
-    $needed = @('tests\test_sandbox_escape.py', 'tests\test_code_compute.py')
+    $needed = @('tests\security\test_sandbox_escape.py', 'tests\contract\test_code_compute.py')
     $missing = @()
     foreach ($rel in $needed) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $rel))) { $missing += $rel }
@@ -308,7 +308,7 @@ print(' || '.join(rows) if rows else 'NO_TMP_ENTRY')
         Add-Check 'pytest-cases' $false ('用例文件缺失：' + ($missing -join ', ') + '（并行子任务尚未落地 tests/ 下的沙箱用例）')
         Add-Skip 'test-files-missing'
     } else {
-        $pytestArgs = $pyPrefix + @('-m', 'pytest', 'tests/test_sandbox_escape.py', 'tests/test_code_compute.py', '-q')
+        $pytestArgs = $pyPrefix + @('-m', 'pytest', 'tests/security/test_sandbox_escape.py', 'tests/contract/test_code_compute.py', '-q')
         $pytestRun = Invoke-Native -FilePath $pyExe -ArgList $pytestArgs
         Add-Check 'pytest-cases' ($pytestRun.exit -eq 0) ('exit=' + $pytestRun.exit + '; ' + $pytestRun.output.Trim())
     }
