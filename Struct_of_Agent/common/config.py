@@ -80,8 +80,10 @@ class DeepSeekConfig:
     temperature: float = 0.0
     # 单次回复最大 token 数（与项目基座文档固定值 1024 保持一致）
     max_tokens: int = 1024
-    # 上游请求超时（秒）
-    timeout: float = 30.0
+    # 上游请求超时（秒）。环境变量配置与运行时配置（runtime_config.
+    # DEFAULT_MODEL_TIMEOUT）必须同源一致：实测网关首字节尾延迟可达 32~36 秒，
+    # 30 秒上限会把可恢复的抖动变成整次对话失败。
+    timeout: float = 120.0
     # API Key：从环境变量读取，绝不落盘、绝不进入日志
     api_key: str = field(default_factory=lambda: _read_env(*_ENV_KEYS))
 

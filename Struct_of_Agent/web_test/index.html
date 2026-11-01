@@ -1464,7 +1464,7 @@
             </label>
             <label class="settings-field">
               <span>超时（秒）</span>
-              <input type="number" id="llmTimeout" min="1" max="300" step="1" placeholder="30" />
+              <input type="number" id="llmTimeout" min="1" max="300" step="1" placeholder="120" />
             </label>
           </div>
 
@@ -1746,8 +1746,9 @@
   function probeTimeoutMs(body) {
     if (INJECTED_TIMEOUTS) return REQUEST_TIMEOUTS.probe;
     const raw = body && body.timeout !== undefined && body.timeout !== null ? Number(body.timeout) : NaN;
-    // 页面留空 => 后端套用默认 30 秒；非数字按默认处理
-    const upstreamMs = (isFinite(raw) && raw > 0 ? raw : 30) * 1000;
+    // 页面留空 => 后端套用默认值（见 common/runtime_config.py 的 DEFAULT_MODEL_TIMEOUT，
+    // 现为 120 秒：该网关实测首字节尾延迟可达 32~36 秒，30 秒会把抖动变成失败）
+    const upstreamMs = (isFinite(raw) && raw > 0 ? raw : 120) * 1000;
     // 比后端多留 10 秒余量，确保「后端先给出结果」而不是前端先放弃
     return Math.max(REQUEST_TIMEOUTS.probe, upstreamMs + 10000);
   }

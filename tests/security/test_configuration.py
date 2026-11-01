@@ -50,7 +50,7 @@ def test_environment_profiles_match_schema_and_runtime() -> None:
     assert env.model == "deepseek-flash"
     assert env.temperature == DEFAULT_TEMPERATURE == 0.0
     assert env.max_tokens == DEFAULT_MAX_TOKENS == 1024
-    assert env.timeout == DEFAULT_MODEL_TIMEOUT == 30.0
+    assert env.timeout == DEFAULT_MODEL_TIMEOUT == 120.0
 
     assert tavily.base_url == "https://api.tavily.com/search"
     assert tavily.max_results == 5

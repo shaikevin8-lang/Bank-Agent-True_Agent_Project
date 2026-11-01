@@ -390,7 +390,7 @@ check('响应格式默认选中 text', $('llmResponseFormat').value === 'text', 
 
 check('超时是常显的数字输入框', $('llmTimeout').tagName === 'INPUT' && $('llmTimeout').type === 'number')
 check('超时范围 1~300', $('llmTimeout').min === '1' && $('llmTimeout').max === '300', [$('llmTimeout').min, $('llmTimeout').max])
-check('超时留空时用占位符提示默认值', $('llmTimeout').placeholder === '30', $('llmTimeout').placeholder)
+check('超时留空时用占位符提示默认值', $('llmTimeout').placeholder === '120', $('llmTimeout').placeholder)
 check('响应格式与超时同处一行',
   $('llmResponseFormat').closest('.settings-row') === $('llmTimeout').closest('.settings-row'))
 
@@ -697,10 +697,10 @@ section('超时配置：探测类前端超时必须比后端更宽（否则慢�
   check('timeout=120 秒时前端 > 120 秒', probe({ timeout: 120 }) > 120000, probe({ timeout: 120 }));
   check('timeout=120 秒时前端 >= 130 秒（多留 10 秒余量）', probe({ timeout: 120 }) >= 130000, probe({ timeout: 120 }));
   check('timeout=300 秒（契约上限）时前端 > 300 秒', probe({ timeout: 300 }) > 300000, probe({ timeout: 300 }));
-  // 未填 => 后端套用默认 30 秒，前端仍不得低于 60 秒下限
-  check('timeout=null（留空，后端默认 30 秒）时前端为 60000ms', probe({ timeout: null }) === 60000, probe({ timeout: null }));
-  check('timeout 缺失时前端为 60000ms', probe({}) === 60000, probe({}));
-  check('timeout 非法（NaN）时回落到默认 30 秒口径', probe({ timeout: 'abc' }) === 60000, probe({ timeout: 'abc' }));
+  // 未填 => 后端套用默认 120 秒（DEFAULT_MODEL_TIMEOUT），前端须比后端更宽 => 130 秒
+  check('timeout=null（留空，后端默认 120 秒）时前端为 130000ms', probe({ timeout: null }) === 130000, probe({ timeout: null }));
+  check('timeout 缺失时前端为 130000ms', probe({}) === 130000, probe({}));
+  check('timeout 非法（NaN）时回落到默认 120 秒口径', probe({ timeout: 'abc' }) === 130000, probe({ timeout: 'abc' }));
   check('timeout=10 秒（低于下限）时仍保持 60000ms 下限', probe({ timeout: 10 }) === 60000, probe({ timeout: 10 }));
 
   // 注入时按注入值走，保证上面那些用例不会真的等满几十秒

@@ -123,6 +123,13 @@ def classify_model_error(error: Exception, secrets: list[str] | tuple[str, ...] 
         return SettingsError("LLM_MODEL_NOT_FOUND", "模型名不存在：请检查模型名是否正确", 502)
     if "401" in detail or "403" in detail or "invalid api key" in lowered or "unauthorized" in lowered:
         return SettingsError("LLM_AUTH_FAILED", "鉴权失败：API Key 无效或已过期", 502)
+    # 走到这里说明异常类型已丢失（如流式链路只透传字符串，见 common/streaming.py），
+    # 只能按文本特征判类。超时必须单独识别：否则「上游慢」会被报成
+    # LLM_REQUEST_FAILED，用户拿到的建议就变成「检查 Base URL / API Key」。
+    if "timed out" in lowered or "timeout" in lowered or "超时" in detail:
+        return SettingsError("LLM_TIMEOUT", "请求超时：模型服务响应过慢，可适当调大超时时间", 502)
+    if "connection" in lowered or "connect" in lowered or "网络" in detail:
+        return SettingsError("LLM_CONNECTION_FAILED", "无法连接模型服务：请检查 Base URL、网络或代理设置", 502)
     return SettingsError("LLM_REQUEST_FAILED", f"模型调用失败：{detail}", 502)
 
 

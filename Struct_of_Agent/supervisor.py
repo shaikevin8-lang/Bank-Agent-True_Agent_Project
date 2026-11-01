@@ -37,6 +37,7 @@ from common.memory import SessionMemory, build_llm_summarizer
 from common.middleware import ContentModerationMiddleware, LLMReviewer
 from common.middleware.content_moderation import ISOLATION_NOTICE, wrap_untrusted
 from common.model_manager import RuntimeChatModel, resolve_manager, trace_info
+from common.runtime_config import DEFAULT_MODEL_TIMEOUT
 from common import plan as plan_dag
 from common.prompts import SUPERVISOR_SYSTEM_PROMPT
 from common.text_format import ReplyStreamFilter, sanitize_reply
@@ -1478,6 +1479,53 @@ class SupervisorAgent:
                 return stream_fn(user_input, session_id, history=history)
         return stream_fn(user_input, session_id)
 
+    def _failure_timeout_text(self) -> str:
+        """返回当前生效超时预算的展示文本（秒），供超时提示引用。
+
+        Returns:
+            形如 ``"120"`` 的秒数文本；读不到配置时回落到默认值。
+        """
+        try:
+            resolved = resolve_manager(self.model_manager)
+            if resolved is not None:
+                config, _mode, _source = resolved.state()
+                timeout = float(getattr(config, "timeout", 0) or 0)
+                if timeout > 0:
+                    return f"{timeout:g}"
+        except Exception:  # noqa: BLE001 - 提示文案不应因为读配置失败而中断
+            pass
+        return f"{DEFAULT_MODEL_TIMEOUT:g}"
+
+    def _failure_hint(self, code: str) -> str:
+        """按错误码给出针对性的下一步建议。
+
+        **不要一律甩「请检查 Base URL / API Key / 模型名」**：超时、限流这类
+        上游侧抖动与配置无关，把用户引向配置只会白折腾（历史上「Request
+        timed out」就一直被这句提示掩盖成「配置错了」）。
+
+        Args:
+            code: :func:`classify_model_error` 给出的错误码。
+
+        Returns:
+            面向用户的中文建议文本。
+        """
+        if code == "LLM_TIMEOUT":
+            budget = self._failure_timeout_text()
+            return (
+                f"这不是 Base URL、API Key 或模型名的问题：上游模型服务在 {budget} 秒内没有返回数据"
+                "（常见于网关排队或网络抖动）。可在「模型设置」把「超时（秒）」调大（最大 300）后重新发送；"
+                "若本次涉及转账等写操作，请先核对余额与流水再重试，避免重复提交。"
+            )
+        if code == "LLM_CONNECTION_FAILED":
+            return "请检查「模型设置」中的 Base URL（需为 http(s):// 开头、通常以 /v1 结尾）以及本机网络或代理设置。"
+        if code == "LLM_MODEL_NOT_FOUND":
+            return "请检查「模型设置」中的 Base URL 路径（通常以 /v1 结尾）与模型名是否与网关提供的完全一致。"
+        if code == "LLM_AUTH_FAILED":
+            return "请检查「模型设置」中的 API Key 是否有效、是否已过期，或该 Key 是否有此模型的访问权限。"
+        if code == "LLM_RATE_LIMITED":
+            return "上游限流或额度不足：请稍后重试，或更换模型/密钥后再试。"
+        return "请检查「模型设置」中的 Base URL、API Key 与模型名是否正确。"
+
     def _failure_result(self, error: Exception) -> dict[str, Any]:
         """把子 Agent 抛出的异常转换为统一契约的失败结果。
 
@@ -1487,7 +1535,7 @@ class SupervisorAgent:
         Returns:
             含 reply / blocked / moderation / tasks / trace 的结果字典。
         """
-        from common.model_manager import current_secrets, describe_error
+        from common.model_manager import classify_model_error, current_secrets, describe_error
 
         # 部分网关会在错误信息里回显收到的 Key；reply 与 trace 都会回到前端，
         # 因此必须把密钥传进 describe_error，让它「先擦除、再截断」——
@@ -1496,7 +1544,13 @@ class SupervisorAgent:
         # 错误详情会同时进入 reply 与 trace.error_detail，两者都会被前端展示：
         # 这里先净化成纯文本（错误信息里偶尔夹带网关回显的 Markdown / JSON 片段）。
         detail = sanitize_reply(describe_error(error, secrets))
-        hint = "请检查「模型设置」中的 Base URL、API Key 与模型名是否正确。"
+        # 流式链路（common/streaming.py）只透传字符串，异常类型已经丢失，
+        # 因此 classify_model_error 同时按异常类型与文本特征分类。
+        try:
+            code = classify_model_error(error, secrets).code
+        except Exception:  # noqa: BLE001 - 分类失败不影响失败结果的产出
+            code = "LLM_REQUEST_FAILED"
+        hint = self._failure_hint(code)
         if isinstance(error, RuntimeError) and "API Key" in detail:
             reply = f"当前未配置可用的模型：{detail}"
         else:
@@ -1506,7 +1560,12 @@ class SupervisorAgent:
             "blocked": False,
             "moderation": {},
             "tasks": [],
-            "trace": {"error": type(error).__name__, "error_detail": detail, "failed": True},
+            "trace": {
+                "error": type(error).__name__,
+                "error_code": code,
+                "error_detail": detail,
+                "failed": True,
+            },
         }
 
     def _wrap(self, agent_name: str, result: dict[str, Any]) -> dict[str, Any]:

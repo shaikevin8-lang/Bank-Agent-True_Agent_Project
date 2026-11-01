@@ -135,7 +135,7 @@ def test_build_model_config_applies_defaults():
     assert config.model == "m"
     assert config.temperature == 0.0
     assert config.max_tokens == 1024
-    assert config.timeout == 30.0
+    assert config.timeout == 120.0
     assert config.is_configured is True
 
 

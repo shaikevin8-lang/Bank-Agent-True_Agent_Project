@@ -60,6 +60,6 @@ def test_exported_config_schema_is_current() -> None:
     assert default.model == "deepseek-flash"
     assert default.temperature == runtime_config.DEFAULT_TEMPERATURE == 0.0
     assert default.max_tokens == runtime_config.DEFAULT_MAX_TOKENS == 1024
-    assert default.timeout == runtime_config.DEFAULT_MODEL_TIMEOUT == 30.0
+    assert default.timeout == runtime_config.DEFAULT_MODEL_TIMEOUT == 120.0
     assert runtime_config.DEFAULT_RESPONSE_FORMAT == "text"
     assert runtime_config.RESPONSE_FORMATS == ("text", "json_object", "json_schema")

@@ -17,12 +17,25 @@ from __future__ import annotations
 import contextvars
 from typing import TYPE_CHECKING, Any, Callable, Protocol, runtime_checkable
 
+import httpx
 from openai import OpenAI
 
 from .config import DeepSeekConfig, load_config
 
 if TYPE_CHECKING:  # 仅用于类型标注，避免运行期循环导入
     from .runtime_config import ModelRuntimeConfig
+
+# SDK 层重试次数默认值：**不重试**。
+# openai SDK 默认 ``max_retries=2``，即「一次超时会静默变成三次等待」：实测
+# 30 秒上限 + 2 次重试 = 用户干等 ~90 秒后才看到失败，且每次尝试都可能被
+# 上游计费。超时预算应由「超时（秒）」唯一决定（最坏墙钟 = 该值），
+# 重试由用户/编排层显式决定（如节点级重试），不藏在传输层里。
+_DEFAULT_MAX_RETRIES = 0
+
+# 建连超时上限：握手/建连与「等模型出首字节」是两件事，不该共用同一份预算。
+# TLS 建连实测 0.07~0.64 秒，给到 15 秒足够覆盖慢网，同时避免网络不可达时
+# 白等整个生成超时。
+_MAX_CONNECT_TIMEOUT = 15.0
 
 # 允许传入的配置对象：既可以是环境变量配置，也可以是页面填写的运行时配置
 ModelConfigLike = "DeepSeekConfig | ModelRuntimeConfig"
@@ -90,7 +103,7 @@ class DeepSeekChat:
         config: DeepSeekConfig | ModelRuntimeConfig | None = None,
         *,
         omit_temperature: bool = False,
-        max_retries: int | None = None,
+        max_retries: int | None = _DEFAULT_MAX_RETRIES,
     ) -> None:
         """初始化客户端。
 
@@ -100,8 +113,10 @@ class DeepSeekChat:
                 ``timeout`` / ``is_configured`` 的对象都可传入。
             omit_temperature: 是否在请求中省略 ``temperature`` 参数；
                 部分推理模型（如 deepseek-reasoner）不接受该参数。
-            max_retries: SDK 层最大重试次数；``None`` 表示使用 SDK 默认值。
-                连接探测场景传 0，让用户填错地址时立即看到失败原因，
+            max_retries: SDK 层最大重试次数；缺省 0（**不重试**），
+                由「超时（秒）」单独决定最坏等待时间，避免一次超时被
+                放大成多次等待（详见模块常量 ``_DEFAULT_MAX_RETRIES``）。
+                连接探测场景同样传 0，让用户填错地址时立即看到失败原因，
                 而不是等待多次指数退避重试。
 
         Raises:
@@ -113,10 +128,18 @@ class DeepSeekChat:
             raise RuntimeError(
                 "未检测到 API Key：请在页面「模型设置」中填写，或设置环境变量 Deepseek_API。"
             )
+        # 读超时 = 配置的「超时（秒）」（等上游出首字节/出下一个分片的上限）；
+        # 建连、写、连接池各自独立预算，不让握手吃掉生成预算。
+        timeout = httpx.Timeout(
+            self.config.timeout,
+            connect=min(_MAX_CONNECT_TIMEOUT, self.config.timeout),
+            write=self.config.timeout,
+            pool=self.config.timeout,
+        )
         self._client = OpenAI(
             api_key=self.config.api_key,
             base_url=self.config.base_url,
-            timeout=self.config.timeout,
+            timeout=timeout,
             **({"max_retries": max_retries} if max_retries is not None else {}),
         )
 

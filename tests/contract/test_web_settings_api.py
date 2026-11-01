@@ -221,7 +221,7 @@ def test_minimal_payload_uses_backend_defaults(client, fake_openai):
     assert data["mode"] == "model"
     assert data["temperature"] == 0.0
     assert data["max_tokens"] == 1024
-    assert data["timeout"] == 30.0
+    assert data["timeout"] == 120.0
     assert data["response_format"] == "text"
 
 

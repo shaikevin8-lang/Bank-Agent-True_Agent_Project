@@ -30,7 +30,13 @@ from .config import load_config, load_tavily_config
 # 对话模型默认参数（与项目基座文档固定值保持一致）
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_TOKENS = 1024
-DEFAULT_MODEL_TIMEOUT = 30.0
+# 超时（秒）：**按上游实测尾延迟取值，不要按「平均响应 2~3 秒」取值**。
+# 实测（2026-11，api.a6api.vip 转发网关，旁路代理逐请求计时）：首字节时间
+# （TTFB）常态 1.3~5.8 秒，但带工具结果的多轮（8~15 KB）请求会偶发跳到
+# 32~36 秒；30 秒的上限会把这种「偶发但必然发生」的抖动直接变成整次对话
+# 失败（节点判死、用户看到「模型调用失败」）。取 120 秒 = 覆盖 36 秒尾延迟
+# 的 3 倍余量，同时仍在人工可等待范围内；仍可由页面在 1~300 秒之间调整。
+DEFAULT_MODEL_TIMEOUT = 120.0
 
 # 响应格式：text 不额外传参（默认，保持既有对话行为）；另外两种透传给 OpenAI 兼容接口
 DEFAULT_RESPONSE_FORMAT = "text"
