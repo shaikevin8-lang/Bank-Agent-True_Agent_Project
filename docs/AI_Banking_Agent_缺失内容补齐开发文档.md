@@ -62,7 +62,7 @@
 | 资产 | 复用方式 |
 |---|---|
 | `common/hitl.py`（RISK_GREEN/YELLOW/RED、PolicyRule、`evaluate`、`fingerprint`+`VOLATILE_ARG_KEYS`、案件状态机、错误族）、`hitl_replay.py`、`db/audit.py`（append-only + 触发器禁改） | D01/D04 全部挂接门禁链，不另起体系 |
-| `web_test/index.html` 的 `.hitl-*` 设计语言（L561-670） | D04 的 MFA 卡片 / D01 的锁定横幅沿用 |
+| `web_test/index.html` 的 `.hitl-*` 设计语言（L561-670） | D04 的 MFA 卡片沿用（D01 的锁定横幅已于 2026-11-01 移除，不再沿用） |
 | `tests/conftest.py`（sys.path、临时 `BANK_AGENT_DATA_DIR`、假 OpenAI、临时配置）+ 25 个测试 + 3 个 .mjs | D13 只归类与新增，不重写 |
 | 迁移 0001–0006（含 0004 RLS） | 新表从 **0007** 起 |
 | `docs/` 现有 10 份文档 + ADR-003/004 | 阶段 6 产出并入；新 ADR 从 **005** 起 |
@@ -189,7 +189,7 @@ snapshot(*, tenant_id, user_id=None) -> list[Snapshot] / reset(*, ..., operator_
 1. `hitl.py` 门禁链（`evaluate` 通过后、执行前）→ `require_closed(capability)`；
 2. `hitl.py:1106 _open_case` 建案/审计失败 → `record_failure(audit_failure, immediate=True)`；
 3. `supervisor.py:578 _dispatch` 异常 → `record_failure(write_tool_failure)`，成功 → `record_success`；
-4. `content_moderation` 命中 → `record_failure(prompt_injection)` + 审计 `security.injection_blocked`；
+4. `content_moderation` **确定性规则层**命中 → `record_failure(prompt_injection)` + 审计 `security.injection_blocked`（模型语义审核为 advisory，不拦截、不熔断）；
 5. 归属校验拒绝分支 → `record_failure(privilege_violation, immediate=True)`；
 6. 回执 unknown 分支 → 不熔断，落待核标记。
 
@@ -197,7 +197,7 @@ snapshot(*, tenant_id, user_id=None) -> list[Snapshot] / reset(*, ..., operator_
 `GET /health/circuit-breaker`（本人可见自身 / operator 可见全部）、`POST /api/v1/safety/circuit-breaker/reset`（operator，`{capability,user_id?,reason}`，审计 `safety.circuit.reset`）、`GET /health/ready`（DB 可连 + 迁移版本匹配 + 审计可写，否则 503 `NOT_READY_001`）、`GET /health/capabilities`（`writes_enabled/code_compute_enabled/circuit_summary/model_provider/db_version`，不泄露凭据与内部地址）。
 拦截响应：`503 + problem+json`，`code=NOT_READY_001`，`detail` 含 capability/state/retry_after；**不新增错误码**（E2）。
 
-**前端**：锁定横幅（原因类别、受影响能力、恢复时间或「等待人工审核」、按钮「转人工审核」/「查看状态」）；被拦截气泡为红色阻断样式而非异常堆栈。
+**前端**：熔断状态通过 `GET /health/capabilities` 与 `/api/safety/circuit-breakers` 由运维接口观测，前端不再展示熔断横幅（该横幅已于本次变更移除）；被拦截的写请求仍以 `NOT_READY_001` 的可读文案回执，而不是异常堆栈。
 
 **测试**：`tests/unit/test_circuit_breaker.py`（全转换/窗口过期/退避/乐观锁/DB 异常 fail-closed）、`tests/contract/test_circuit_breaker_api.py`（越权查他人 403、非 operator 复位 403、缺 reason 422）、`tests/security/test_circuit_breaker_guard.py`（3 次失败后第 4 次**零执行**、越权一次即锁、审计失败即锁、**锁定期间查询可用**、复位恢复）、`tests/integration/test_circuit_persistence.py`（跨进程一致）。
 
@@ -428,7 +428,7 @@ ALG-1 意图路由｜ALG-2 结构抽取与校验｜ALG-3 计划与拓扑｜ALG-4
   common/middleware/content_moderation.py   五层重构
   supervisor.py                DAG 执行器 + 失败分类 + 补偿
   web_test/server.py           /health/{ready,capabilities,circuit-breaker} + /api/v1/{confirm,safety}
-  web_test/index.html          MFA 卡片 + 锁定横幅 + 计划卡片
+  web_test/index.html          MFA 卡片 + 计划卡片（锁定横幅已于 2026-11-01 移除）
   start_server.vbs / start_local.ps1        路径推导 + DSN 外置
 
 新增（文档）
@@ -483,7 +483,7 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | 9 | 终验与提交 | 1 | ✅ | `80e5426` |
 | 复审 | 阶段 0–9 复审与修复（阶段 7 跳过） | 2 | ✅ | `cc3f7f6` |
 
-**变更记录**：v1.0 2026-10-29 首版（14 项诊断 → 10 阶段）｜v1.1 2026-10-29 勘误 12 处（端口/错误码/端点/前缀/网络架构/行号/文档缺口/配置语义/资源限制/模型一致性/计数/演示码来源）并全文精简。｜v1.2 2026-10-31 阶段 8/9 落地回填：附录 D 进度表勾选与提交哈希、阶段 8 交付状态段（含实测偏差三条）、新增附录 K 阶段 9 完成清单（交付物核对 / PRD §11 八条取证 / 彩排与门禁数字 / 打包实测 / 偏差登记）。｜v1.3 2026-11-01 阶段 0–9 复审（跳过 7）：新增附录 L（复审方法与取证、13 项缺陷修复与回归用例、5 类文档口径更正、复测数字表、5 条新增偏差），进度表增补复审行与提交哈希 `cc3f7f6`；终验报告新增 §7 复审修复登记并全文数字复测更新。
+**变更记录**：v1.0 2026-10-29 首版（14 项诊断 → 10 阶段）｜v1.1 2026-10-29 勘误 12 处（端口/错误码/端点/前缀/网络架构/行号/文档缺口/配置语义/资源限制/模型一致性/计数/演示码来源）并全文精简。｜v1.2 2026-10-31 阶段 8/9 落地回填：附录 D 进度表勾选与提交哈希、阶段 8 交付状态段（含实测偏差三条）、新增附录 K 阶段 9 完成清单（交付物核对 / PRD §11 八条取证 / 彩排与门禁数字 / 打包实测 / 偏差登记）。｜v1.3 2026-11-01 阶段 0–9 复审（跳过 7）：新增附录 L（复审方法与取证、13 项缺陷修复与回归用例、5 类文档口径更正、复测数字表、5 条新增偏差），进度表增补复审行与提交哈希 `cc3f7f6`；终验报告新增 §7 复审修复登记并全文数字复测更新。｜v1.4 2026-11-01 安全语义调整：①**移除前端熔断横幅**（`web_test/index.html` 的「写操作已暂停：N 项能力熔断中」红色横幅、`查看状态`/`转人工审核` 按钮、15 s 轮询 `/health/capabilities`、`.msg-blocked` 气泡标红整体删除），原因是正常输入被误判时会误报且横幅无关闭入口、无法关闭；熔断状态改由 `GET /health/capabilities`、`GET /api/safety/circuit-breakers` 等运维接口观测。②**模型语义审核（LLM review）降级为 advisory**：只记录与提示，不拦截、不熔断；拦截与零容忍熔断仅由确定性规则层（正则/同形字/规范化）与工具层守卫（HITL 确认凭据 / 参数守卫 / 熔断 fail-closed）触发，原因是随机模型审核曾把正常业务句判成 `privilege_escalation`、导致整轮对话被拦 + 6 项写能力被熔断。影响面：`Struct_of_Agent/web_test/index.html`、`common/middleware/content_moderation.py`、`supervisor.py` 及相关测试；运维兜底：熔断仍可由 `POST /api/safety/circuit-breakers/{capability}/reset` 人工复位。
 
 ## 附录 E. 阶段 1 实施完成清单（2026-10-29）
 
@@ -496,10 +496,10 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 | `Struct_of_Agent/common/circuit_breaker.py` | 新增 | 熔断核心：三态状态机（closed/open/half_open）、参数（3 次 / 300 s 窗口 / 60→120→240→480→900 s 退避 / 半开 1 次试探 / 5 s 缓存）、`require_closed`、`record_failure`、`record_success`、`record_violation`、`reset`、`snapshot`、`summary`、`guard_write_tool`、`MemoryStore` / `SqlStore`（乐观锁 + 审计事件） |
 | `Struct_of_Agent/common/hitl.py` | 修改 | `intercept()` 首位插入 `breaker_gate()`（熔断先于策略判定，被挡下不建案）；新增 `observe_tool_result()`（工具结果回报，`unknown=True` 只记待核不计数）；`__all__` 同步 |
 | `Struct_of_Agent/R1..R6/graph.py` | 修改 | 六个域的 `_tools_node` 在工具返回后回报成败 |
-| `Struct_of_Agent/supervisor.py` | 修改 | `_moderate_input()` 命中注入/越权类拦截时调 `record_violation(capability=None)`，一次把 6 项写能力置 open |
+| `Struct_of_Agent/supervisor.py` | 修改 | `_moderate_input()` 在**确定性规则层**命中注入/越权类拦截时调 `record_violation(capability=None)`，一次把 6 项写能力置 open；模型语义审核（`LLMReviewer`）为 advisory，只记录不熔断（2026-11-01 起） |
 | `Struct_of_Agent/web_test/api_circuit_breaker.py` | 新增 | 六端点：`GET /health/capabilities`、`GET /api/safety/circuit-breakers`、`POST /api/safety/circuit-breakers/{capability}/reset` 及其 `/api/v1/safety/circuit-breaker/*` 契约别名（含 403 `session_required` / 403 `operator_required` / 400 `reason_required` / 400 `unknown_capability` / 409 `version_conflict` / 503 `circuit_unavailable`） |
 | `Struct_of_Agent/web_test/server.py` | 修改 | 注册 safety 路由 |
-| `Struct_of_Agent/web_test/index.html` | 修改 | 熔断横幅（15 s 轮询 `/health/capabilities`、`查看状态` / `转人工审核`）+ `NOT_READY_001` 时助手气泡标红 + body 高度补偿，纯追加 9 134 字符 |
+| `Struct_of_Agent/web_test/index.html` | 修改 | ~~熔断横幅（15 s 轮询 `/health/capabilities`、`查看状态` / `转人工审核`）+ `NOT_READY_001` 时助手气泡标红 + body 高度补偿，纯追加 9 134 字符~~ → **2026-11-01 全部移除**（误报且不可关闭）；熔断状态改由 `GET /health/capabilities`、`GET /api/safety/circuit-breakers` 运维接口观测 |
 | `migrations/versions/0007_circuit_breaker.py` | 新增 | `app.circuit_breaker_state`（复合主键、乐观锁 version、6 条 CHECK、RLS FORCE、tenant 隔离）/ `app.circuit_breaker_event`（只追加 + DELETE/UPDATE 触发器拒绝） |
 | `tests/unit/test_circuit_breaker_units.py` / `tests/security/test_circuit_breaker_guard.py` / `tests/contract/test_circuit_breaker_api.py` / `tests/integration/test_circuit_persistence.py` | 新增 | 61 用例（28 + 12 + 17 + 4），无 PG 走内存存储；PG 用例按 `BANK_AGENT_TEST_DB_URL` skip |
 | `tests/conftest.py` | 修改 | 测试期把熔断存储切到内存实现（产品代码的 `BANK_AGENT_CIRCUIT_BREAKER_STORE=memory` 开关），并每用例重置存储/缓存 |
@@ -512,13 +512,13 @@ pwsh scripts/check_repo_hygiene.ps1; pwsh scripts/verify_code_sandbox.ps1
 
 ### E.3 与注入/越权防护的关系（检查结论）
 
-注入拦截、越权判定、HITL 建案这些**既有能力未被改动语义**，阶段 1 只做三件事：①在 `intercept()` 最前面加一道熔断闸门（被熔断挡下时**不建案**）；②把「注入/越权类拦截」与「审计写失败」「工具结果无法判定」接成零容忍信号，一次即锁；③补 `/health/capabilities` 与 operator 复位端点，让熔断状态可见、可人为解除。因此拿到 key 之类的危险请求仍由既有拦截拦下（阶段 1 未削弱），且现在会额外触发一次全写能力暂停。
+注入拦截、越权判定、HITL 建案这些**既有能力未被改动语义**，阶段 1 只做三件事：①在 `intercept()` 最前面加一道熔断闸门（被熔断挡下时**不建案**）；②把「注入/越权类拦截」与「审计写失败」「工具结果无法判定」接成零容忍信号，一次即锁（**仅限确定性规则命中**；模型语义审核自 2026-11-01 起为 advisory，只记录、不拦截、不熔断）；③补 `/health/capabilities` 与 operator 复位端点，让熔断状态可见、可人为解除。因此拿到 key 之类的危险请求仍由既有拦截拦下（阶段 1 未削弱），且现在会额外触发一次全写能力暂停。
 
 ### E.4 已知边界（有意为之，非遗留缺陷）
 
 1. `record_consumption`（R2 记账）不属 6 项写能力白名单，不进熔断——它不改资金流向。
 2. 只读工具恒放行，熔断期间查询/对账不受影响。
-3. 前端 `fetch` 包装刻意跳过 SSE，若 `NOT_READY_001` 只出现在 `/api/chat/stream` 的流式事件里，气泡不会标红，但 15 s 轮询仍会把横幅拉起来。
+3. ~~前端 `fetch` 包装刻意跳过 SSE，若 `NOT_READY_001` 只出现在 `/api/chat/stream` 的流式事件里，气泡不会标红，但 15 s 轮询仍会把横幅拉起来。~~ 此边界随 2026-11-01 的变更一并消失：熔断横幅、气泡标红与 15 s 轮询已整体移除，`NOT_READY_001` 只以对话文案回执，熔断状态由运维接口查询。
 4. `reset()` **不接收 `expected_version` 参数**（本文档早期误记为它有该参数，已在复审中更正）：复位只要求 `reason` + operator 双必填，落库走「读当前行 → 版本 +1 → 带版本条件更新」；并发复位若撞版本，按一次重读重算处理，不产生主键冲突，也不会误判 409。
 
 ## 附录 F. 阶段 2 实施完成清单（2026-10-30）

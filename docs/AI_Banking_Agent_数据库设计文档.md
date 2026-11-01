@@ -380,7 +380,7 @@ R1 转账成功后写入一笔 `expense` 流水；R2 统计只使用 `posted` �
 
 | 索引 | 列 | 用途 |
 | --- | --- | --- |
-| `ix_circuit_breaker_state_tenant_state` | `(tenant_id, state)` | 按租户拉「当前哪些能力处于 `open`/`half_open`」，供健康视图与锁定横幅使用 |
+| `ix_circuit_breaker_state_tenant_state` | `(tenant_id, state)` | 按租户拉「当前哪些能力处于 `open`/`half_open`」，供健康视图与 `/health/capabilities`、`/api/safety/circuit-breakers` 等运维接口使用（前端熔断横幅已于 2026-11-01 移除） |
 
 ### 10.2 `app.circuit_breaker_event`
 

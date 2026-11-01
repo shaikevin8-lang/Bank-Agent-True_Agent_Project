@@ -58,7 +58,7 @@
 | FIG-02 | [`docs/diagrams/export/fig-02-container.svg`](docs/diagrams/export/fig-02-container.svg) | 容器分层：前端 → 接入层 → 编排层 → 六场景 → 三道门 → 适配器 → PG，以及旁挂的审计/指标/沙箱 |
 | FIG-03 | [`docs/diagrams/export/fig-03-sequence.svg`](docs/diagrams/export/fig-03-sequence.svg) | 一次带确认的对话时序：意图识别 → 确认单 → MFA → grant → 幂等执行 → 审计落库 |
 | FIG-04 | [`docs/diagrams/export/fig-04-er.svg`](docs/diagrams/export/fig-04-er.svg) | 数据模型 ER：账户/卡/流水/订阅/理财/任务/审计/幂等/确认凭据/熔断状态的关系 |
-| FIG-05 | [`docs/diagrams/export/fig-05-circuit.svg`](docs/diagrams/export/fig-05-circuit.svg) | 写能力熔断状态机：closed → open → half_open 与人工复位路径，注入命中零容忍直开 |
+| FIG-05 | [`docs/diagrams/export/fig-05-circuit.svg`](docs/diagrams/export/fig-05-circuit.svg) | 写能力熔断状态机：closed → open → half_open 与人工复位路径，**确定性规则层**注入命中零容忍直开（模型语义审核仅审计） |
 | FIG-06 | [`docs/diagrams/export/fig-06-dag.svg`](docs/diagrams/export/fig-06-dag.svg) | 计划 DAG 与补偿：多节点依赖、replan 上限与失败节点的补偿动作回退 |
 
 ---
@@ -67,9 +67,9 @@
 
 | 机制 | 实现要点 | 源码位置 | 设计说明 |
 | --- | --- | --- | --- |
-| **注入五层防护（L1–L5）** | L1 输入归一化（同形字/控制字符/零宽字符）→ L2 内容审核规则 → L3 提示词与工具结果隔离 → L4 参数守卫（类型/范围/枚举/白名单）→ L5 工具内二次校验；任一层命中即拦截并**立即熔断全部写能力**，同时写注入拦截审计 | `common/middleware/normalize.py`、`common/middleware/content_moderation.py`、`common/param_guard.py` | [威胁模型与注入防护](docs/AI_Banking_Agent_安全设计文档.md#2-威胁模型) |
+| **注入五层防护（L1–L5）** | L1 输入归一化（同形字/控制字符/零宽字符）→ L2 内容审核规则 → L3 提示词与工具结果隔离 → L4 参数守卫（类型/范围/枚举/白名单）→ L5 工具内二次校验；**确定性规则层（L2）与工具层守卫命中即拦截并立即熔断全部写能力**，同时写注入拦截审计（模型语义审核自 2026-11-01 起降级为 advisory，只记录与提示，不参与拦截与熔断） | `common/middleware/normalize.py`、`common/middleware/content_moderation.py`、`common/param_guard.py` | [威胁模型与注入防护](docs/AI_Banking_Agent_安全设计文档.md#2-威胁模型) |
 | **AST 白名单沙箱三层隔离** | 第一层进程内 AST 白名单（禁 import/属性穿透/反射/dunder）；第二层容器隔离（只读根、非 root `65534`、`cap_drop ALL`、`no-new-privileges`、internal 网络无出站）；第三层资源限额（CPU 0.5、内存 256m、pids 32、超时与输出截断）；沙箱不可用时**降级为禁用**而非放行 | `docker/code-sandbox/{ast_guard,runner,app}.py`、`common/code_compute.py`、`docker-compose.yml` | [三道门与不可绕过性](docs/AI_Banking_Agent_安全设计文档.md#52-ast-白名单与沙箱三层隔离) |
-| **熔断与安全锁定** | 表 `app.circuit_breaker_state` 持久化状态，进程内 5s 缓存；阈值 `DEFAULT_THRESHOLD = 3`；`closed/open/half_open` 三态；打开后写路径统一返回 `NOT_READY_001` 并附 `capability/state/retry_after/reason_code`；安全类事件（注入命中、凭据异常）为**零容忍直开**，需人工经 `/api/safety/circuit-breakers/{capability}/reset` 复位 | `common/circuit_breaker.py`、`web_test/api_circuit_breaker.py`、`migrations/versions/0007_circuit_breaker.py` | [权限分级与高危锁定](docs/AI_Banking_Agent_安全设计文档.md#53-熔断与安全锁定) |
+| **熔断与安全锁定** | 表 `app.circuit_breaker_state` 持久化状态，进程内 5s 缓存；阈值 `DEFAULT_THRESHOLD = 3`；`closed/open/half_open` 三态；打开后写路径统一返回 `NOT_READY_001` 并附 `capability/state/retry_after/reason_code`；安全类事件（**确定性规则层**注入命中、凭据异常）为**零容忍直开**，需人工经 `/api/safety/circuit-breakers/{capability}/reset` 复位；熔断状态由 `GET /health/capabilities` 与 `/api/safety/circuit-breakers` 运维接口观测（前端熔断横幅已于 2026-11-01 移除） | `common/circuit_breaker.py`、`web_test/api_circuit_breaker.py`、`migrations/versions/0007_circuit_breaker.py` | [权限分级与高危锁定](docs/AI_Banking_Agent_安全设计文档.md#53-熔断与安全锁定) |
 | **确认凭据服务端化（grant）** | MFA 只换凭据、不直接放行写操作：`ConfirmationRequest`（有效期/尝试次数/失败锁定）→ `submit_mfa` → `issue_grant` 签发一次性 `ConfirmationGrant`（绑定主体、绑定参数指纹、带 TTL）→ 工具内 `consume_grant` 核销；凭据被重放、跨用户挪用、参数漂移分别抛 `GrantReused` / `SubjectMismatch` / `FingerprintMismatch` | `common/confirm.py`、`web_test/api_confirm.py`、`migrations/versions/0008_confirmation_grant.py` | [五件套对照](docs/AI_Banking_Agent_安全设计文档.md#54-确认凭据-grant) |
 | **幂等与未知结果不重查重放** | 幂等键 `make_idempotency_key(plan_id, version, node_id)`；写操作超时或网络中断返回 `UNKNOWN_RESULT_001` 时**只做查询对账、绝不重发**；重放同一请求返回首次结果，不产生第二笔业务 | `common/plan.py`、`Struct_of_Agent/db/idempotency.py` | [五件套对照](docs/AI_Banking_Agent_安全设计文档.md#55-幂等与未知结果不重放) |
 | **审计 append-only** | 审计只追加、不允许更新与删除（数据库触发器强制）；**审计不可用即拒绝写路径**（fail-closed），模型无任何审计写权限。逐条事件的 SHA-256 前序摘要链**尚未落地**（已在安全设计 §6.2 与安全自评 R-14 登记为残余风险） | `Struct_of_Agent/db/audit.py`、`migrations/versions/0001_initial_schema.py` | [审计完整性](docs/AI_Banking_Agent_安全设计文档.md#6-审计完整性) |

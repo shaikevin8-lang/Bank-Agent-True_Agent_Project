@@ -257,22 +257,33 @@ def reset_circuit_breaker(capability: str, payload: ResetRequest, request: Reque
             },
         )
 
-    try:
-        stored = circuit_breaker.reset(
-            tenant_id=tenant_id,
-            user_id=target,
-            capability=name,
-            operator_id=operator,
-            reason=reason,
-        )
-    except circuit_breaker.CircuitOpenError as error:
-        return _fail_circuit(error, "熔断状态不可写，复位未生效（fail-closed）")
-    except Exception as error:  # noqa: BLE001 - 存储异常统一收敛为 503
-        return fail(f"复位失败：{error}", ERROR_CIRCUIT_UNAVAILABLE, status_code=503)
+    scopes = _reset_scopes_of(current, name, target)
+    stored = None
+    for scope in scopes:
+        try:
+            stored = circuit_breaker.reset(
+                tenant_id=tenant_id,
+                user_id=scope,
+                capability=name,
+                operator_id=operator,
+                reason=reason,
+            )
+        except circuit_breaker.CircuitOpenError as error:
+            return _fail_circuit(error, "熔断状态不可写，复位未生效（fail-closed）")
+        except Exception as error:  # noqa: BLE001 - 存储异常统一收敛为 503
+            return fail(f"复位失败：{error}", ERROR_CIRCUIT_UNAVAILABLE, status_code=503)
 
-    data = stored.to_dict()
-    data.update({"operator": operator, "reason": reason, "reset_by_role": actor.role})
-    return JSONResponse(content=ok(f"已复位 {name}，写能力恢复", data))
+    data = (stored or existing).to_dict()
+    data.update(
+        {
+            "operator": operator,
+            "reason": reason,
+            "reset_by_role": actor.role,
+            "reset_scopes": len(scopes),
+        }
+    )
+    extra = "" if len(scopes) <= 1 else f"（含 {len(scopes) - 1} 个用户级熔断）"
+    return JSONResponse(content=ok(f"已复位 {name}，写能力恢复{extra}", data))
 
 
 @router.get("/health/capabilities")
@@ -326,6 +337,38 @@ def health_capabilities(
 # ---------------------------------------------------------------------------
 
 
+def _reset_scopes_of(current: list[Any], capability: str, target: str | None) -> list[str | None]:
+    """列出本次复位需要覆盖的熔断主体。
+
+    显式给出 ``session_id`` / ``user_id`` 时只复位该用户域；否则覆盖「租户域 +
+    所有非闭合的用户域」——否则 operator 会收到「已复位，写能力恢复」，但用户侧
+    那条 open 记录仍然拦着写操作（``writes_enabled`` 依旧是 ``false``），
+    复位等于没做（复审 BUG-7）。
+
+    Args:
+        current: 当前可见的熔断快照列表。
+        capability: 目标能力名。
+        target: 显式指定的用户主体；``None`` 表示未指定。
+
+    Returns:
+        待复位的主体列表；``None`` 元素代表租户域。
+    """
+    if target is not None:
+        return [target]
+    scopes: list[str | None] = [None]
+    for item in current:
+        if item.capability != capability:
+            continue
+        if item.subject_type != circuit_breaker.SUBJECT_USER:
+            continue
+        if item.state == circuit_breaker.STATE_CLOSED:
+            continue
+        subject = str(item.subject_id)
+        if subject not in {str(scope) for scope in scopes if scope is not None}:
+            scopes.append(subject)
+    return scopes
+
+
 def _reset_core(payload: ResetRequest, request: Request, capability: str) -> JSONResponse:
     """复位逻辑的单一实现，供路径参数版与请求体版共用。
 
@@ -335,8 +378,7 @@ def _reset_core(payload: ResetRequest, request: Request, capability: str) -> JSO
         capability: 目标能力名。
 
     Returns:
-        与 :func:
-eset_circuit_breaker 一致的响应。
+        与 :func:`reset_circuit_breaker` 一致的响应。
     """
     actor, operator = _actor_and_operator(request, payload.operator)
     denied = require_role(actor, RESET_ROLES)
@@ -388,22 +430,33 @@ eset_circuit_breaker 一致的响应。
             },
         )
 
-    try:
-        stored = circuit_breaker.reset(
-            tenant_id=tenant_id,
-            user_id=target,
-            capability=name,
-            operator_id=operator,
-            reason=reason,
-        )
-    except circuit_breaker.CircuitOpenError as error:
-        return _fail_circuit(error, "熔断状态不可写，复位未生效（fail-closed）")
-    except Exception as error:  # noqa: BLE001 - 存储异常统一收敛为 503
-        return fail(f"复位失败：{error}", ERROR_CIRCUIT_UNAVAILABLE, status_code=503)
+    scopes = _reset_scopes_of(current, name, target)
+    stored = None
+    for scope in scopes:
+        try:
+            stored = circuit_breaker.reset(
+                tenant_id=tenant_id,
+                user_id=scope,
+                capability=name,
+                operator_id=operator,
+                reason=reason,
+            )
+        except circuit_breaker.CircuitOpenError as error:
+            return _fail_circuit(error, "熔断状态不可写，复位未生效（fail-closed）")
+        except Exception as error:  # noqa: BLE001 - 存储异常统一收敛为 503
+            return fail(f"复位失败：{error}", ERROR_CIRCUIT_UNAVAILABLE, status_code=503)
 
-    data = stored.to_dict()
-    data.update({"operator": operator, "reason": reason, "reset_by_role": actor.role})
-    return JSONResponse(content=ok(f"已复位 {name}，写能力恢复", data))
+    data = (stored or existing).to_dict()
+    data.update(
+        {
+            "operator": operator,
+            "reason": reason,
+            "reset_by_role": actor.role,
+            "reset_scopes": len(scopes),
+        }
+    )
+    extra = "" if len(scopes) <= 1 else f"（含 {len(scopes) - 1} 个用户级熔断）"
+    return JSONResponse(content=ok(f"已复位 {name}，写能力恢复{extra}", data))
 
 
 @router.post("/api/v1/safety/circuit-breaker/reset")

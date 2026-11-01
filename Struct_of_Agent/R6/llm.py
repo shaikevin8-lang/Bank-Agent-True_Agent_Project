@@ -13,12 +13,12 @@ def _default_routing() -> dict[str, dict[str, Any]]:
     return {
         "生日": {"name": "preview_birthday_plan", "arguments": {"birthday": "2026-12-25", "gift_address": "北京市海淀区演示路 1 号", "budget_account": "622200001"}},
         "方案": {"name": "preview_birthday_plan", "arguments": {"birthday": "2026-12-25", "gift_address": "北京市海淀区演示路 1 号", "budget_account": "622200001"}},
-        "预留": {"name": "reserve_budget", "arguments": {"workflow_id": "WF-DEMO-0001", "amount": 1000.0, "confirmed": True}},
-        "预算": {"name": "reserve_budget", "arguments": {"workflow_id": "WF-DEMO-0001", "amount": 1000.0, "confirmed": True}},
-        "下单": {"name": "place_gift_orders", "arguments": {"workflow_id": "WF-DEMO-0001", "confirmed": True, "mfa_code": "123456"}},
-        "礼品": {"name": "place_gift_orders", "arguments": {"workflow_id": "WF-DEMO-0001", "confirmed": True, "mfa_code": "123456"}},
+        "预留": {"name": "reserve_budget", "arguments": {"workflow_id": "WF-DEMO-0001", "amount": 1000.0}},
+        "预算": {"name": "reserve_budget", "arguments": {"workflow_id": "WF-DEMO-0001", "amount": 1000.0}},
+        "下单": {"name": "place_gift_orders", "arguments": {"workflow_id": "WF-DEMO-0001"}},
+        "礼品": {"name": "place_gift_orders", "arguments": {"workflow_id": "WF-DEMO-0001"}},
         "状态": {"name": "get_workflow_status", "arguments": {"workflow_id": "WF-DEMO-0001"}},
-        "取消": {"name": "cancel_workflow", "arguments": {"workflow_id": "WF-DEMO-0001", "confirmed": True}},
+        "取消": {"name": "cancel_workflow", "arguments": {"workflow_id": "WF-DEMO-0001"}},
     }
 
 

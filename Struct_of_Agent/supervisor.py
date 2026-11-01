@@ -133,6 +133,11 @@ def _record_moderation_violation(result: Any, session_id: str) -> None:
     意味着写路径正在被主动攻击，按「零容忍」立即开启该会话全部写能力；普通
     违规内容（如辱骂、其他 blocklist 命中）只做内容拦截，不动业务可用性。
 
+    **只接受确定性规则层的结论**（``review_source == "rule"``）：模型语义审核
+    的结论是 advisory，随机性判定若被允许记账，一次误判就会熔断该会话全部写
+    能力（历史故障：正常回答「用默认账户」被判 privilege_escalation → open=6）。
+    因此来源不是 ``"rule"`` 时这里只记 warning 并直接返回，绝不触碰熔断状态。
+
     Args:
         result: 内容审核结果（`common.middleware.ModerationResult`）。
         session_id: 会话 ID；作为熔断的 user 维度。
@@ -140,7 +145,17 @@ def _record_moderation_violation(result: Any, session_id: str) -> None:
     Returns:
         `None`。记账失败只写日志，绝不影响本条输入的拦截结论。
     """
+    source = str(getattr(result, "review_source", "") or "")
     category = str(getattr(result, "category", "") or "")
+    if source != "rule":
+        # 防御性早退：模型/未来的其它审核来源一律不参与熔断记账。
+        logger.warning(
+            "忽略非规则层的审核违规记账（不会触发熔断）review_source=%s category=%s reason=%s",
+            source,
+            category,
+            getattr(result, "reason", ""),
+        )
+        return
     reasons = {
         "prompt_injection": None,
         "privilege_escalation": None,
@@ -296,17 +311,23 @@ class SupervisorAgent:
             return None
 
     def _moderate_input(self, user_input: str, session_id: str = "default") -> dict[str, Any] | None:
-        """输入门：对用户输入执行规则层 + LLM 审核，阻断时返回统一契约结果。
+        """输入门：对用户输入执行规则层审核，阻断时返回统一契约结果。
+
+        **拦截权只属于确定性规则层**（``review_source == "rule"``）。LLM 语义审核
+        是 advisory（仅审计 + 日志，见 ``common.middleware.content_moderation``）：
+        模型的随机误判绝不能拦掉整轮对话，更不能经
+        :func:`_record_moderation_violation` 熔断该会话全部写能力。
 
         Args:
             user_input: 用户原始输入。
             session_id: 会话 ID（注入/越权命中的熔断零容忍事件按此维度记账）。
 
         Returns:
-            审核未通过时返回阻断结果字典；通过时返回 None。
+            规则层审核未通过时返回阻断结果字典；通过时返回 None。
         """
         result = self._input_moderator.check_with_llm(user_input)
-        if not result.passed:
+        review_source = str(getattr(result, "review_source", "") or "")
+        if result.passed is False and review_source == "rule":
             _record_moderation_violation(result, session_id)
             _audit_injection_blocked(result, session_id)
             reply = sanitize_reply(f"抱歉，您的输入未通过内容审核：{result.reason}")
@@ -318,6 +339,14 @@ class SupervisorAgent:
                 "agent": "input_gate",
                 "trace": {"router": "input_gate", "plan": []},
             }
+        if result.passed is False:
+            # 防御性放行：非规则层来源的 False（正常不会出现）不拦、不熔断、不审计。
+            logger.warning(
+                "忽略非规则层的输入门阻断结论，已放行：review_source=%s category=%s reason=%s",
+                review_source,
+                getattr(result, "category", ""),
+                getattr(result, "reason", ""),
+            )
         return None
 
     def _plan(self, user_input: str, history: list[dict[str, Any]] | None = None) -> list[dict[str, str]] | None:

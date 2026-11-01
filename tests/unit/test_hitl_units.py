@@ -1520,6 +1520,98 @@ def test_decide_case_request_info_moves_to_info_required(
     assert [action for action, _note in event_log] == ["request_info", "audit:request_info"]
 
 
+def test_decide_case_reject_from_open_accepts_seen_version(
+    monkeypatch: pytest.MonkeyPatch, event_log: list[tuple[str, str]]
+) -> None:
+    """open 状态直接拒绝：带上审核员看到的 version 不得报版本冲突（复审 BUG-5）。
+
+    决策前的自动认领会把 version 从 1 抬到 2，乐观锁必须在认领**之前**比对；
+    否则前端「详情里读到的 version 原样回传」的请求必然 409，表现为「拒绝用不了」。
+    """
+    case = _case()
+    monkeypatch.setattr(
+        hitl,
+        "session_scope",
+        lambda: _fake_scope(_ScriptedSession(_Result(rows=[]), _Result(rows=[case]))),
+    )
+
+    outcome = hitl.decide_case(
+        case.public_id,
+        decision="reject",
+        actor=REVIEWER,
+        note="收款人与用户描述不符",
+        expected_version=1,
+        tenant_id=TENANT,
+    )
+
+    assert outcome.case is case and outcome.execution is None
+    assert case.status == hitl.STATUS_REJECTED
+    assert case.assignee == "rev-1", "open 状态直接拒绝也要先显式认领（责任到人）"
+    assert case.version == 3, "claim +1、reject +1"
+    assert case.decision_note == "收款人与用户描述不符"
+    assert [action for action, _note in event_log] == ["claim", "audit:claim", "reject", "audit:reject"]
+
+
+def test_decide_case_request_info_from_open_auto_claims(
+    monkeypatch: pytest.MonkeyPatch, event_log: list[tuple[str, str]]
+) -> None:
+    """open 状态直接要求补件：自动认领后进入 info_required（复审 BUG-6 的不对称）。"""
+    case = _case()
+    monkeypatch.setattr(
+        hitl,
+        "session_scope",
+        lambda: _fake_scope(_ScriptedSession(_Result(rows=[]), _Result(rows=[case]))),
+    )
+
+    outcome = hitl.decide_case(
+        case.public_id,
+        decision="request_info",
+        actor=REVIEWER,
+        note="请补充转账用途与收款人关系",
+        expected_version=1,
+        tenant_id=TENANT,
+    )
+
+    assert outcome.case is case and outcome.execution is None
+    assert case.status == hitl.STATUS_INFO_REQUIRED
+    assert case.assignee == "rev-1", "要求补件同样自动认领，不再只能先点「认领」"
+    assert case.version == 3
+    assert case.info_request_note == "请补充转账用途与收款人关系"
+    assert [action for action, _note in event_log] == [
+        "claim",
+        "audit:claim",
+        "request_info",
+        "audit:request_info",
+    ]
+
+
+def test_decide_case_version_conflict_detected_before_auto_claim(
+    monkeypatch: pytest.MonkeyPatch, event_log: list[tuple[str, str]]
+) -> None:
+    """陈旧 version → 409 版本冲突，且不产生任何认领 / 迁移（案件保持原样待刷新）。"""
+    case = _case(version=3)
+    monkeypatch.setattr(
+        hitl,
+        "session_scope",
+        lambda: _fake_scope(_ScriptedSession(_Result(rows=[]), _Result(rows=[case]))),
+    )
+
+    with pytest.raises(hitl.VersionConflict) as info:
+        hitl.decide_case(
+            case.public_id,
+            decision="reject",
+            actor=REVIEWER,
+            note="不通过",
+            expected_version=1,
+            tenant_id=TENANT,
+        )
+
+    assert info.value.status_code == 409
+    assert info.value.data["version"] == 3 and info.value.data["expected_version"] == 1
+    assert case.status == hitl.STATUS_OPEN and case.assignee is None and case.version == 3
+    assert event_log == [], "版本冲突时不得留下认领 / 决策痕迹"
+
+
 def test_decide_case_approve_on_open_case_auto_claims_and_replays(
     monkeypatch: pytest.MonkeyPatch, event_log: list[tuple[str, str]]
 ) -> None:

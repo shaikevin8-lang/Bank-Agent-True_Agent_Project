@@ -19,19 +19,21 @@ from common.model_manager import ModelConfigManager, RuntimeChatModel, get_model
 def _default_routing() -> dict[str, dict[str, Any]]:
     """返回 R4 Mock 模型默认的关键词到工具调用映射（卡片管理场景）。
 
-    高风险写操作（额度调整/解锁/冻结/挂失）默认携带 confirmed=True 与
-    模拟 MFA 验证码，便于离线演示一次跑通「确认 + 风控 + 回执」闭环。
+    高风险写操作只给业务参数，**不**自带 ``confirmed`` / ``mfa_code``：这两个键
+    属于「只能由服务端注入」的确认类参数，模型一旦夹带就会被 L4 参数守卫
+    （:mod:`common.param_guard`）判为 ``param_injection`` 并触发零容忍熔断，让离线
+    演示每写一次就停两分钟。确认凭据统一由服务端签发（D04）。
     """
     return {
         "申请": {"name": "apply_card", "arguments": {"card_type": "virtual", "kyc_name": "张三", "kyc_id_number": "110101199001011234"}},
         "办卡": {"name": "apply_card", "arguments": {"card_type": "demo", "kyc_name": "张三", "kyc_id_number": "110101199001011234"}},
-        "额度": {"name": "adjust_limit", "arguments": {"card_id": "CARD-DEMO-0001", "new_limit": 80000.0, "adjust_type": "temporary", "confirmed": True, "mfa_code": "123456"}},
-        "提额": {"name": "adjust_limit", "arguments": {"card_id": "CARD-DEMO-0001", "new_limit": 80000.0, "adjust_type": "temporary", "confirmed": True, "mfa_code": "123456"}},
-        "限制": {"name": "set_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["overseas"], "confirmed": True}},
-        "限额": {"name": "set_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["online"], "confirmed": True}},
-        "解锁": {"name": "remove_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["overseas"], "confirmed": True, "mfa_code": "123456"}},
-        "冻结": {"name": "freeze_card", "arguments": {"card_id": "CARD-DEMO-0001", "confirmed": True, "mfa_code": "123456"}},
-        "挂失": {"name": "report_loss", "arguments": {"card_id": "CARD-DEMO-0001", "confirmed": True, "mfa_code": "123456"}},
+        "额度": {"name": "adjust_limit", "arguments": {"card_id": "CARD-DEMO-0001", "new_limit": 80000.0, "adjust_type": "temporary"}},
+        "提额": {"name": "adjust_limit", "arguments": {"card_id": "CARD-DEMO-0001", "new_limit": 80000.0, "adjust_type": "temporary"}},
+        "限制": {"name": "set_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["overseas"]}},
+        "限额": {"name": "set_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["online"]}},
+        "解锁": {"name": "remove_restriction", "arguments": {"card_id": "CARD-DEMO-0001", "channels": ["overseas"]}},
+        "冻结": {"name": "freeze_card", "arguments": {"card_id": "CARD-DEMO-0001"}},
+        "挂失": {"name": "report_loss", "arguments": {"card_id": "CARD-DEMO-0001"}},
         "卡片": {"name": "get_card_info", "arguments": {"card_id": "CARD-DEMO-0001"}},
         "查询": {"name": "get_card_info", "arguments": {"card_id": "CARD-DEMO-0001"}},
     }

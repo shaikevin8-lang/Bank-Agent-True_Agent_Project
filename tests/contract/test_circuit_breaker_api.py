@@ -293,6 +293,43 @@ def test_reset_success_restores_writes(client: TestClient) -> None:
     assert _list(client, USER_HEADERS, session_id=SESSION_A)["items"][0]["state"] == cb.STATE_CLOSED
 
 
+def test_reset_without_target_also_clears_user_scopes(client: TestClient) -> None:
+    """不带目标的复位必须连带清掉用户域，否则「已复位」但写能力仍然关着（复审 BUG-7）。"""
+    # Arrange：两个用户域的同一能力都被打成 open（租户域此时还没有记录）
+    _trip(SESSION_A)
+    _trip(SESSION_B)
+    assert _data(client.get("/health/capabilities"))["writes_enabled"] is False
+
+    # Act
+    response = _reset(client, cb.CAP_TRANSFER, OPS_HEADERS, reason=GOOD_REASON)
+
+    # Assert
+    data = _data(response)
+    assert data["state"] == cb.STATE_CLOSED
+    assert data["reset_scopes"] >= 3, "租户域 + 两个用户域都要复位"
+    assert "用户级熔断" in response.json()["message"], response.json()["message"]
+    assert cb.require_closed(tenant_id=TENANT, user_id=SESSION_A, capability=cb.CAP_TRANSFER) is None
+    assert cb.require_closed(tenant_id=TENANT, user_id=SESSION_B, capability=cb.CAP_TRANSFER) is None
+    health = _data(client.get("/health/capabilities"))
+    assert health["writes_enabled"] is True and health["open"] == 0
+
+
+def test_reset_with_explicit_session_stays_minimal_scope(client: TestClient) -> None:
+    """显式给 ``session_id`` 时只复位该用户域，其他用户保持 open（最小作用域）。"""
+    # Arrange
+    _trip(SESSION_A)
+    _trip(SESSION_B)
+
+    # Act
+    data = _data(_reset(client, cb.CAP_TRANSFER, OPS_HEADERS, session_id=SESSION_A, reason=GOOD_REASON))
+
+    # Assert
+    assert data["reset_scopes"] == 1
+    assert cb.require_closed(tenant_id=TENANT, user_id=SESSION_A, capability=cb.CAP_TRANSFER) is None
+    assert cb.snapshot(tenant_id=TENANT, user_id=SESSION_B)[0].state == cb.STATE_OPEN
+    assert _data(client.get("/health/capabilities"))["writes_enabled"] is False
+
+
 def test_contract_reset_endpoint_takes_capability_from_body(client: TestClient) -> None:
     """契约别名端点：能力来自请求体，行为与路径参数版一致。"""
     # Arrange

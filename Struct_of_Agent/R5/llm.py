@@ -17,9 +17,9 @@ def _default_routing() -> dict[str, dict[str, Any]]:
     return {
         "订阅": {"name": "identify_subscriptions", "arguments": {}},
         "代扣": {"name": "identify_subscriptions", "arguments": {}},
-        "续费": {"name": "set_reminder", "arguments": {"subscription_id": "SUB-0001", "remind_before_days": 3, "action": "set", "confirmed": True}},
-        "提醒": {"name": "set_reminder", "arguments": {"subscription_id": "SUB-0001", "remind_before_days": 3, "action": "set", "confirmed": True}},
-        "取消": {"name": "cancel_subscription", "arguments": {"subscription_id": "SUB-0001", "level": "merchant_contract", "confirmed": True, "mfa_code": "123456"}},
+        "续费": {"name": "set_reminder", "arguments": {"subscription_id": "SUB-0001", "remind_before_days": 3, "action": "set"}},
+        "提醒": {"name": "set_reminder", "arguments": {"subscription_id": "SUB-0001", "remind_before_days": 3, "action": "set"}},
+        "取消": {"name": "cancel_subscription", "arguments": {"subscription_id": "SUB-0001", "level": "merchant_contract"}},
     }
 
 

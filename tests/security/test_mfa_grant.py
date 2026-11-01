@@ -451,6 +451,7 @@ class _DecideCase:
         }
         self.session_id = "sess-yellow"
         self.tenant_id = TENANT
+        self.version = 1
         self.decision_note = ""
         self.info_request_note = ""
         self.assignee = "reviewer-1"

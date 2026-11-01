@@ -816,6 +816,14 @@
   .hitl-ack input { margin-top: 2px; }
   .hitl-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
   .hitl-actions .btn { padding: 7px 12px; font-size: 12.5px; }
+  /* 用户侧确认（MFA）：人工批准不能代替用户确认，缺凭据时就地引导补齐 */
+  .hitl-confirm {
+    margin-top: 12px; padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--panel-2, var(--panel));
+  }
+  .hitl-confirm-title { font-size: 12px; font-weight: 600; color: var(--text); }
+  .hitl-confirm-text { margin-top: 4px; font-size: 11.5px; line-height: 1.6; color: var(--text-sub); }
+  .hitl-confirm .btn { margin-top: 8px; padding: 6px 11px; font-size: 12px; }
   /* 对话流里的「已转人工复核」卡片：沿用消息气泡骨架，不做成刺眼告警条 */
   .hitl-message .bubble { max-width: 100%; padding: 0; background: transparent; }
   .hitl-card {
@@ -3606,11 +3614,11 @@
 
     // 处理区
     container.appendChild(mkEl('div', 'hitl-detail-title', '处理'));
-    const noteLabel = mkEl('label', 'hitl-field', '备注（批准 / 拒绝选填，要求补件必填）');
+    const noteLabel = mkEl('label', 'hitl-field', '备注（拒绝 / 要求补件必填，批准选填）');
     const note = document.createElement('textarea');
     note.id = 'hitlNote';
     note.setAttribute('aria-label', '处理备注');
-    note.placeholder = '例如：已核对收款人、金额与风险提示';
+    note.placeholder = '例如：拒绝——收款人与用户描述不符；补件——请补充转账用途说明';
     noteLabel.appendChild(note);
     container.appendChild(noteLabel);
 
@@ -3640,6 +3648,28 @@
     [claimBtn, approveBtn, rejectBtn, infoBtn].forEach(function (btn) { actions.appendChild(btn); });
     container.appendChild(actions);
 
+    // 用户侧确认（MFA）：人工批准不能代替用户确认，缺凭据时在这里引导补齐
+    const conf = userConfirmationOf(item);
+    if (conf.mfaRequired) {
+      const confBox = mkEl('div', 'hitl-confirm');
+      confBox.id = 'hitlConfirmBox';
+      confBox.appendChild(mkEl('div', 'hitl-confirm-title', '用户侧确认（MFA）'));
+      const confText = mkEl('div', 'hitl-confirm-text', conf.summary);
+      confText.id = 'hitlConfirmText';
+      confBox.appendChild(confText);
+      if (!conf.ok) {
+        const askBtn = document.createElement('button');
+        askBtn.type = 'button';
+        askBtn.id = 'hitlAskUserConfirm';
+        askBtn.className = 'btn';
+        askBtn.textContent = '为用户发起确认';
+        askBtn.setAttribute('aria-label', '案件 ' + caseNo + '：为用户发起确认');
+        askBtn.addEventListener('click', function () { askUserConfirmForCase(); });
+        confBox.appendChild(askBtn);
+      }
+      container.appendChild(confBox);
+    }
+
     const hint = mkEl('div', 'clock-readonly');
     hint.id = 'hitlActionHint';
     hint.hidden = true;
@@ -3661,7 +3691,48 @@
     startSlaTicker();
   }
 
-  /** 按钮可用性：非复核员一律只读；批准 / 拒绝 / 补件必须先勾选「我已核对」。 */
+  /** 案件里的用户侧确认证据（只认服务端回写的凭据；模型给的确认参数已被后端剥离）。 */
+  function userConfirmationOf(item) {
+    const raw = (item && item.user_confirmation) || {};
+    const mfaRequired = raw.mfa_required !== false;
+    const ok = raw.mfa_ok === true || String(raw.source || '') === 'confirmation_grant';
+    const src = String(raw.source || '');
+    let summary;
+    if (ok) {
+      summary = '已完成：用户本人已确认（'
+        + (String(raw.consumed_at || '') ? 'MFA 凭据已核销' : (src || 'confirmation_grant'))
+        + '），可以批准执行。';
+    } else if (src === 'no_grant') {
+      summary = '未完成：还没有用户本人的确认凭据。人工批准不能代替用户确认——'
+        + '请点「为用户发起确认」，让用户完成一次确认后再批准执行（拒绝 / 要求补件不受影响）。';
+    } else {
+      summary = '未完成：用户侧确认缺失（' + (src || 'unknown') + '）。'
+        + '请先让用户完成本人确认，再批准执行。';
+    }
+    return { mfaRequired: mfaRequired, ok: ok, source: src, summary: summary };
+  }
+
+  /** 为用户发起确认：以案件自身的（工具 + 参数 + 会话）建确认请求，让用户完成 MFA。 */
+  async function askUserConfirmForCase() {
+    const item = (hitlDetailData && hitlDetailData.case) || null;
+    if (!item) return;
+    const proposal = item.proposal || item.proposal_json || {};
+    const toolName = String(item.tool_name || proposal.tool_name || '');
+    if (!toolName) {
+      showHitlMsg('案件缺少工具名，无法发起用户确认', 'error');
+      return;
+    }
+    const args = (proposal.args && typeof proposal.args === 'object') ? proposal.args : {};
+    const data = await openMfaCard(
+      { tool_name: toolName, args: args, risk_level: item.risk_level || 'red', mfa_required: true },
+      { sessionId: String(item.session_id || '') }
+    );
+    if (data) {
+      showHitlMsg('已创建用户确认请求：请让用户在确认卡完成验证码确认，完成后回到本页点「批准执行」。', 'ok');
+    }
+  }
+
+  /** 按钮可用性：非复核员一律只读；拒绝 / 要求补件必须先填备注；批准需用户侧确认完成。 */
   function syncHitlActionState() {
     const ackEl = $('hitlAck');
     const noteEl = $('hitlNote');
@@ -3673,10 +3744,12 @@
     const checked = !!(ackEl && ackEl.checked);
     const hasNote = !!(noteEl && noteEl.value.trim());
     const canAct = reviewer && open && checked && !hitlBusy;
+    const conf = userConfirmationOf(item);
+    const confirmReady = !conf.mfaRequired || conf.ok;
 
     setDisabled($('hitlClaim'), !(reviewer && open && status === 'open' && !hitlBusy));
-    setDisabled($('hitlApprove'), !canAct);
-    setDisabled($('hitlReject'), !canAct);
+    setDisabled($('hitlApprove'), !(canAct && confirmReady));
+    setDisabled($('hitlReject'), !(canAct && hasNote));
     setDisabled($('hitlRequestInfo'), !(canAct && hasNote));
     if (noteEl) setDisabled(noteEl, !reviewer || !open || hitlBusy);
     if (ackEl) setDisabled(ackEl, !reviewer || !open || hitlBusy);
@@ -3686,6 +3759,8 @@
       if (!open) text = '该案件已是终态（' + statusLabel(status) + '），无需再处理。';
       else if (!reviewer) text = '只读：当前身份无权处理案件，请切换为复核员（risk_reviewer）。';
       else if (!checked) text = '勾选「我已核对操作内容与风险」后才能批准 / 拒绝 / 要求补件。';
+      else if (!confirmReady) text = '用户侧确认未完成：点「为用户发起确认」让用户完成确认后才能批准执行（拒绝 / 要求补件不受影响）。';
+      else if (!hasNote) text = '拒绝 / 要求补件必须先填写备注；批准执行备注选填。';
       hint.textContent = text;
       hint.hidden = !text;
     }
@@ -3701,6 +3776,7 @@
   function hitlErrorKind(payload) {
     const code = String((payload && payload.error_code) || '');
     const msg = String((payload && payload.message) || '');
+    if (/USER_CONFIRMATION|MFA_|GRANT/i.test(code) || /用户侧确认|用户确认/.test(msg)) return 'confirm';
     if (/FORBIDDEN|ROLE|PERMISSION|NOT_ALLOWED/i.test(code) || /\b403\b/.test(msg)) return 'forbidden';
     if (/EXPIRED|\b410\b/.test(code) || /\b410\b/.test(msg) || /已过期/.test(msg)) return 'expired';
     if (/CONFLICT|VERSION|STALE|STATE|ACK/i.test(code) || /\b409\b/.test(msg)) return 'conflict';
@@ -3708,14 +3784,18 @@
   }
 
   function hitlErrorText(payload) {
-    if (hitlErrorKind(payload) === 'forbidden') return '当前身份无权处理，请切换为复核员';
+    const kind = hitlErrorKind(payload);
+    if (kind === 'forbidden') return '当前身份无权处理，请切换为复核员';
+    if (kind === 'confirm') {
+      return '用户侧确认未完成：人工批准不能代替用户确认，请先点「为用户发起确认」让用户完成确认';
+    }
     return describeFailure(payload);
   }
 
-  /** 403 → 只提示；409（版本冲突 / 状态非法 / 缺 ack）与 410 已过期 → 自动刷新该案件。 */
+  /** 403 → 只提示；409（版本冲突 / 状态非法 / 缺 ack）与 410、缺用户确认 → 自动刷新该案件。 */
   async function refreshHitlAfterError(payload, caseNo) {
     const kind = hitlErrorKind(payload);
-    if (kind === 'conflict' || kind === 'expired') {
+    if (kind === 'conflict' || kind === 'expired' || kind === 'confirm') {
       await loadHitlDetail(caseNo);
       await loadHitlQueue();
     } else if (kind === 'forbidden') {
@@ -3783,11 +3863,20 @@
       showHitlMsg('请先勾选「我已核对操作内容与风险」', 'error');
       return;
     }
+    if (decision === 'reject' && !note) {
+      showHitlMsg('拒绝案件必须填写理由（备注）', 'error');
+      return;
+    }
     if (decision === 'request_info' && !note) {
-      showHitlMsg('要求补件必须填写备注', 'error');
+      showHitlMsg('要求补件必须注明需要用户补充的材料', 'error');
       return;
     }
     if (decision === 'approve') {
+      const conf = userConfirmationOf(item);
+      if (conf.mfaRequired && !conf.ok) {
+        showHitlMsg('用户侧确认未完成：请先点「为用户发起确认」让用户完成确认，再批准执行', 'error');
+        return;
+      }
       const ok = await askConfirm({
         title: '批准并执行',
         message: '确定批准案件 ' + caseNo + ' 并立即执行提案中的操作吗？该操作会产生真实副作用。',
@@ -4205,7 +4294,8 @@
    * 打开确认卡：先按（工具名 + 参数）向服务端建确认请求，再按返回的状态渲染。
    * 参数来自 hitl_required 回执里的 ``confirmation`` 段（前端拿不到工具调用参数）。
    */
-  async function openMfaCard(confirmation) {
+  async function openMfaCard(confirmation, options) {
+    const opts = options || {};
     const info = confirmation && typeof confirmation === 'object' ? confirmation : {};
     const toolName = String(info.tool_name || '');
     if (!toolName) return null;
@@ -4234,7 +4324,7 @@
     mfaSetBusy(true);
 
     try {
-      const sid = await ensureSession();
+      const sid = opts.sessionId ? String(opts.sessionId) : await ensureSession();
       const body = { tool_name: toolName, args: mfaState.args, session_id: sid || '' };
       const res = await callApi('/api/v1/confirm/request', 'POST', body, { timeoutMs: 8000 });
       if (!res || res.ok !== true) {
@@ -5568,229 +5658,6 @@
   // 门禁默认就可见（HTML 上没写 hidden），所以 /api/auth/me 还没回来时也不是白屏
   (function boot() {
     bootstrapAuth().catch(function () { showAuthGate('login'); });
-  })();
-</script>
-<!-- ==================== 写能力熔断（circuit breaker）界面提示 —— 追加块，全部 cb- 前缀 ==================== -->
-<style>
-  /* 锁定横幅：固定顶部、红色系，未熔断时用 [hidden] 完全隐藏（不占位）。
-     注意：作者样式里的 display 会压过 UA 的 [hidden]，所以必须显式写 .cb-banner[hidden]。 */
-  .cb-banner {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
-    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-    padding: 9px 16px; font-size: 13px; line-height: 1.5;
-    background: #b91c1c; color: #fff;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, .18);
-  }
-  .cb-banner[hidden] { display: none; }
-  .cb-banner-text { flex: 1 1 auto; min-width: 0; font-weight: 600; word-break: break-word; }
-  .cb-banner-btn {
-    flex: 0 0 auto; padding: 5px 12px; font-size: 12.5px; font-family: inherit;
-    border-radius: 8px; border: 1px solid rgba(255, 255, 255, .6);
-    background: rgba(255, 255, 255, .16); color: #fff; cursor: pointer;
-    transition: background .15s, border-color .15s;
-  }
-  .cb-banner-btn:hover { background: rgba(255, 255, 255, .3); border-color: #fff; }
-  .cb-banner-btn:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
-  /* 横幅可见时才给 body 让位：--cb-banner-h 由脚本按实际渲染高度写入，
-     窄屏横幅折行变高也不会盖住顶栏。
-     body 是 border-box + overflow:hidden，所以 .app 的高度必须同时减掉同一数值，
-     否则 .app 的 100dvh 会把底部输入区顶出可视区、再被 overflow:hidden 裁掉。 */
-  body.cb-banner-open { padding-top: var(--cb-banner-h, 44px); }
-  body.cb-banner-open .app {
-    height: calc(100vh - var(--cb-banner-h, 44px));
-    height: calc(100dvh - var(--cb-banner-h, 44px));
-  }
-  /* 移动端侧边栏是 fixed 抽屉（top:0），会被横幅压住；桌面端是流内布局，top 无副作用 */
-  body.cb-banner-open .sidebar { top: var(--cb-banner-h, 44px); }
-  /* 被拦截气泡：红底 / 红边 / 白字，语气是「结果被拦下」而不是异常堆栈 */
-  .message .bubble.msg-blocked,
-  .message.user .bubble.msg-blocked,
-  .bubble.msg-blocked {
-    background: #b91c1c; border: 1px solid #7f1d1d; color: #fff;
-  }
-</style>
-<div class="cb-banner" id="cbBanner" role="status" aria-live="polite" hidden>
-  <span class="cb-banner-text" id="cbBannerText">写操作已暂停</span>
-  <button type="button" class="cb-banner-btn" id="cbStatusBtn">查看状态</button>
-  <button type="button" class="cb-banner-btn" id="cbHitlBtn">转人工审核</button>
-</div>
-<script>
-  /*
-   * 写能力熔断（写操作熔断器）的前端提示：
-   *   1) 轮询 GET /health/capabilities，degraded / writes_enabled=false 时显示顶部红色锁定横幅；
-   *   2) 接口返回 error_code=NOT_READY_001 时，把最近一条助手气泡标成红色阻断样式；
-   *   3) 横幅上的「查看状态」拉原始熔断器 JSON，「转人工审核」复用页面既有的「人工复核」抽屉。
-   * 只读 + 只加类：不改写任何既有函数、不影响原有对话流；请求失败一律静默。
-   */
-  (function () {
-    var HEALTH_URL = '/health/capabilities';
-    var POLL_MS = 15000;            // 15 秒一次
-    var NOT_READY = 'NOT_READY_001';
-    // 与主脚本的 SESSION_KEY 同名（主脚本里是 IIFE 内的 const，外部读不到，只能读 localStorage）
-    var SESSION_KEY = 'bank_agent.active_session';
-
-    var bannerEl = document.getElementById('cbBanner');
-    var bannerTextEl = document.getElementById('cbBannerText');
-    var statusBtn = document.getElementById('cbStatusBtn');
-    var hitlBtn = document.getElementById('cbHitlBtn');
-
-    /** 当前会话 ID：主脚本把「当前会话 ID」持久化在 localStorage，这里读同一个键。 */
-    function currentSessionId() {
-      try { return localStorage.getItem(SESSION_KEY) || ''; } catch (err) { return ''; }
-    }
-
-    /** 拼 query 后缀：拿不到会话 ID 就不带 session_id。 */
-    function withSessionId(path) {
-      var sid = currentSessionId();
-      if (!sid) return path;
-      return path + (path.indexOf('?') < 0 ? '?' : '&') + 'session_id=' + encodeURIComponent(sid);
-    }
-
-    /** 显示 / 隐藏横幅；显示时把实际高度写进 CSS 变量，给 body 让位。 */
-    function setBannerVisible(visible, text) {
-      if (!bannerEl) return;
-      if (visible && text) bannerTextEl.textContent = text;
-      bannerEl.hidden = !visible;
-      if (visible) {
-        // 折行后高度会变，量一次实际高度再落到变量上
-        var h = bannerEl.offsetHeight || 44;
-        document.documentElement.style.setProperty('--cb-banner-h', h + 'px');
-        document.body.classList.add('cb-banner-open');
-      } else {
-        document.body.classList.remove('cb-banner-open');
-      }
-    }
-
-    /** 把熔断明细压成一句补充说明：能力名 + 剩余重试秒数。 */
-    function describeItems(items) {
-      if (!items || !items.length) return '';
-      var parts = [];
-      for (var i = 0; i < items.length && parts.length < 3; i += 1) {
-        var item = items[i] || {};
-        if (item.state !== 'open') continue;
-        var one = String(item.capability || '未命名能力');
-        var retry = Number(item.retry_after);
-        if (isFinite(retry) && retry > 0) one += '（' + Math.ceil(retry) + 's 后重试）';
-        parts.push(one);
-      }
-      if (!parts.length) return '';
-      return '（' + parts.join('、') + (parts.length >= 3 ? ' 等' : '') + '）';
-    }
-
-    /** 根据 /health/capabilities 的 data 决定横幅文案与显隐。 */
-    function applyHealth(data) {
-      if (!data || typeof data !== 'object') { setBannerVisible(false); return; }
-      var shouldShow = data.degraded === true || data.writes_enabled === false;
-      if (!shouldShow) { setBannerVisible(false); return; }
-      var open = Number(data.open || 0);
-      var head;
-      if (open > 0) head = '写操作已暂停：' + open + ' 项能力熔断中';
-      else if (data.writes_enabled === false) head = '写操作已暂停：写能力已停用';
-      else head = '写操作已暂停';
-      setBannerVisible(true, head + describeItems(data.items));
-    }
-
-    /** 取一次健康快照；任何失败（网络 / 非 200 / 非 JSON）都静默，不打扰对话。 */
-    function refreshHealth() {
-      return fetch(HEALTH_URL, {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { 'Accept': 'application/json' }
-      }).then(function (res) {
-        if (!res || !res.ok) return null;
-        return res.clone().json();
-      }).then(function (payload) {
-        if (!payload || typeof payload !== 'object') return null;
-        var data = payload.data || null;
-        applyHealth(data);
-        return data;
-      }).catch(function () { return null; });
-    }
-
-    /** 「查看状态」：新窗口打开熔断器原始 JSON，同时把健康快照打到 console。 */
-    function onStatusClick() {
-      window.open(withSessionId('/api/safety/circuit-breakers'), '_blank');
-      refreshHealth().then(function (data) {
-        try { console.info('[写能力熔断] GET ' + HEALTH_URL, data); } catch (err) { /* 忽略 */ }
-      });
-    }
-
-    /**
-     * 「转人工审核」：优先复用页面已有的「人工复核」抽屉（顶栏 #hitlEntry）。
-     * 主脚本的 openHitlDrawer 在 IIFE 里、外部拿不到，所以用 DOM 点击复用，不改既有代码。
-     * 抽屉没被打开（门禁未通过 / 事件未绑定）时，兜底新窗口打开 /api/hitl/cases。
-     */
-    function onHitlClick() {
-      var entry = document.getElementById('hitlEntry');
-      var overlay = document.getElementById('hitlOverlay');
-      if (entry) {
-        try { entry.click(); } catch (err) { /* 落到下面的兜底 */ }
-      }
-      // 抽屉是同步打开的：下一拍看一眼是否真的可见
-      setTimeout(function () {
-        var opened = !!(overlay && !overlay.hidden);
-        if (!opened) window.open('/api/hitl/cases', '_blank');   /* 兜底：直接看复核案件 JSON */
-      }, 0);
-    }
-
-    /** 最近一条助手气泡（既有 DOM 结构：#chat > .message.assistant > .bubble）。 */
-    function latestAssistantBubble() {
-      var list = document.querySelectorAll('#chat .message.assistant .bubble');
-      if (!list || !list.length) return null;
-      return list[list.length - 1];
-    }
-
-    /** 命中 NOT_READY_001：先亮横幅（不等轮询），再给最新助手气泡加阻断样式。 */
-    function markBlocked() {
-      if (bannerEl && bannerEl.hidden) {
-        setBannerVisible(true, '写操作已暂停：本轮请求被熔断拦截');
-      }
-      var bubble = latestAssistantBubble();
-      if (bubble) {
-        bubble.classList.add('msg-blocked');
-      } else {
-        try { console.warn('[写能力熔断] 命中 ' + NOT_READY + '，但未找到可标记的助手气泡'); } catch (err) { /* 忽略 */ }
-      }
-      // 拿真实数字再刷新一次文案（失败就保留上面的兜底文案）
-      refreshHealth();
-    }
-
-    function isNotReady(payload) {
-      if (!payload || typeof payload !== 'object') return false;
-      if (payload.error_code === NOT_READY) return true;
-      return !!(payload.data && typeof payload.data === 'object' && payload.data.error_code === NOT_READY);
-    }
-
-    /** 只检查 JSON 响应；SSE（text/event-stream）与二进制一律跳过，避免无谓的 body 缓冲。 */
-    function inspectResponse(response) {
-      var ct = '';
-      try {
-        ct = (response.headers && response.headers.get && response.headers.get('content-type')) || '';
-      } catch (err) { ct = ''; }
-      if (ct.indexOf('json') < 0) return;
-      // clone() 后再读：原响应对象原样返回给调用方，对话流不受影响
-      response.clone().json().then(function (payload) {
-        if (isNotReady(payload)) markBlocked();
-      }).catch(function () { /* 解析失败：静默 */ });
-    }
-
-    // ---- 包装 window.fetch（只包一层，保留原引用与全部实参） ----
-    var _origFetch = window.fetch;
-    if (typeof _origFetch === 'function' && !window.__cbFetchWrapped) {
-      window.__cbFetchWrapped = true;
-      window.fetch = async function (...args) {
-        var response = await _origFetch.apply(this, args);
-        try { inspectResponse(response); } catch (err) { /* 检查失败绝不能影响原流程 */ }
-        return response;   // 同一个响应对象原样返回
-      };
-    }
-
-    if (statusBtn) statusBtn.addEventListener('click', onStatusClick);
-    if (hitlBtn) hitlBtn.addEventListener('click', onHitlClick);
-
-    // 页面加载后立刻取一次，之后每 15 秒取一次
-    refreshHealth();
-    setInterval(refreshHealth, POLL_MS);
   })();
 </script>
 </body>

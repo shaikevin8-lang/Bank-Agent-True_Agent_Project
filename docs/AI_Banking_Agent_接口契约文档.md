@@ -36,7 +36,7 @@
 | `GET` | `/health` | 存活探针 | compose healthcheck / 运维 | 无 |
 | `GET` | `/selfcheck` | 隔离自证：`network` / `credentials` / `mounts` | `verify_code_sandbox.ps1`、`HttpCodeComputeAdapter.selfcheck()`、`/health/capabilities` | 无（启动时采样并缓存） |
 | `POST` | `/run` | 执行一段受限代码并返回 JSON 结果 | `common/code_compute.py` → R2 工具 | **零**（不写库、不写文件、不联网） |
-| `GET` | `/health/capabilities`（**app 侧 8000**） | 追加 `code_compute_enabled` 键 | 前端降级横幅、`verify_all` | 无 |
+| `GET` | `/health/capabilities`（**app 侧 8000**） | 追加 `code_compute_enabled` 键 | `verify_all`、运维接口 | 无 |
 
 > `/health/capabilities` 属于 **app 服务（8000）**，不属于沙箱；本文件只约定其新增键（§2.9），既有键见 ADR-005 §5.3。
 
@@ -162,7 +162,7 @@
 
 | 字段 | 类型 | 来源 | 说明 |
 | --- | --- | --- | --- |
-| `code_compute_enabled` | `bool` | `common.code_compute.code_compute_enabled()`；**异常时 `False`**（fail-closed） | 沙箱可用且未熔断、未禁用为 `true`；前端据此显示降级横幅 |
+| `code_compute_enabled` | `bool` | `common.code_compute.code_compute_enabled()`；**异常时 `False`**（fail-closed） | 沙箱可用且未熔断、未禁用为 `true`；仅供运维接口与 `verify_all` 观测（前端降级横幅已于 2026-11-01 移除，不再据此展示横幅） |
 
 既有键（`enabled` / `writes_enabled` / `degraded` / `open` / `half_open` / `total` / `items` / `scope`）见 ADR-005 §5.3，本文件不重复。
 

@@ -29,8 +29,9 @@
 - **用户确认与人工通过严格分离**（PRD FR-COM-003）：``proposal["user_confirmation"]``
   记用户侧证据，``decision`` 记人工决策；人工批准**不能**代替用户确认，
   证据缺失时批准接口返回 ``409 user_confirmation_missing``；
-- 各域 mock LLM 预置 ``confirmed=True, mfa_code="123456"``，所以**不能**用
-  ``confirmed`` 判断「是否已确认」——拦截只按 action + 金额 + 风险等级。
+- **不能**用 ``confirmed`` / ``mfa_code`` 判断「是否已确认」——拦截只按 action +
+  金额 + 风险等级。模型夹带这两个键会被 L4 参数守卫（:mod:`common.param_guard`）
+  直接剥掉并记 ``param_injection``，确认事实只认服务端签发/消费的凭据。
 
 时间语义：``business_at`` / ``expires_at`` 等业务时间一律取
 :func:`business_now`（演示时钟推进后超时判定随之生效），``real_at`` 才是真实
@@ -600,8 +601,8 @@ def evaluate(tool_name: str, args: Mapping[str, Any] | None = None) -> PolicyHit
 
     判定顺序：先查 :data:`HITL_POLICY`；``always`` 规则直接命中；金额规则取
     ``amount_fields`` 里第一个可解析的金额，``>= amount_fen_gte`` 才命中。
-    **不看** ``confirmed`` / ``mfa_code``：各域 mock LLM 默认就带
-    ``confirmed=True, mfa_code="123456"``，用它判断「是否已确认」等于永不放行。
+    **不看** ``confirmed`` / ``mfa_code``：这两个键只能由服务端闸门注入，模型自带
+    的会被 L4 参数守卫剥掉，拿它判断「是否已确认」等于永不放行。
 
     Args:
         tool_name: 工具名。
@@ -851,6 +852,14 @@ EVENT_ACTION_OF: dict[str, str] = {
     ACTION_CANCEL: "cancel",
     ACTION_EXPIRE: "expire",
     ACTION_RESUME: "resume",
+}
+
+
+#: 决策缺理由时的对外文案（**不**使用内部动作名，避免把 ``reject`` /
+#: ``request_info`` 这类实现细节暴露给审核员）。
+NOTE_REQUIRED_MESSAGES: dict[str, str] = {
+    ACTION_REJECT: "拒绝案件必须填写理由（备注），用于留痕与用户查询",
+    ACTION_REQUEST_INFO: "要求补件必须填写理由（要用户补充哪些材料），会原样发给用户",
 }
 
 
@@ -2016,7 +2025,7 @@ def decide_case(
             )
         if action in {ACTION_REJECT, ACTION_REQUEST_INFO} and not (note or "").strip():
             raise InvalidTransition(
-                f"{action} 必须填写理由（note）",
+                NOTE_REQUIRED_MESSAGES[action],
                 data={"case_no": case.public_id, "allowed_actions": allowed_actions(case.status)},
             )
         moment = business_now()
@@ -2024,8 +2033,23 @@ def decide_case(
             # 批准前置校验（**只校验、不消费**）：没有用户确认凭据就直接拒绝，
             # 连自动认领与状态迁移都不会发生（复审 BUG-2）。
             _check_user_confirmation(case, validate_only=True)
-        if case.status == STATUS_OPEN and action in {ACTION_APPROVE, ACTION_REJECT}:
+        # 乐观锁必须在「决策前自动认领」之前校验：认领本身会递增 ``version``，
+        # 若再把调用方的 ``expected_version`` 带到决策迁移上，``open`` 状态下点
+        # 「拒绝 / 批准执行」必然报版本冲突（复审 BUG-5，前端每次都带 version）。
+        # 此处案件已由 :func:`_load_case` 加行锁载入，先比对后放行是安全的。
+        if expected_version is not None and int(case.version) != int(expected_version):
+            raise VersionConflict(
+                f"案件 {case.public_id} 已被他人修改（版本 {case.version} ≠ {expected_version}），请刷新后重试",
+                data={"case_no": case.public_id, "version": case.version, "expected_version": expected_version},
+            )
+        if case.status in {STATUS_OPEN, STATUS_INFO_REQUIRED} and action in {
+            ACTION_APPROVE,
+            ACTION_REJECT,
+            ACTION_REQUEST_INFO,
+        }:
             # 审核员未认领就直接决策：按 A1 §5.3 先显式认领，保证责任到人。
+            # ``request_info`` 同样自动认领，消除「只有要求补件在 open/info_required
+            # 状态不可用」的不对称（复审 BUG-6）。
             _apply_transition(session, case, ACTION_CLAIM, actor=actor, note="决策前自动认领", moment=moment)
             case.assignee = actor.operator[:64]
             case.claimed_at = _to_db(moment)
@@ -2036,7 +2060,7 @@ def decide_case(
             action,
             actor=actor,
             note=note or "",
-            expected_version=expected_version,
+            expected_version=None,
             moment=moment,
         )
         if action == ACTION_APPROVE:

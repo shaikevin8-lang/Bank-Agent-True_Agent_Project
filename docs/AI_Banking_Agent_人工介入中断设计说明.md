@@ -103,9 +103,9 @@ stateDiagram-v2
 | 2 | `open` | `claimed` | `claim` | `risk_reviewer` | `expires_at > business_now` | `claim` |
 | 3 | `info_required` | `claimed` | `claim` | `risk_reviewer` | 同上 | `claim` |
 | 4 | `claimed` | `open` | 认领回收 | 系统 | `claim_expires_at <= business_now` | `claim`（`note` 前缀「认领超时自动回收」） |
-| 5 | `claimed` | `approved` | `decision=approve` | 当前 `assignee` | `ack=true`；`expires_at > business_now`；`version` 匹配 | `approve` + `resume` |
-| 6 | `claimed` | `rejected` | `decision=reject` | 当前 `assignee` | `ack=true`；`note` 非空 | `reject` |
-| 7 | `claimed` | `info_required` | `decision=request_info` | 当前 `assignee` | `ack=true`；`note` 非空 | `request_info` |
+| 5 | `claimed`（或 `open` / `info_required` 决策前自动认领） | `approved` | `decision=approve` | 当前 `assignee`（自动认领后即本人） | `ack=true`；`expires_at > business_now`；`version` 匹配；`user_confirmation` 有效（§6.x） | `claim` + `approve` + `resume` |
+| 6 | `claimed`（或 `open` / `info_required` 决策前自动认领） | `rejected` | `decision=reject` | 当前 `assignee`（自动认领后即本人） | `ack=true`；`note` 非空（拒绝理由） | `claim` + `reject` |
+| 7 | `claimed`（或 `open` / `info_required` 决策前自动认领） | `info_required` | `decision=request_info` | 当前 `assignee`（自动认领后即本人） | `ack=true`；`note` 非空（要补哪些材料） | `claim` + `request_info` |
 | 8 | `open` | `cancelled` | `cancel` | `risk_reviewer` / 系统（策略停机） | —— | `cancel` |
 | 9 | `claimed` | `cancelled` | `cancel` | `risk_reviewer` / 当前 `assignee` 或系统 | —— | `cancel` |
 | 10 | `info_required` | `cancelled` | `cancel` | `risk_reviewer` / 系统 | —— | `cancel` |
@@ -115,21 +115,25 @@ stateDiagram-v2
 
 终态：`approved` / `rejected` / `expired` / `cancelled`。
 
+**决策前自动认领（2026-11-01 修订）**：`open` / `info_required` 状态的案件收到 `approve` / `reject` / `request_info` 时，服务层先用同一事务把案件认领给本次 `X-Operator`（记 `claim` 事件），再执行决策迁移；因此「单案单审核员」约束不变（先到先得，第二个人会拿到 403 `role_not_allowed`），但审核员不必先点「认领」再点「拒绝」。修复前只有 `approve` / `reject` 会自动认领、`request_info` 不会，导致同一页面里的补件按钮可用、另两个按钮必失败的不对称（复审 BUG-6）。
+
+> 版本校验口径：`expected_version` 比的是**调用方看到的那个版本号**，校验发生在自动认领**之前**。因此「看到 `version=1` 的 `open` 案件直接点拒绝」是合法请求；修复前自动认领把版本推到 2、随后又拿调用方的 1 去校验，必然 409 `version_conflict`（复审 BUG-5）。
+
 ### 3.4 非法迁移与报错码
 
 | 情形 | HTTP | `error_code` | 是否写审计 |
 | --- | --- | --- | --- |
 | 从终态发起任何迁移（`approved→*`、`rejected→*`、`expired→*`、`cancelled→*`） | 409 | `invalid_transition` | 是（`hitl.denied`） |
-| `open → approved`（未认领直接决策） | 409 | `case_not_claimable` | 是 |
-| 非认领人决策（`assignee != X-Operator`） | 409 | `case_not_claimable` | 是 |
 | `open → claimed` 时案件已过期（`expires_at <= business_now`） | 409 | `case_expired` | 是（先把案件置 `expired`） |
+| 非认领人决策（`assignee != X-Operator`，即案件已被别人认领） | 403 | `role_not_allowed` | 是 |
 | 决策时案件已过期 | 409 | `case_expired` | 是 |
 | `version` 不匹配（并发改） | 409 | `case_version_conflict` | 否（未产生变更，仅记访问日志） |
 | 对已决策案件提交**不同**决策 | 409 | `case_already_decided` | 是 |
 | `user` 或 `ops_admin` 调 `claim`/`decision` | 403 | `role_not_allowed` | 是（`hitl.denied`） |
 | 缺 `X-Operator` | 403 | `operator_required` | 是 |
 | 缺 `ack=true` | 400 | `ack_required` | 否 |
-| `reject`/`request_info` 的 `note` 为空 | 400 | `note_required` | 否 |
+| `reject`/`request_info` 的 `note` 为空 | 409 | `case_state_invalid` | 否（文案：「拒绝案件必须填写理由（备注），用于留痕与用户查询」/「要求补件必须填写理由（要用户补充哪些材料），会原样发给用户」） |
+| `approve` 但缺有效用户侧确认凭据 | 409 | `user_confirmation_missing` | 是（「人工批准不能代替用户确认」，案件保持可再次处理） |
 | `case_no` 不存在 | 404 | `case_not_found` | 否 |
 | `user` 读取非本人会话的案件 | 403 | `role_not_allowed` | 是（`hitl.denied`） |
 | 审计写入失败 | 503 | `audit_unavailable` | —— 事务回滚，全部不生效 |
@@ -387,10 +391,11 @@ POST .../decision
 ```
 
 - `decision` 三值：`approve` | `reject` | `request_info`（**实施计划 §3 契约行仍写两值**，见 §11 O-1）。
-- `note`：`reject`/`request_info` 必填；`approve` 建议填写。
+- `note`：`reject`（拒绝理由）与 `request_info`（要用户补哪些材料）**必填**，`approve` 选填；缺失时返回 409 `case_state_invalid` 并给出面向用户的中文文案（不暴露内部动作名）。
 - `ack=true` 必填（实施计划 §3 第 120 行）。
 - `pin`：仅 `risk_level='red'` 时校验模拟 MFA（PRD `:107`「高风险动作用明确确认控件 + 模拟 MFA」）；校验失败 → 403 `mfa_invalid`。默认演示 PIN 由配置项给出（§9 U-5）。
-- `expected_version` 可选，用于前端拿着旧快照时明确表达意图。
+- `expected_version` 可选，用于前端拿着旧快照时明确表达意图。**它比的是调用方看到的版本号，且校验在「决策前自动认领」之前完成**；`open` / `info_required` 案件收到 `approve` / `reject` / `request_info` 时会先在同一事务内自动认领给本次 `X-Operator`，再迁移到目标状态。
+- `approve` 还要求**用户侧确认凭据**（`proposal.user_confirmation.grant_id`，由 `/api/v1/confirm/*` 的验证码流程签发并在此处核销）：缺失或已失效 → 409 `user_confirmation_missing`（「人工批准不能代替用户确认」）。前端抽屉为此提供「为用户发起确认」按钮，按案件自身的 `session_id` / `tool_name` / `args` 建确认请求，用户在确认卡完成验证码后复核员即可批准。
 
 ### 5.6 `POST /api/hitl/cases/{case_no}/cancel`
 
@@ -421,14 +426,13 @@ POST /api/hitl/sweep
 | --- | --- | --- | --- |
 | `role_not_allowed` | 403 | 角色无权（含 `user` 读他人案件、`ops_admin` 审批） | 「当前身份无此权限」，提示切换身份 |
 | `operator_required` | 403 | 写操作缺 `X-Operator` | 要求填写操作员名 |
-| `ack_required` | 400 | 决策缺 `ack=true` | 弹二次确认 |
-| `note_required` | 400 | `reject`/`request_info` 缺理由 | 理由输入框标红 |
+| `ack_required` | 409 | 决策缺 `ack=true` | 弹二次确认 |
+| `case_state_invalid` | 409 | `reject`/`request_info` 缺理由；状态机不允许的迁移；对已决策案件提交不同决定 | 理由输入框标红 / 刷新案件 |
 | `case_not_found` | 404 | `case_no` 不存在 | 刷新队列 |
-| `case_not_claimable` | 409 | 未认领就决策 / 非认领人决策 / 已被他人认领 | 提示先认领或刷新 |
-| `case_version_conflict` | 409 | `version` 不匹配（并发） | 自动刷新后重试 |
-| `case_expired` | 409 | 案件已超时（决策/认领时） | 显示「已超时，未执行；可重新发起」 |
-| `case_already_decided` | 409 | 已决策且本次决定不同 | 显示首次结论，不再允许改 |
-| `invalid_transition` | 409 | 状态机不允许的迁移 | 刷新案件 |
+| `role_not_allowed` | 403 | 案件已被他人认领（`assignee != X-Operator`） | 刷新后由认领人处理 |
+| `version_conflict` | 409 | `expected_version` 与当前版本不符（并发） | 自动刷新后重试 |
+| `case_expired` | 410 | 案件已超时（决策/认领时） | 显示「已超时，未执行；可重新发起」 |
+| `user_confirmation_missing` | 409 | 批准时缺有效用户侧确认凭据 | 点「为用户发起确认」让用户先完成验证码确认 |
 | `mfa_invalid` | 403 | `pin` 校验失败 | 重新输入 PIN |
 | `user_confirmation_missing` | 409 | 恢复时缺有效用户确认 | 回到「待确认」，提示用户重新确认 |
 | `audit_unavailable` | 503 | 审计写失败（fail-closed） | 顶部红条，禁止重试写入 |
@@ -700,6 +704,7 @@ POST /api/hitl/sweep  或  GET /api/hitl/cases 的惰性判定
 | --- | --- | --- |
 | v1.0 | 2026-10-28 | 首版：13 条迁移矩阵 + 三决策（含补件回流）+ 单认领 `version` 锁 + 三层幂等 + SLA 900 秒 fail-closed + 职责分离 + 拒绝理由必填 + 9 节完整设计，附 9 条偏差建议 |
 | v1.1 | 2026-10-29 | 新增 §12：阶段 1 写能力熔断门禁接入点（`intercept()` 前置能力门禁 + 结果回写），补充「熔断先于 HITL」的顺序约束 |
+| v1.2 | 2026-11-01 | 修复人工复核抽屉「拒绝 / 批准执行用不了」：① `open`/`info_required` 状态的三类决策统一「决策前自动认领」（原 `request_info` 不自动认领，另两类自动认领后台版本已递增，前端仍带旧 `expected_version` → 必 409 `version_conflict`，复审 BUG-5/BUG-6）；② `expected_version` 校验前移到自动认领之前；③ `reject`/`request_info` 缺备注的报错改为面向用户的中文文案（`case_state_invalid`，不再泄露 `reject 必须填写理由（note）` 这类内部动作名）；④ §5.8 错误码表按实际 HTTP 契约（`case_state_invalid` / `version_conflict` / `role_not_allowed` / `user_confirmation_missing`）修正；⑤ 补充前端「为用户发起确认」入口与备注必填规则（拒绝 / 补件必填、批准选填） |
 
 ## 12. 写能力熔断门禁（阶段 1 接入）
 
@@ -799,4 +804,4 @@ sequenceDiagram
 - **「被熔断挡下不建案」是一条硬规则。** 拦截回执不写 `hitl_case_event`，也不写「等待人工」的任务状态；它只写 `audit.event`。这样可以保证 `app.hitl_case` 里不存在「等一个永远不会来的批准」的案卷。
 - **只读路径不受影响。** `guard_write_tool` 只对有写能力白名单内的工具名生效；查询、余额读取、账单查询等只读工具永远返回 `None`，不引入任何延迟或拦截。
 - **熔断不会替人做决定。** 熔断只回答「能不能试」，不回答「要不要批」；两者叠加时以「先熔断、后策略」为准，互不改变对方判定。
-- **状态可见性。** `GET /api/safety/circuit-breakers` 与 `GET /health/capabilities` 暴露当前熔断状态，前端在锁定横幅中呈现；人工复核员不需要在 HITL 队列里猜测某个能力是否可用。
+- **状态可见性。** `GET /api/safety/circuit-breakers` 与 `GET /health/capabilities` 暴露当前熔断状态，由运维接口（或探针）直接查询；前端不再展示熔断横幅（该横幅已于 2026-11-01 移除，原因是误报且不可关闭），人工复核员不需要在 HITL 队列里猜测某个能力是否可用。

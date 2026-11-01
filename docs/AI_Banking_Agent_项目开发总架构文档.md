@@ -207,7 +207,7 @@ LangGraph 是 **[PRD冻结约束]**，用于可暂停、可恢复、可观察和
 ![fig-05 熔断状态机](diagrams/export/fig-05-circuit.svg)
 
 > 图 FIG-05 熔断状态机：closed → open → half_open 三态迁移，按写能力维度独立计数，读路径不受影响。
-> 注入命中、越权、审计不可用等零容忍事件直接进入 open，不等待失败阈值累积。
+> 注入命中（**限确定性规则层**：正则/同形字/规范化）、越权、审计不可用等零容忍事件直接进入 open，不等待失败阈值累积；模型语义审核为 advisory，只记录与提示，不参与拦截与熔断。
 > 连续失败达阈值后进入 open 并锁定写能力，运维复位后经 half_open 试探放行；当前状态由 `/health/circuit-breaker` 暴露。
 
 DOC-TEST 必须承接：
