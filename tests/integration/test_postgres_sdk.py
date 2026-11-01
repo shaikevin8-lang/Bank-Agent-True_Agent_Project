@@ -60,7 +60,7 @@ def test_sdk_setup_and_resume_across_connections(runtime_pg_database) -> None:
 
     # 追加子 checkpoint，父指针跨连接仍然成立。
     child_id = uuid.uuid4()
-    with engine.connect() as connection:
+    with engine.begin() as connection:
         connection.execute(
             text(
                 f"INSERT INTO {SCHEMA}.checkpoint "

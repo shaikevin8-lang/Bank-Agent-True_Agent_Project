@@ -87,9 +87,23 @@ def _triggered_of_kind(data: dict[str, Any], kind: str) -> list[dict[str, Any]]:
     return [item for item in triggered if item.get("kind") == kind]
 
 
+def _set_tenant(connection: Any, tenant_id: str) -> None:
+    """在裸连接上注入租户 GUC，让 FORCE RLS 放行该租户的行。
+
+    ``create_db_engine`` 出来的连接不带租户上下文，直接读/写 ``app.account`` /
+    ``app.scheduled_transfer`` / ``audit.event`` 会被 ``tenant_isolation`` 策略挡住；
+    这里按测试目标租户显式注入。
+    """
+    connection.execute(
+        text("SELECT set_config('app.tenant_id', :tid, true)"),
+        {"tid": tenant_id},
+    )
+
+
 def _demo_account(engine: Engine, tenant_id: str) -> tuple[str, str]:
     """取演示租户的（账户 ID，户主主体 ID），造定时转账要用它们满足复合外键。"""
     with engine.connect() as connection:
+        _set_tenant(connection, tenant_id)
         row = connection.execute(
             text(
                 "SELECT id, owner_principal_id FROM app.account "
@@ -104,6 +118,7 @@ def _ensure_tenant(engine: Engine, *, slug: str) -> tuple[str, str, str]:
     """造一个独立的第二租户（含主体与账户），返回（租户，主体，账户）ID。"""
     tenant_id, principal_id, account_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     with engine.begin() as connection:
+        _set_tenant(connection, str(tenant_id))
         connection.execute(
             text(
                 "INSERT INTO app.tenant (id, slug, name, status) "
@@ -146,6 +161,7 @@ def _insert_transfer(
 ) -> None:
     """按表结构直接造一条 ``scheduled`` 状态的定时转账。"""
     with engine.begin() as connection:
+        _set_tenant(connection, tenant_id)
         connection.execute(
             text(
                 "INSERT INTO app.scheduled_transfer (public_id, tenant_id, owner_principal_id, "
@@ -183,9 +199,10 @@ def _insert_hitl_case(
         )
 
 
-def _transfer_status(engine: Engine, public_id: str) -> str:
+def _transfer_status(engine: Engine, public_id: str, *, tenant_id: str | None = None) -> str:
     """读定时转账的当前状态。"""
     with engine.connect() as connection:
+        _set_tenant(connection, tenant_id or clock.resolve_tenant_id(None))
         return connection.execute(
             text("SELECT status FROM app.scheduled_transfer WHERE public_id = :public"),
             {"public": public_id},
@@ -201,9 +218,10 @@ def _case_status(engine: Engine, public_id: str) -> str:
         ).scalar_one()
 
 
-def _settlement_audits(engine: Engine, public_id: str) -> list[dict[str, Any]]:
+def _settlement_audits(engine: Engine, public_id: str, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
     """读该定时转账的结算审计元数据（按写入顺序）。"""
     with engine.connect() as connection:
+        _set_tenant(connection, tenant_id or clock.resolve_tenant_id(None))
         rows = connection.execute(
             text(
                 "SELECT metadata FROM audit.event WHERE action = :action "
@@ -394,7 +412,7 @@ def test_settlement_uses_each_rows_own_tenant_time(
 
     assert [entry["id"] for entry in _triggered_of_kind(data, "scheduled_transfer")] == [due_id]
     assert _transfer_status(engine, due_id) == "executed"
-    assert _transfer_status(engine, other_id) == "scheduled"
+    assert _transfer_status(engine, other_id, tenant_id=other_tenant) == "scheduled"
 
 
 def test_run_due_settles_on_row_tenant_real_time(client: TestClient, engine: Engine) -> None:

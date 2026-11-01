@@ -442,7 +442,7 @@ class PostgresClockStore:
         from db.session import session_scope
 
         try:
-            with session_scope(self._get_engine()) as session:
+            with session_scope(self._get_engine(), tenant_id=_as_uuid(tenant_id)) as session:
                 row = session.get(SimClock, _as_uuid(tenant_id))
                 if row is None:
                     return None
@@ -489,7 +489,7 @@ class PostgresClockStore:
             "updated_at": now_db,
         }
         try:
-            with session_scope(self._get_engine()) as session:
+            with session_scope(self._get_engine(), tenant_id=target) as session:
                 stmt = pg_insert(table).values(tenant_id=target, created_at=now_db, **values)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=[table.c.tenant_id],

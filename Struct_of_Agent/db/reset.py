@@ -59,6 +59,7 @@ from .models_ext import (
     WorkflowRequest,
 )
 from .seed import TENANT_SLUG, seed, seed_principal_id, seed_tenant_id
+from .session import apply_seed_mode
 
 RESET_CONFIRMATION = "RESET-DEMO-DATA"
 FORBIDDEN_ENVIRONMENTS = frozenset({"prod", "production"})
@@ -143,6 +144,10 @@ def _assert_demo_target(session: Session, environment: str | None) -> None:
     if (environment or "").strip().lower() in FORBIDDEN_ENVIRONMENTS:
         raise ResetRefused(f"禁止在 {environment} 环境执行演示重置")
 
+    # 目标库身份校验是跨租户的运维检查：重置端口拿到的会话可能已注入 demo
+    # 租户上下文，FORCE RLS 会把非演示租户的行过滤掉，导致"非演示租户"检测失效。
+    # 开启 seed 放行开关后即可看到全部租户，再据此判断是否安全重置。
+    apply_seed_mode(session)
     slugs = [row for row in session.execute(select(Tenant.slug)).scalars().all()]
     if not slugs:
         return  # 空库允许重置（等价于首次 seed）

@@ -22,9 +22,9 @@ import pytest
 from sqlalchemy import func, select, update
 
 from db.audit import append_event
-from db.models import AuditEvent
+from db.models import Account, AuditEvent
 from db.repository import AccountRepository, Database
-from db.seed import ACCOUNT_REF, INITIAL_BALANCE_MINOR, seed_tenant_id
+from db.seed import ACCOUNT_REF, INITIAL_BALANCE_MINOR, seed_principal_id, seed_tenant_id
 from db.session import (
     assert_schema_current,
     current_revision,
@@ -112,10 +112,30 @@ def test_verifier_cannot_append_and_test_login_cannot_connect_demo(
 
 
 def test_audit_and_callers_change_rollback_together(database: Database) -> None:
-    """审计与调用方业务变更同事务：回滚后一起消失。"""
+    """审计与调用方业务变更同事务：回滚后一起消失。
+
+    ``AccountRepository.set_balance`` 自管事务，无法纳入外层事务；这里直接在同一
+    会话内联写入余额与审计事件，验证二者随外层回滚一并撤销。
+    """
     accounts = AccountRepository(database)
     with database.transaction() as session:
-        accounts.set_balance(ACCOUNT_REF, 1)
+        account = session.execute(
+            select(Account).where(
+                Account.tenant_id == database.tenant_id,
+                Account.owner_principal_id == database.principal_id,
+                Account.account_ref == ACCOUNT_REF,
+            )
+        ).scalar_one()
+        account.balance_minor = 1
+        append_event(
+            session,
+            tenant_id=seed_tenant_id(),
+            actor_principal_id=seed_principal_id(),
+            action="account.set_balance",
+            resource_type="account",
+            resource_id=account.id,
+            metadata={"balance_minor": 1},
+        )
         session.rollback()
     assert accounts.get_balance(ACCOUNT_REF) == INITIAL_BALANCE_MINOR
     with database.transaction() as session:

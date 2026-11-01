@@ -276,10 +276,10 @@ def _settle_hitl_cases(advancing_now: datetime) -> list[dict[str, Any]]:
 def _session_scope() -> Iterator[Session]:
     """结算用的数据库事务边界（复用 hitl 的引擎解析，进程内只开一个连接池）。
 
-    Yields:
-        ORM 会话；正常退出提交，异常回滚。
+    结算要跨租户扫描到期行（``app.scheduled_transfer`` 有 FORCE RLS），因此打开
+    ``seed_mode`` 放行开关；结算本身是运维后台动作，没有单一租户上下文可言。
     """
-    with db_session_scope(hitl.get_engine()) as session:
+    with db_session_scope(hitl.get_engine(), seed_mode=True) as session:
         yield session
 
 

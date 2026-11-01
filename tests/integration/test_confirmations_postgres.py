@@ -15,6 +15,7 @@ schema（``it_confirm``）里验证确认持久化必须满足的数据库语义
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from datetime import datetime, timezone
 
@@ -181,7 +182,7 @@ def test_display_lines_round_trip_as_jsonb_array(confirm_schema) -> None:
                 f"INSERT INTO {SCHEMA}.confirmation (id, tenant_id, owner_principal_id, digest, status, display_lines) "
                 "VALUES (:id, :tenant, :owner, :digest, 'pending', CAST(:lines AS jsonb))"
             ),
-            {"id": row_id, "tenant": tenant, "owner": uuid.uuid4(), "digest": "b" * 64, "lines": f"[{', '.join(map(repr, lines))}]"},
+            {"id": row_id, "tenant": tenant, "owner": uuid.uuid4(), "digest": "b" * 64, "lines": json.dumps(lines, ensure_ascii=False)},
         )
         session.commit()
 

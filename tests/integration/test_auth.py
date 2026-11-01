@@ -219,8 +219,11 @@ def test_public_final_auth_expiry_rolls_back_message_and_touch(store: AuthStore)
 
     dsn = to_psycopg_dsn(get_database_url())
     with psycopg.connect(dsn, autocommit=True) as connection:
+        # expires_at 必须晚于 created_at（CHECK 约束），所以把创建时间一并前移。
         connection.execute(
-            "UPDATE app.web_user_session SET expires_at = now() - interval '1 day' WHERE token_hash = %s",
+            "UPDATE app.web_user_session "
+            "SET created_at = now() - interval '2 days', expires_at = now() - interval '1 day' "
+            "WHERE token_hash = %s",
             (hash_token(sess["token"]),),
         )
     assert store.resolve(sess["token"]) is None
