@@ -78,7 +78,10 @@ class PostgresTestDatabase:
 def _truncate_app(engine: Engine) -> None:
     """清空 ``app`` schema 的全部业务表，保留 ``audit.event``。
 
-    ``audit.event`` 的 TRUNCATE 会被触发器拒绝；审计只能按业务键过滤断言。
+    ``audit.event`` 不在此清空范围内；``app.circuit_breaker_event`` 与审计表一样
+    是 append-only（带 ``BEFORE TRUNCATE`` 触发器），清空前须临时禁用其触发器，
+    清空后恢复，避免 ``TRUNCATE`` 被 ``reject_circuit_breaker_event_mutation`` 拒绝。
+    审计断言只能按业务键过滤。
     """
     tables = [
         f"{APP_SCHEMA}.{table.name}"
@@ -88,8 +91,16 @@ def _truncate_app(engine: Engine) -> None:
     assert tables, "没有找到 app schema 的表"
     with engine.begin() as connection:
         connection.execute(
-            text(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
+            text(f"ALTER TABLE {APP_SCHEMA}.circuit_breaker_event DISABLE TRIGGER ALL")
         )
+        try:
+            connection.execute(
+                text(f"TRUNCATE TABLE {', '.join(tables)} RESTART IDENTITY CASCADE")
+            )
+        finally:
+            connection.execute(
+                text(f"ALTER TABLE {APP_SCHEMA}.circuit_breaker_event ENABLE TRIGGER ALL")
+            )
 
 
 @pytest.fixture(scope="session")

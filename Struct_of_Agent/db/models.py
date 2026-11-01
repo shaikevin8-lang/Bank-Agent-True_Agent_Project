@@ -34,6 +34,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -564,12 +565,151 @@ class WebUserSession(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class CircuitBreakerState(Base):
+    """写能力熔断状态（V007）；由 ``common.circuit_breaker`` 用原生 SQL 读写。
+
+    这里的模型仅为让 ``Base.metadata`` 与迁移后的真实 schema 对齐，使
+    ``compare_metadata`` / ``alembic check`` 不产生漂移；运行时不走 ORM。
+    """
+
+    __tablename__ = "circuit_breaker_state"
+    __table_args__ = (
+        CheckConstraint("subject_type IN ('user', 'tenant')", name="subject_type"),
+        CheckConstraint("state IN ('closed', 'open', 'half_open')", name="state"),
+        CheckConstraint(
+            "capability IN ('write:transfer', 'write:card', 'write:wealth', "
+            "'write:subscribe', 'write:gift', 'code_compute')",
+            name="capability",
+        ),
+        CheckConstraint("failure_count >= 0", name="failure_count"),
+        CheckConstraint("open_level >= 0", name="open_level"),
+        CheckConstraint("version >= 1", name="version"),
+        Index("ix_circuit_breaker_state_tenant_state", "tenant_id", "state"),
+        {"comment": "写能力熔断状态；主键 (tenant, subject, capability)，version 乐观锁"},
+    )
+
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, nullable=False
+    )
+    subject_type: Mapped[str] = mapped_column(String(16), primary_key=True, nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, nullable=False
+    )
+    capability: Mapped[str] = mapped_column(String(32), primary_key=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'closed'"))
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    window_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    half_open_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    open_level: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class CircuitBreakerEvent(Base):
+    """熔断状态迁移事件（V007）；只追加，原生 SQL 读写，模型仅用于 schema 对齐。"""
+
+    __tablename__ = "circuit_breaker_event"
+    __table_args__ = (
+        Index("ix_circuit_breaker_event_tenant_created", "tenant_id", text("created_at DESC")),
+        Index("ix_circuit_breaker_event_subject", "tenant_id", "capability", text("created_at DESC")),
+        {"comment": "熔断状态迁移事件；只追加，UPDATE/DELETE/TRUNCATE 被触发器拒绝"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, nullable=False, server_default=text("gen_random_uuid()")
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    subject_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subject_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    capability: Mapped[str] = mapped_column(String(32), nullable=False)
+    from_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_state: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    operator_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    trace_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class ConfirmationRequest(Base):
+    """用户确认请求（V008）；由 ``common.confirm`` 用原生 SQL 读写，模型仅用于 schema 对齐。"""
+
+    __tablename__ = "confirmation_request"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'issued', 'used', 'locked', 'expired', 'revoked')",
+            name="status",
+        ),
+        CheckConstraint("risk_level IN ('red', 'yellow', 'green')", name="risk_level"),
+        CheckConstraint("attempts >= 0", name="attempts"),
+        Index("ix_confirm_request_expires", "expires_at"),
+        Index("ix_confirm_request_session", "tenant_id", "session_id", text("created_at DESC")),
+        {"comment": "用户确认请求；只存验证码 sha256，明文码不落库"},
+    )
+
+    request_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_redacted: Mapped[dict] = mapped_column(JSON, nullable=False, server_default=text("'{}'::jsonb"))
+    risk_level: Mapped[str] = mapped_column(String(8), nullable=False)
+    mfa_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=text("false"))
+    mfa_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default=text("'pending'"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ConfirmationGrant(Base):
+    """一次性确认凭据（V008）；原生 SQL 读写，模型仅用于 schema 对齐。"""
+
+    __tablename__ = "confirmation_grant"
+    __table_args__ = (
+        Index("ix_confirm_grant_lookup", "tenant_id", "user_id", "session_id", "tool_name"),
+        Index("ux_confirm_grant_token_hash", "token_hash", unique=True),
+        Index("ix_confirm_grant_expires", "expires_at"),
+        {"comment": "一次性确认凭据；used_at 只能由空改非空（业务层 CAS）"},
+    )
+
+    grant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, nullable=False)
+    request_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True), nullable=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    args_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 __all__ = [
     "Account",
     "AuditEvent",
     "BankTransaction",
     "BillReport",
+    "CircuitBreakerEvent",
+    "CircuitBreakerState",
     "ClockEvent",
+    "ConfirmationGrant",
+    "ConfirmationRequest",
     "ConversationMessage",
     "ConversationSession",
     "IdempotencyKey",

@@ -131,19 +131,22 @@ def impact_summary(session: Session) -> dict[str, int]:
     return summary
 
 
-def _assert_demo_target(session: Session, environment: str | None) -> None:
-    """确认目标库是可安全重置的演示库。
-
-    Args:
-        session: 当前事务的 ORM 会话。
-        environment: 运行环境标识（local/test/demo）。
-
-    Raises:
-        ResetRefused: 环境为生产，或库内存在非演示租户。
-    """
+def _reject_forbidden_environment(environment: str | None) -> None:
+    """生产环境必须在触库之前拒绝（不访问 session）。"""
     if (environment or "").strip().lower() in FORBIDDEN_ENVIRONMENTS:
         raise ResetRefused(f"禁止在 {environment} 环境执行演示重置")
 
+
+def _assert_demo_target(session: Session) -> None:
+    """确认目标库是可安全重置的演示库（环境判断在触库前由
+    :func:`_reject_forbidden_environment` 单独完成）。
+
+    Args:
+        session: 当前事务的 ORM 会话。
+
+    Raises:
+        ResetRefused: 库内存在非演示租户。
+    """
     # 目标库身份校验是跨租户的运维检查：重置端口拿到的会话可能已注入 demo
     # 租户上下文，FORCE RLS 会把非演示租户的行过滤掉，导致"非演示租户"检测失效。
     # 开启 seed 放行开关后即可看到全部租户，再据此判断是否安全重置。
@@ -182,6 +185,10 @@ def reset_demo_data(
     if confirmation != RESET_CONFIRMATION:
         raise ResetRefused(f"确认令牌不匹配；请显式传入 --confirm {RESET_CONFIRMATION}")
 
+    # 生产环境在触库之前就拒绝：保证「先拒绝后访问」的安全顺序（此时 session 可能
+    # 尚未建立，不能依赖它做任何读写）。
+    _reject_forbidden_environment(environment)
+
     # 串行化并发重置：事务级 advisory lock，提交/回滚时自动释放。否则两个并发
     # reset 会互相干扰——一个事务删 account 时，另一个事务 seed 的 bank_transaction
     # 等引用行仍在，触发外键违反。
@@ -190,7 +197,7 @@ def reset_demo_data(
         {"key": "bank_agent:demo_reset"},
     )
 
-    _assert_demo_target(session, environment)
+    _assert_demo_target(session)
 
     tenant_id = seed_tenant_id()
     before = impact_summary(session)

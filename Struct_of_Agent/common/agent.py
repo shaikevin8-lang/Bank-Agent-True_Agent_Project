@@ -20,11 +20,13 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .config import DeepSeekConfig, load_config
+from . import hitl
 from .llm import ChatModel, DeepSeekChat, MockChat
 from .middleware.content_moderation import ContentModerationMiddleware
 from .model_manager import RuntimeChatModel, trace_info
 from .prompts import build_system_prompt
 from .tavily_search import tavily_search, to_openai_tool
+from .system_tools import build_system_tools, to_openai_tools as system_to_openai_tools
 from .text_format import sanitize_reply
 
 # 单次运行允许的最大 Agent 轮数，防止工具调用死循环
@@ -35,6 +37,9 @@ _SYSTEM_PROMPT = build_system_prompt("common")
 
 # 通用搜索工具名（用于回执标记与追踪）
 _SEARCH_TOOL_NAME = "tavily_search"
+
+# 通用系统查询工具（查询回执 + 查询沙箱时钟），与搜索工具一起暴露给模型。
+_SYSTEM_TOOLS = build_system_tools()
 
 
 class CommonState(TypedDict, total=False):
@@ -150,6 +155,8 @@ def _tools_node(state: CommonState) -> dict[str, Any]:
         更新后的状态片段。
     """
     tool_map = {_SEARCH_TOOL_NAME: tavily_search}
+    for system_tool in _SYSTEM_TOOLS:
+        tool_map[system_tool.name] = system_tool
     results: list[dict[str, Any]] = []
     task_records = list(state.get("task_records", []))
     for call in state.get("pending_tool_calls", []):
@@ -233,7 +240,7 @@ def build_common_graph(
     Returns:
         编译后的图（CompiledGraph），可调用 ``invoke(state, config)``。
     """
-    tool_schemas = [to_openai_tool()]
+    tool_schemas = [to_openai_tool(), *system_to_openai_tools(_SYSTEM_TOOLS)]
     checkpointer = checkpointer or MemorySaver()
 
     graph = StateGraph(CommonState)
@@ -392,6 +399,8 @@ class CommonAgent:
             "final_reply": "",
         }
 
+        # 查询回执/沙箱时钟等系统工具读取 ContextVar 中的会话/租户上下文。
+        hitl.set_context(session_id=session_id, tenant_id=hitl.default_tenant_id())
         result = self.graph.invoke(initial_state, config={"configurable": {"thread_id": session_id}})
 
         tasks = list(result.get("task_records", []))

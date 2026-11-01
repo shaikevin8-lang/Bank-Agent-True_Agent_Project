@@ -67,6 +67,7 @@ from __future__ import annotations
 import json
 import sys
 import traceback
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,7 @@ from common.memory import PostgresBackend, SessionMemory
 from common.model_manager import get_model_manager, get_search_manager
 from common.runtime_config import SettingsError
 from common.text_format import sanitize_reply
+from common.transfer_scheduler import start_scheduler, stop_scheduler
 from db.repository import Database, SessionRepository
 from db.seed import seed as seed_demo_data
 from db.seed_scenarios import seed as seed_scenario_data
@@ -242,7 +244,21 @@ def get_supervisor() -> SupervisorAgent:
     return _supervisor
 
 
-app = FastAPI(title="银行智能 Agent 本地测试", version="0.2.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """应用生命周期：启动定时转账后台执行器，退出时优雅停掉守护线程。
+
+    定时转账「到点主动执行」依赖该后台线程；线程幂等、异常只记日志，不阻塞
+    HTTP 请求。数据库按需惰性初始化，启动不强制建连，避免无连接串时无法拉起服务。
+    """
+    start_scheduler()
+    try:
+        yield
+    finally:
+        stop_scheduler()
+
+
+app = FastAPI(title="银行智能 Agent 本地测试", version="0.2.0", lifespan=lifespan)
 
 
 def get_session_store() -> ChatSessionStore:
