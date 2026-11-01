@@ -450,6 +450,11 @@ TEST_DB_URL = os.environ.get("BANK_AGENT_TEST_DB_URL", "").strip()
 RUNTIME_DB_PREFIX = "bank_agent_it_runtime_"
 PROTECTED_DATABASES = frozenset({"bank_agent", "bank_agent_fresh"})
 
+# 测试连接身份：bank 是超级用户（rolsuper + rolbypassrls），PostgreSQL 里这两类
+# 角色完全绕过 RLS，会让所有租户隔离用例假失败。测试必须用一个非 superuser /
+# 非 BYPASSRLS 的角色连接，RLS 才会真正生效。
+RLS_TEST_ROLE = "bank_agent_rls"
+
 # 只清 app schema；audit.event 的 append-only 触发器禁止 TRUNCATE。
 TRUNCATE_APP_SQL = """
 TRUNCATE TABLE
@@ -465,14 +470,29 @@ TRUNCATE TABLE
 RESTART IDENTITY CASCADE
 """
 
+# audit 表 append-only：UPDATE/DELETE/TRUNCATE 由触发器拒绝。测试环境在清空前
+# 临时禁用触发器，保证每个用例的审计断言都从空表开始（否则用例间累积）。
+TRUNCATE_AUDIT_SQL = """
+ALTER TABLE audit.clock_event DISABLE TRIGGER ALL;
+ALTER TABLE audit.event DISABLE TRIGGER ALL;
+TRUNCATE TABLE audit.clock_event, audit.event;
+ALTER TABLE audit.clock_event ENABLE TRIGGER ALL;
+ALTER TABLE audit.event ENABLE TRIGGER ALL;
+"""
+
 
 @dataclass(frozen=True)
 class RuntimeDatabase:
-    """一个临时 PostgreSQL 测试库。"""
+    """一个临时 PostgreSQL 测试库。
+
+    ``url``/``engine`` 使用受限角色（``RLS_TEST_ROLE``），保证 RLS 真正生效；
+    ``admin_engine`` 使用超级用户，仅用于清理（TRUNCATE + 临时禁用审计触发器）。
+    """
 
     name: str
     url: str
     engine: Any
+    admin_engine: Any
 
 
 @pytest.fixture(scope="session")
@@ -508,17 +528,39 @@ def runtime_pg_database() -> Iterator[RuntimeDatabase]:
     admin_engine = create_engine(TEST_DB_URL, isolation_level="AUTOCOMMIT", pool_pre_ping=True)
     with admin_engine.connect() as connection:
         connection.execute(text(f'CREATE DATABASE "{name}"'))
+        # 受限角色全局幂等创建：bank 是超级用户会绕过 RLS，测试连接必须用它。
+        connection.execute(text(
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bank_agent_rls') THEN "
+            "CREATE ROLE bank_agent_rls LOGIN; END IF; END $$"
+        ))
 
-    url = maintenance_url.set(database=name).render_as_string(hide_password=False)
+    # 迁移仍用超级用户执行（DDL 需要 CREATE TABLE / POLICY 权限）。
+    migrate_url = maintenance_url.set(database=name).render_as_string(hide_password=False)
     config = Config(str(ALEMBIC_INI))
-    config.set_main_option("sqlalchemy.url", url)
+    config.set_main_option("sqlalchemy.url", migrate_url)
     alembic_command.upgrade(config, "head")
 
+    # 超级用户读写引擎（非 AUTOCOMMIT）：pg_clean 用它做 TRUNCATE + 临时禁用审计
+    # 触发器（ALTER TABLE ... DISABLE TRIGGER 需要表所有者权限），并授权受限角色。
+    admin_rw_engine = create_engine(migrate_url, pool_pre_ping=True, pool_size=5, max_overflow=10)
+    with admin_rw_engine.begin() as connection:
+        # alembic_version 是 public schema 下的版本表，Database.from_env() 启动时校验需要读。
+        connection.execute(text(f"GRANT SELECT ON public.alembic_version TO {RLS_TEST_ROLE}"))
+        # 测试可能自建 schema（如 it_confirm）验证确认/MFA 语义，需要数据库 CREATE 权限。
+        connection.execute(text(f'GRANT CREATE ON DATABASE "{name}" TO {RLS_TEST_ROLE}'))
+        for schema in ("app", "audit"):
+            connection.execute(text(f"GRANT USAGE ON SCHEMA {schema} TO {RLS_TEST_ROLE}"))
+            connection.execute(text(f"GRANT ALL ON ALL TABLES IN SCHEMA {schema} TO {RLS_TEST_ROLE}"))
+            connection.execute(text(f"GRANT ALL ON ALL SEQUENCES IN SCHEMA {schema} TO {RLS_TEST_ROLE}"))
+
+    url = maintenance_url.set(database=name).set(username=RLS_TEST_ROLE).render_as_string(hide_password=False)
     engine = create_engine(url, pool_pre_ping=True, pool_size=5, max_overflow=10)
     try:
-        yield RuntimeDatabase(name=name, url=url, engine=engine)
+        yield RuntimeDatabase(name=name, url=url, engine=engine, admin_engine=admin_rw_engine)
     finally:
         engine.dispose()
+        admin_rw_engine.dispose()
         with admin_engine.connect() as connection:
             connection.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin_engine.dispose()
@@ -542,9 +584,13 @@ def pg_clean(runtime_pg_database: RuntimeDatabase, monkeypatch: pytest.MonkeyPat
 
     from db import seed as db_seed
 
-    with runtime_pg_database.engine.begin() as connection:
+    # 清理用超级用户引擎：TRUNCATE_AUDIT_SQL 里的 ALTER TABLE ... DISABLE TRIGGER
+    # 需要表所有者权限，受限角色无法执行。
+    with runtime_pg_database.admin_engine.begin() as connection:
         connection.execute(text("SET LOCAL lock_timeout = '5s'"))
         connection.execute(text(TRUNCATE_APP_SQL))
+        connection.execute(text(TRUNCATE_AUDIT_SQL))
+    # seed 用受限角色引擎：走 seed_mode 放行开关，RLS 对业务读写保持生效。
     with Session(runtime_pg_database.engine) as session:
         db_seed.seed(session)
         session.commit()

@@ -438,6 +438,11 @@ def test_unsupported_direct_updates_cannot_bypass_facts_or_audit(
     sessions = SessionRepository(database)
     sessions.append_message("web-upd-1", "user", "hi")
 
+    # 确保审计表非空：append-only 触发器是 FOR EACH ROW，UPDATE 0 行不会触发。
+    # 审计表在 pg_clean 里被清空，这里显式补一条，否则下面的 UPDATE 不会 raise。
+    with database.transaction() as session:
+        append_event(session, tenant_id=seed_tenant_id(), action="probe", resource_type="probe")
+
     with pytest.raises(Exception):
         with database.transaction() as session:
             session.execute(update(AuditEvent).values(action="tampered"))
