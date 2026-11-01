@@ -815,7 +815,10 @@ def session_scope() -> Iterator[Session]:
     """
     from db.session import session_scope as db_session_scope
 
-    with db_session_scope(get_engine()) as session:
+    # 0004 起 ``audit.event`` 强制 RLS：建案/决策写审计时必须注入租户上下文，
+    # 否则受限角色（非超级用户）会被 ``tenant_isolation`` 策略拒绝写入。
+    # ``hitl_case`` / ``hitl_case_event`` 无 RLS，但统一审计（``audit.event``）有。
+    with db_session_scope(get_engine(), tenant_id=default_tenant_id()) as session:
         yield session
 
 

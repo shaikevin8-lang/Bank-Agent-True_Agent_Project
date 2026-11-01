@@ -145,7 +145,7 @@ def test_missing_scope_rls_and_force_flags(database: Database) -> None:
         assert _rls_enabled(session, "conversation_message")
         policies = session.execute(
             text(
-                "SELECT count(*) FROM pg_policy WHERE schemaname = 'app' "
+                "SELECT count(*) FROM pg_policies WHERE schemaname = 'app' "
                 "AND tablename IN ('conversation_session', 'conversation_message')"
             )
         ).scalar_one()
@@ -164,7 +164,8 @@ def test_reused_connection_clears_context_and_refuses_stale_scope(database: Data
 
     with session_scope(database.engine) as session:
         stale = session.execute(text("SELECT current_setting('app.tenant_id', true)")).scalar_one()
-    assert stale is None
+    # 占位自定义 GUC 在 SET LOCAL 结束后的重置值是空串，而非 NULL。
+    assert stale == ""
 
 
 def test_disabled_registered_scope_is_rejected(database: Database) -> None:
@@ -388,16 +389,33 @@ def test_dirty_transaction_autocommit_privileged_login_and_environment_are_rejec
 ) -> None:
     """脏事务回滚不留半成品；非 PostgreSQL 方言被拒绝。"""
     with database.transaction() as session:
+        record = ConversationSession(
+            public_id="web-dirty-1",
+            tenant_id=database.tenant_id,
+            owner_principal_id=database.principal_id,
+            title="dirty",
+            title_set_by_user=False,
+            status="active",
+        )
+        session.add(record)
+        session.flush()
+        dirty_session_id = record.id
+
+    with database.transaction() as session:
         append_conversation_message(
             session,
             tenant_id=database.tenant_id,
-            session_id=uuid.uuid4(),
+            session_id=dirty_session_id,
             role="user",
             content="dirty",
         )
         session.rollback()
     with database.transaction() as session:
-        count = session.execute(select(func.count()).select_from(ConversationMessage)).scalar_one()
+        count = session.execute(
+            select(func.count())
+            .select_from(ConversationMessage)
+            .where(ConversationMessage.session_id == dirty_session_id)
+        ).scalar_one()
     assert count == 0
 
     with pytest.raises(DatabaseConfigError):
@@ -437,6 +455,11 @@ def test_unsupported_direct_updates_cannot_bypass_facts_or_audit(
     """直接 UPDATE 审计表被拒；重复序号消息被唯一约束拒绝。"""
     sessions = SessionRepository(database)
     sessions.append_message("web-upd-1", "user", "hi")
+
+    # 确保审计表非空：append-only 触发器是 FOR EACH ROW，UPDATE 0 行不会触发。
+    # 审计表在 pg_clean 里被清空，这里显式补一条，否则下面的 UPDATE 不会 raise。
+    with database.transaction() as session:
+        append_event(session, tenant_id=seed_tenant_id(), action="probe", resource_type="probe")
 
     with pytest.raises(Exception):
         with database.transaction() as session:

@@ -42,10 +42,6 @@ REVIEWER = {"X-Role": "risk_reviewer", "X-Operator": "reviewer-01"}
 OPS = {"X-Role": "ops_admin", "X-Operator": "ops-01"}
 USER = {"X-Role": "user", "X-Operator": "user-01"}
 
-#: 挂失动作的模型参数（各域 mock LLM 预置 confirmed/mfa_code，此处照抄）。
-LOSS_ARGS: dict[str, Any] = {"confirmed": True, "mfa_code": "123456"}
-
-
 # ---------------------------------------------------------------------------
 # 夹具与辅助
 # ---------------------------------------------------------------------------
@@ -105,7 +101,7 @@ def _cases(client: TestClient, **params: Any) -> dict[str, Any]:
 def _open_case(card_id: str, session_id: str) -> dict[str, Any]:
     """在给定会话上下文里跑一次闸门，返回阻断回执（含 ``case_no``）。"""
     hitl.set_context(session_id=session_id, task_id="task-hitl-api")
-    receipt = hitl.intercept("report_loss", {"card_id": card_id, **LOSS_ARGS})
+    receipt = hitl.intercept("report_loss", {"card_id": card_id})
     assert receipt is not None, "不可逆动作必须被闸门阻断"
     assert receipt["status"] == "hitl_required"
     return receipt
@@ -124,6 +120,7 @@ def _requests(store: CardStore, card_id: str) -> list[dict[str, Any]]:
 def test_case_lifecycle_approve_replays_exactly_once(
     client: TestClient,
     card: tuple[CardStore, str],
+    grant_factory: Any,
 ) -> None:
     """建案 → 列表可见 → 缺 ack 409 → 认领 → 批准执行一次 → 重复批准 replay。"""
     store, card_id = card
@@ -169,6 +166,14 @@ def test_case_lifecycle_approve_replays_exactly_once(
     assert claimed.status_code == 200, claimed.text
     assert claimed.json()["data"]["case"]["status"] == "claimed"
     version = claimed.json()["data"]["case"]["version"]
+
+    # 用户侧确认凭据：report_loss 是红色动作（需 MFA），批准前必须先签发一次性凭据。
+    grant_factory(
+        "report_loss",
+        {"card_id": card_id},
+        tenant_id=hitl.default_tenant_id(),
+        session_id="sess-hitl-lifecycle",
+    )
 
     # ⑥ 批准：同步重放执行，业务副作用恰好一次。
     approved = client.post(
@@ -312,6 +317,7 @@ def test_missing_case_404(client: TestClient, db_url: str) -> None:
 def test_approve_retries_when_replay_was_unavailable(
     client: TestClient,
     card: tuple[CardStore, str],
+    grant_factory: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """批准时工具未注册（如进程重启）→ 案件停在 ``approved``，再次批准补执行且只执行一次。"""
@@ -322,6 +328,12 @@ def test_approve_retries_when_replay_was_unavailable(
     case_no = _open_case(card_id, "sess-hitl-retry")["case_no"]
 
     client.post(f"/api/hitl/cases/{case_no}/claim", headers=REVIEWER, json={})
+    grant_factory(
+        "report_loss",
+        {"card_id": card_id},
+        tenant_id=hitl.default_tenant_id(),
+        session_id="sess-hitl-retry",
+    )
     hitl_replay.clear()  # 模拟「服务刚重启，还没有人发起对话」
     unavailable = client.post(
         f"/api/hitl/cases/{case_no}/decision",

@@ -136,6 +136,12 @@ EXPECTED_TABLES: dict[str, set[str]] = {
         # V006：Web 登录/注册
         "web_user",
         "web_user_session",
+        # V007：写能力熔断
+        "circuit_breaker_state",
+        "circuit_breaker_event",
+        # V008：确认请求与一次性凭据
+        "confirmation_request",
+        "confirmation_grant",
     },
     AUDIT_SCHEMA: {"event", "clock_event"},
 }

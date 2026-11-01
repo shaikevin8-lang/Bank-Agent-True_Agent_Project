@@ -12,11 +12,14 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Iterator
 from zoneinfo import ZoneInfo
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -48,6 +51,7 @@ from .models import (
     ConversationSession,
     Task,
 )
+from .models_ext import ScheduledTransfer
 from .seed import (
     ACCOUNT_MASKED,
     ACCOUNT_PUBLIC_ID,
@@ -978,6 +982,33 @@ class TaskRepository:
             )
             return [dict(row.payload or {}) for row in rows]
 
+    def get_task(self, session_public_id: str, public_id: str) -> dict[str, Any] | None:
+        """按回执号（``public_id``）查询单条任务回执。
+
+        ``public_id`` 即任务回执里的 ``transfer_id`` / ``task_id`` /
+        ``request_id``（合法时直接复用，见 :func:`db.ids.ensure_public_id`）。
+
+        Args:
+            session_public_id: 归属会话的 ``public_id``。
+            public_id: 回执号（如 ``trf-*``、``sch-*``、``aa-*``、``task-*``）。
+
+        Returns:
+            任务回执字典；会话或回执不存在时返回 ``None``。
+        """
+        with self.db.transaction() as session:
+            record = self.sessions._row(session, session_public_id)
+            if record is None:
+                return None
+            row = session.execute(
+                select(Task).where(
+                    Task.tenant_id == self.db.tenant_id,
+                    Task.owner_principal_id == self.db.principal_id,
+                    Task.session_id == record.id,
+                    Task.public_id == public_id,
+                )
+            ).scalars().first()
+            return dict(row.payload or {}) if row is not None else None
+
 
 class TransactionRepository:
     """``app.bank_transaction`` 仓储；R2 统计只读 ``posted``。"""
@@ -1249,8 +1280,62 @@ class TransferService:
         self.accounts = AccountRepository(database)
 
     def save_receipt(self, session_public_id: str, receipt: dict[str, Any]) -> dict[str, Any] | None:
-        """保存任务回执。"""
-        return self.tasks.save_task(session_public_id, receipt)
+        """保存任务回执；定时转账另落 ``app.scheduled_transfer`` 明细供到期执行。"""
+        saved = self.tasks.save_task(session_public_id, receipt)
+        if saved is not None and receipt.get("tool") == "schedule_transfer":
+            try:
+                self._persist_scheduled_transfer(receipt)
+            except Exception as exc:  # noqa: BLE001 - 明细落库失败不阻断回执已保存
+                logger.warning("定时转账明细落库失败，回执已保存：%s", exc)
+        return saved
+
+    def _persist_scheduled_transfer(self, receipt: dict[str, Any]) -> None:
+        """把 ``schedule_transfer`` 回执沉淀为 ``app.scheduled_transfer`` 行。
+
+        定时转账到期执行需要结构化明细（收款人 / 金额 / 触发时间 / 源账户），
+        仅靠 ``app.task`` 的 JSONB 回执无法高效扫描；这里按回执号幂等落一行，
+        源账户在演示环境固定为默认账户 ``ACCOUNT_REF``。
+
+        Args:
+            receipt: ``schedule_transfer`` 工具回执。
+        """
+        task_id = receipt.get("task_id") or receipt.get("transfer_id") or receipt.get("request_id")
+        if not task_id:
+            return
+        amount_minor = _as_minor(receipt.get("amount_fen", receipt.get("total_amount_fen")))
+        if amount_minor is None:
+            return
+        scheduled_at = parse_timestamp(receipt.get("schedule_time") or receipt.get("scheduled_at"))
+        if scheduled_at is None:
+            return
+        recipient = str(receipt.get("recipient_name") or "收款人")[:128]
+        timezone_name = str(receipt.get("timezone") or "Asia/Shanghai")[:64]
+        currency = str(receipt.get("currency") or "CNY")[:3]
+        with self.db.transaction() as session:
+            account = self.accounts._row(session, ACCOUNT_REF, required=True)
+            existing = session.execute(
+                select(ScheduledTransfer).where(
+                    ScheduledTransfer.tenant_id == self.db.tenant_id,
+                    ScheduledTransfer.owner_principal_id == self.db.principal_id,
+                    ScheduledTransfer.public_id == task_id,
+                )
+            ).scalars().first()
+            if existing is not None:
+                return
+            session.add(
+                ScheduledTransfer(
+                    tenant_id=self.db.tenant_id,
+                    owner_principal_id=self.db.principal_id,
+                    public_id=task_id,
+                    account_id=account.id,
+                    recipient_name=recipient,
+                    amount_minor=amount_minor,
+                    currency=currency,
+                    scheduled_at=scheduled_at,
+                    timezone=timezone_name,
+                    status="scheduled",
+                )
+            )
 
     def settle_transfer(
         self,

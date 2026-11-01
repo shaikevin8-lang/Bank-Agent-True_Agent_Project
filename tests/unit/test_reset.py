@@ -57,12 +57,10 @@ def test_reset_namespace_has_no_admin_or_api_fallback(tmp_path):
     assert "SENTINEL" not in safe_database_url(url)
 
 
-def test_cross_environment_and_dynamic_reset_credentials_are_refused(tmp_path):
+def test_cross_environment_and_dynamic_reset_credentials_are_refused():
     for env in ("prod", "production", "PROD", "Production"):
-        session = _ProbeSession()
         with pytest.raises(reset.ResetRefused):
-            reset._assert_demo_target(session, env)
-        assert session.calls == []
+            reset._reject_forbidden_environment(env)
     assert "prod" in reset.FORBIDDEN_ENVIRONMENTS
     assert "production" in reset.FORBIDDEN_ENVIRONMENTS
 

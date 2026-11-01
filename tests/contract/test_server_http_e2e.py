@@ -194,7 +194,10 @@ def test_chat_stream_works_on_the_first_request_with_a_saved_model(
     assert events, "流式接口返回了空响应体（连接被中断）"
     assert events[-1] == "[DONE]"
     types = [event["type"] for event in events if event != "[DONE]"]
-    assert types[:2] == ["plan", "task_start"], types
+    # 流式事件序列：plan → node_status(运行中) → task_start → … → node_status(完成)
+    # → task_done → done。node_status 是计划 DAG 进度事件，插在 plan 与 task_start 之间。
+    assert types[0] == "plan", types
+    assert "task_start" in types, types
     assert types[-1] == "done", types
 
     done = next(event for event in events if event != "[DONE]" and event["type"] == "done")
